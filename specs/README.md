@@ -1,35 +1,35 @@
 # specs/
 
-Per-game-version data — **not committed to git**.
+每个游戏大版本一份的数据 —— **不入 git**。
 
-You must populate this directory before the first run. Two ways:
+第一次跑前需要先填这个目录。两种方式：
 
-## A. Pull from wowsinfo/data mirror (easiest)
+## A. 从 wowsinfo/data 镜像拉（最简单）
 
 ```bash
-cd ..  # back to repo root
+cd ..   # 回到仓库根目录
 python tools/update_specs.py
-# This writes to specs_out/ ; move its contents into specs/:
+# 输出到 specs_out/；把内容挪到 specs/：
 rm -rf specs/scripts specs/content specs/metadata.toml
 mv specs_out/* specs/
 rmdir specs_out
 ```
 
-## B. Extract from local WoWs install (Win, freshest)
+## B. 从本地 WoWs 安装提取（Win，最新鲜）
 
-See `UPDATE.md` in the repo root.
+详见仓库根目录的 `UPDATE.md`。
 
-## Expected layout
+## 预期目录结构
 
 ```
 specs/
 ├── metadata.toml          # version = "15.3.0"   build = 12267945
-├── scripts/               # entity definition XMLs (~500 KB)
+├── scripts/               # entity 定义 XML（~500 KB）
 │   ├── entities.xml
 │   ├── components.xml
 │   └── entity_defs/
 └── content/
-    └── GameParams.data    # game parameter dict (~15 MB)
+    └── GameParams.data    # 游戏参数字典（~15 MB）
 ```
 
-Once populated, `bin/wows_report some.wowsreplay` should work.
+填好之后 `bin/wows_report 某回放.wowsreplay` 就能跑通。
