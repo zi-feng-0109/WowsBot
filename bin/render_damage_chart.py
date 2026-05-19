@@ -38,26 +38,39 @@ RIBBON_ICON_DIR = os.environ.get(
 # already). For tpd/atba we list the leaf keys.
 
 _PALETTE = {
-    "ap":        (220, 70, 70),
-    "he":        (240, 145, 50),
-    "cs":        (240, 200, 80),
-    "atba":      (210, 110, 90),
-    "tpd":       (60, 165, 230),
-    "tbomb":     (80, 190, 200),
-    "bomb":      (180, 100, 200),
-    "rocket":    (220, 95, 175),
-    "skip":      (200, 60, 130),
-    "dbomb":     (140, 100, 70),
-    "fire":      (235, 120, 70),
-    "flood":     (90, 130, 220),
-    "ram":       (150, 150, 160),
-    "sea_mine":  (90, 160, 110),
-    "adbomb":    (150, 95, 180),
-    "missile":   (190, 190, 200),
-    "special":   (170, 170, 110),
-    "event":     (130, 200, 130),
+    "ap":             (220, 70, 70),
+    "he":             (240, 145, 50),
+    "cs":             (240, 200, 80),
+    "atba":           (210, 110, 90),
+    "tpd":            (60, 165, 230),
+    "tbomb":          (80, 190, 200),
+    "bomb":           (180, 100, 200),
+    "rocket":         (220, 95, 175),
+    "skip":           (200, 60, 130),
+    "dbomb":          (140, 100, 70),
+    "fire":           (235, 120, 70),
+    "flood":          (90, 130, 220),
+    "ram":            (150, 150, 160),
+    "sea_mine":       (90, 160, 110),
+    "adbomb":         (150, 95, 180),
+    "missile":        (190, 190, 200),
+    "special":        (170, 170, 110),
+    "event":          (130, 200, 130),
+    # Airstrike-consumable variants (called in from surface ships).
+    "airstrike_he":   (210, 165, 110),  # bomb_airsupport (Lion/Prins van Oranje-type HE)
+    "airstrike_misc": (165, 140, 120),  # rare tbomb/skip/rocket airsupport
 }
 
+# WG 在 results_info 里把每种"飞机类武器"拆成 4 个变体：
+#   damage_XXX            → 总和（avia + alt + airsupport），不要直接用
+#   damage_XXX_avia       → CV 永久中队 - 主中队
+#   damage_XXX_alt        → CV 永久中队 - 备选中队（部分 CV 才有）
+#   damage_XXX_airsupport → 空袭消耗品（陆航召唤过来的临时中队，金狮 / 奥兰治亲王等用）
+# 把 CV 攻击和空袭分两类标签，避免来源混淆。
+#
+# 另：ADBOMB (weapon id 28) 是反潜空袭专用深弹；damage_dbomb_airsupport (196) 与
+# damage_adbomb (197) 始终是同一数字的镜像，只能取其一，否则双倍。这里保留
+# damage_adbomb 作"空袭深弹"，舰射深弹只取 direct + splash。
 DEALT_CATEGORIES = [
     ("主炮 AP",  _PALETTE["ap"],       ["damage_main_ap"]),
     ("主炮 HE",  _PALETTE["he"],       ["damage_main_he"]),
@@ -65,20 +78,31 @@ DEALT_CATEGORIES = [
     ("副炮",     _PALETTE["atba"],     ["damage_atba_ap","damage_atba_he","damage_atba_cs",
                                         "damage_atba_ap_manual","damage_atba_he_manual","damage_atba_cs_manual"]),
     ("鱼雷",     _PALETTE["tpd"],      ["damage_tpd_normal","damage_tpd_alter","damage_tpd_deep"]),
-    ("鱼雷机",   _PALETTE["tbomb"],    ["damage_tbomb"]),
-    ("炸弹",     _PALETTE["bomb"],     ["damage_bomb"]),
-    ("火箭机",   _PALETTE["rocket"],   ["damage_rocket"]),
-    ("跳炸",     _PALETTE["skip"],     ["damage_skip"]),
-    ("深弹",     _PALETTE["dbomb"],    ["damage_dbomb_direct","damage_dbomb_splash","damage_dbomb_airsupport"]),
+    # --- CV 舰载机攻击 ---
+    ("炸弹",     _PALETTE["bomb"],     ["damage_bomb_avia","damage_bomb_alt"]),
+    ("跳炸",     _PALETTE["skip"],     ["damage_skip_avia","damage_skip_alt"]),
+    ("鱼雷机",   _PALETTE["tbomb"],    ["damage_tbomb_avia","damage_tbomb_alt"]),
+    ("火箭机",   _PALETTE["rocket"],   ["damage_rocket_avia","damage_rocket_alt"]),
+    # --- 空袭消耗品（陆航空袭） ---
+    ("空袭 HE",  _PALETTE["airstrike_he"],   ["damage_bomb_airsupport"]),
+    ("空袭深弹", _PALETTE["adbomb"],          ["damage_adbomb"]),
+    ("其他空袭", _PALETTE["airstrike_misc"],  ["damage_tbomb_airsupport",
+                                              "damage_skip_airsupport",
+                                              "damage_rocket_airsupport"]),
+    # --- 舰射深弹（DD/CL 尾投或前甩） ---
+    ("深弹",     _PALETTE["dbomb"],    ["damage_dbomb_direct","damage_dbomb_splash"]),
+    # --- 其他 ---
     ("火灾",     _PALETTE["fire"],     ["damage_fire"]),
     ("进水",     _PALETTE["flood"],    ["damage_flood"]),
     ("撞击",     _PALETTE["ram"],      ["damage_ram"]),
     ("水雷",     _PALETTE["sea_mine"], ["damage_sea_mine"]),
-    ("高空炸弹", _PALETTE["adbomb"],   ["damage_adbomb"]),
     ("导弹",     _PALETTE["missile"],  ["damage_missile"]),
     ("事件伤害", _PALETTE["event"],    ["damage_event_1","damage_event_2"]),
 ]
 
+# 受伤侧字段拆分规律与 DEALT 一致。received_damage_dbomb (227) 经验上是舰射深弹收到的，
+# received_damage_adbomb (237) 是空袭深弹收到的，received_damage_dbomb_airsupport (236)
+# 多半是 adbomb 的镜像（未在样本中证实，先不算入避免双倍）。
 RECEIVED_CATEGORIES = [
     ("主炮 AP",  _PALETTE["ap"],       ["received_damage_main_ap"]),
     ("主炮 HE",  _PALETTE["he"],       ["received_damage_main_he"]),
@@ -86,16 +110,24 @@ RECEIVED_CATEGORIES = [
     ("副炮",     _PALETTE["atba"],     ["received_damage_atba_ap","received_damage_atba_he","received_damage_atba_cs",
                                         "received_damage_atba_ap_manual","received_damage_atba_he_manual","received_damage_atba_cs_manual"]),
     ("鱼雷",     _PALETTE["tpd"],      ["received_damage_tpd_normal","received_damage_tpd_alter","received_damage_tpd_deep"]),
-    ("鱼雷机",   _PALETTE["tbomb"],    ["received_damage_tbomb"]),
-    ("炸弹",     _PALETTE["bomb"],     ["received_damage_bomb"]),
-    ("火箭机",   _PALETTE["rocket"],   ["received_damage_rocket"]),
-    ("跳炸",     _PALETTE["skip"],     ["received_damage_skip"]),
+    # --- CV 舰载机攻击 ---
+    ("炸弹",     _PALETTE["bomb"],     ["received_damage_bomb_avia","received_damage_bomb_alt"]),
+    ("跳炸",     _PALETTE["skip"],     ["received_damage_skip_avia","received_damage_skip_alt"]),
+    ("鱼雷机",   _PALETTE["tbomb"],    ["received_damage_tbomb_avia","received_damage_tbomb_alt"]),
+    ("火箭机",   _PALETTE["rocket"],   ["received_damage_rocket_avia","received_damage_rocket_alt"]),
+    # --- 空袭消耗品 ---
+    ("空袭 HE",  _PALETTE["airstrike_he"],   ["received_damage_bomb_airsupport"]),
+    ("空袭深弹", _PALETTE["adbomb"],          ["received_damage_adbomb"]),
+    ("其他空袭", _PALETTE["airstrike_misc"],  ["received_damage_tbomb_airsupport",
+                                              "received_damage_skip_airsupport",
+                                              "received_damage_rocket_airsupport"]),
+    # --- 舰射深弹 ---
     ("深弹",     _PALETTE["dbomb"],    ["received_damage_dbomb"]),
+    # --- 其他 ---
     ("火灾",     _PALETTE["fire"],     ["received_damage_fire"]),
     ("进水",     _PALETTE["flood"],    ["received_damage_flood"]),
     ("撞击",     _PALETTE["ram"],      ["received_damage_ram"]),
     ("水雷",     _PALETTE["sea_mine"], ["received_damage_sea_mine"]),
-    ("高空炸弹", _PALETTE["adbomb"],   ["received_damage_adbomb"]),
     ("导弹",     _PALETTE["missile"],  ["received_damage_missile"]),
     ("特殊伤害", _PALETTE["special"],  ["received_damage_special","received_damage_mirror"]),
     ("事件伤害", _PALETTE["event"],    ["received_damage_event_1","received_damage_event_2"]),
