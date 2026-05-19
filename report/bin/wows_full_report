@@ -8,6 +8,7 @@ Usage:
 内部串联调用 wows_report + wows_damage_report，后者会复用前者的 JSON。
 """
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -55,6 +56,11 @@ def main():
             [str(WOWS_REPORT), str(replay), str(tmp_dir)],
             extra_env={"WOWS_SKIP_PERSONAL": "1"},
         )
+
+        # JSON 是中间产物但 wows_analyze 会复用,拷一份到 out_dir
+        tmp_json = tmp_dir / f"{base}.json"
+        if tmp_json.is_file():
+            shutil.copy(tmp_json, out_dir / f"{base}.json")
 
         print("[2/3] 主角复盘（无 header）...", file=sys.stderr)
         damage_path = run(

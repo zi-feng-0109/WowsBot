@@ -247,16 +247,43 @@ cp /opt/wows-bot/plugin/minimap.py ~/my-bot/src/plugins/minimap.py
 > (`ValueError: '...' is not in the subpath of '...'`)。直接 `cp` 最省事;
 > 仓库更新后再 cp 一遍。
 
-### 5.3 (可选) 覆盖默认路径
+### 5.3 (可选) 启用 LLM 战后复盘
+
+战报 PNG 发完后,bot 可以再追一条 DeepSeek 出的中文复盘文本。功能是开关型 — 用户在 QQ 发 `/分析 开` 才会启用 (按聊天上下文记,群和私聊独立)。
+
+要让这个开关有用,bot 启动前 export DeepSeek API key:
+
+```bash
+export WOWS_DEEPSEEK_KEY=sk-xxxxxxxx   # https://platform.deepseek.com 申请
+# 可选覆盖:
+# export WOWS_DEEPSEEK_MODEL=deepseek-chat   # 也可换 deepseek-reasoner
+# export WOWS_DEEPSEEK_URL=https://api.deepseek.com/chat/completions
+```
+
+放进 systemd unit 的 `Environment=` 或者 bot 启动脚本里都行。
+
+没设 key 也不会崩,只是用户开了 `/分析 开` 之后那条尾消息会显示 `⚠️ LLM 分析失败: 缺 WOWS_DEEPSEEK_KEY 环境变量`,正常发 MP4+PNG 不受影响。
+
+用户侧指令:
+
+- `/分析 开` — 开启
+- `/分析 关` — 关闭
+- `/分析 状态` — 看当前是开是关
+
+状态默认存到 `~/wows-bot-replay/analyze_toggle.json`,可用 `WOWS_TOGGLE_FILE` env 覆盖。
+
+### 5.4 (可选) 覆盖默认路径
 
 如果你没按 `/opt/wows-bot` 默认布局,启动 nb 前 export:
 
 ```bash
 export WOWS_RENDER_SH=/your/path/minimap/render.sh
 export WOWS_REPORT_CMD=/your/path/report/bin/wows_full_report
+export WOWS_ANALYZE_CMD=/your/path/report/bin/wows_analyze
 export WOWS_REPLAY_BASEDIR=~/wows-bot-replay   # 中转目录,bot 自动建/删
 export WOWS_MP4_TIMEOUT=600                    # MP4 超时秒数
 export WOWS_PNG_TIMEOUT=300                    # PNG 超时秒数
+export WOWS_ANALYZE_TIMEOUT=120                # LLM 分析超时秒数
 ```
 
 ## 6. 启动

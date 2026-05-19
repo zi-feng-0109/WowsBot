@@ -11,10 +11,13 @@
 |---|---|---|
 | 小地图 MP4 | [wows-toolkit](https://github.com/landaire/wows-toolkit) 的 `minimap_renderer` (Rust) | 自动 |
 | 战报 + 复盘合并 PNG | 本仓库 `report/` 下 PIL 渲染器 + 自带的 `replayshark` | 自动 |
+| LLM 中文战后复盘 (DeepSeek) | 本仓库 `report/bin/wows_analyze` | 开关型,`/分析 开` 后每份 replay 都附带 |
 | QQ 接收 / 发送 / 排队 | 本仓库 `plugin/minimap.py` (NoneBot 2 + OneBot v11) | 用户发 `.wowsreplay` 触发 |
 
 两个渲染并行跑,等都完成后用一条消息合并发出 (MP4 作为文件上传,PNG 作为图片附在文字下)。
 PNG 失败只降级提示,不影响 MP4 主流程。
+
+如果该聊天上下文 (群/私聊) 之前发过 `/分析 开`,会在 MP4+PNG 之后再追发一条 DeepSeek 出的中文战后复盘文本 (基于 replayshark 出的结构化战报 JSON,不是看图,精度高)。`/分析 关` 关闭、`/分析 状态` 查询当前状态。
 
 ## 仓库结构
 

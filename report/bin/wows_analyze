@@ -1,0 +1,238 @@
+#!/usr/bin/env python3
+"""wows_analyze — 把战报 JSON 压成结构化摘要,交给 DeepSeek 出一段中文分析。
+
+用法:
+    wows_analyze <battle.json>
+
+stdout: 分析文本 (整段)
+stderr: 进度日志
+
+可调环境变量:
+    WOWS_DEEPSEEK_KEY    必填 — DeepSeek API key
+    WOWS_DEEPSEEK_URL    默认 https://api.deepseek.com/chat/completions
+    WOWS_DEEPSEEK_MODEL  默认 deepseek-chat
+    WOWS_ANALYZE_TIMEOUT 默认 90 (秒)
+"""
+import json
+import os
+import sys
+import urllib.request
+import urllib.error
+from pathlib import Path
+
+# 复用 render_battle_report 的翻译 + 常量索引工具
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from render_battle_report import (  # noqa: E402
+    t, result_field, load_translations, load_result_indices,
+    fmt_time, strip_known, strip_id, clean_ship_name, MATCH_GROUP_CN,
+)
+
+API_KEY     = os.environ.get("WOWS_DEEPSEEK_KEY", "")
+API_URL     = os.environ.get("WOWS_DEEPSEEK_URL", "https://api.deepseek.com/chat/completions")
+API_MODEL   = os.environ.get("WOWS_DEEPSEEK_MODEL", "deepseek-chat")
+API_TIMEOUT = int(os.environ.get("WOWS_ANALYZE_TIMEOUT", "90"))
+
+RESULT_CN = {"Win": "胜利", "Loss": "失败", "Draw": "平局"}
+
+
+def log(msg):
+    print(msg, file=sys.stderr)
+
+
+def fmt_int(v):
+    return f"{int(v or 0):,}".replace(",", " ")
+
+
+def ship_label(p):
+    idx = p["ship"].get("index", "")
+    raw_name = clean_ship_name(p["ship"]["name"])
+    zh = t(f"IDS_{idx}", raw_name) if idx else raw_name
+    species = strip_known(p["ship"]["species"]) or "?"
+    return f"{zh} L{p['ship']['level']} {species}"
+
+
+def mode_zh(m):
+    mg_raw = m.get("match_group", "")
+    gm_raw = m.get("game_mode", "")
+    mg = MATCH_GROUP_CN.get(mg_raw, mg_raw)
+    gm = t(f"IDS_SCENARIO_{gm_raw.upper()}", t(f"IDS_{gm_raw.upper()}", gm_raw))
+    return f"{mg}·{gm}" if gm else mg
+
+
+def build_summary(raw):
+    """把 battle JSON 压成给 LLM 看的纯文本摘要 (1-3K 字符)。"""
+    load_translations()
+    load_result_indices()
+
+    m = raw["match"]
+    players = raw.get("players", [])
+    self_name = m.get("self_player_name")
+    self_p = next((p for p in players if p["name"] == self_name), None)
+
+    map_raw = m.get("map_name", "").split("/")[-1]
+    map_disp = t(f"IDS_SPACES/{map_raw.upper()}", map_raw)
+
+    br = m.get("battle_result") or {}
+    win_type = br.get("type", "Draw")
+    win_team = br.get("team_id", -1)
+    result_zh = RESULT_CN.get(win_type, win_type)
+
+    scores = {ts["team_index"]: ts.get("score", 0) for ts in m.get("team_scores", [])}
+    self_team = (self_p.get("team_id") if self_p else 0) or 0
+    enemy_team = 1 if self_team == 0 else 0
+    score_str = f"{scores.get(self_team, '?')} : {scores.get(enemy_team, '?')}"
+    # 主角视角的结果 (battle_result.type 是赢家视角,改成主角)
+    if win_team != -1 and self_p is not None:
+        result_zh = "胜利" if win_team == self_team else ("平局" if win_type == "Draw" else "失败")
+
+    dur_played = m.get("duration_seconds_played") or m.get("duration_seconds_max") or 0
+
+    lines = []
+    lines.append(f"WoWs 战报 ({m.get('client_version', '?')})")
+    lines.append(f"地图: {map_disp} | 模式: {mode_zh(m)} | 时长: {fmt_time(int(dur_played))} | "
+                 f"结果: {result_zh} ({score_str})")
+    lines.append(f"日期: {m.get('date_time', '?')}")
+
+    # ----- 主角 -----
+    if self_p is not None:
+        ri = self_p.get("results_info") or []
+        st = self_p.get("stats") or {}
+        max_hp = st.get("max_health", 0) or 0
+        final_hp = st.get("final_health", 0) or 0
+        taken = max(0, int(max_hp - final_hp))
+        dmg = st.get("damage_dealt") or 0
+        kills = st.get("kills") or 0
+        spotting = result_field(ri, "DAMAGE_SCOUTING", 0) or 0
+        potential = result_field(ri, "ART_AGRO", 0) or 0
+        xp = result_field(ri, "EXP", 0) or 0
+        plane_kills = (result_field(ri, "planes_killed_by_ship", 0) or 0) + \
+                      (result_field(ri, "planes_killed_by_plane", 0) or 0)
+
+        lines.append("")
+        lines.append(f"【主角】{self_p['name']}  {ship_label(self_p)}")
+        lines.append(
+            f"  击杀 {kills} | 击伤 {fmt_int(dmg)} | 飞机 {plane_kills} | "
+            f"侦查 {fmt_int(spotting)} | 潜在 {fmt_int(potential)} | 经验 {fmt_int(xp)}"
+        )
+        cause = strip_known(st.get("death_cause") or "") if not st.get("is_alive") else ""
+        lines.append(
+            f"  血量 {fmt_int(final_hp)}/{fmt_int(max_hp)} 承伤 {fmt_int(taken)} | "
+            f"{'生还' if st.get('is_alive') else f'阵亡 ({cause})'}"
+        )
+
+    # ----- 双队战绩 -----
+    def team_block(label, tid):
+        team = [p for p in players if p.get("team_id") == tid]
+        if not team:
+            return []
+        team.sort(key=lambda p: -((p.get("stats") or {}).get("damage_dealt") or 0))
+        alive = sum(1 for p in team if (p.get("stats") or {}).get("is_alive"))
+        total_dmg = sum(((p.get("stats") or {}).get("damage_dealt") or 0) for p in team)
+        total_frags = sum(((p.get("stats") or {}).get("kills") or 0) for p in team)
+        out = ["", f"【{label}】{alive}/{len(team)} 存活, 总击伤 {fmt_int(total_dmg)}, 总击杀 {total_frags}"]
+        for p in team:
+            st = p.get("stats") or {}
+            mark = "★" if p["name"] == self_name else " "
+            out.append(
+                f"  {mark}{p['name']:<22} {ship_label(p):<28} "
+                f"K{st.get('kills', 0)} D{fmt_int(st.get('damage_dealt', 0))} "
+                f"{'存' if st.get('is_alive') else '亡'}"
+            )
+        return out
+
+    lines.extend(team_block("己方阵营", self_team))
+    lines.extend(team_block("敌方阵营", enemy_team))
+
+    # ----- 死亡时间轴 -----
+    deaths_raw = raw.get("deaths", [])
+    if deaths_raw:
+        # 建 entity_id -> (name, team) 映射,标谁死的+在哪边
+        eid_map = {}
+        for p in players:
+            eid = strip_id(p.get("vehicle_entity_id") or p.get("entity_id") or "")
+            if eid:
+                eid_map[eid] = (p["name"], p.get("team_id"))
+
+        lines.append("")
+        lines.append("【死亡时间轴】")
+        sorted_deaths = sorted(deaths_raw, key=lambda d: float(d.get("time_secs", 0)))
+        for d in sorted_deaths:
+            t_sec = float(d.get("time_secs", 0))
+            victim_eid = strip_id(d.get("victim_entity_id") or "")
+            killer_eid = strip_id(d.get("killer_entity_id") or "")
+            cause = strip_known(d.get("cause", "?"))
+            victim_name, victim_team = eid_map.get(victim_eid, (d.get("victim_name", "?"), -1))
+            killer_name, _ = eid_map.get(killer_eid, ("环境", -1))
+            side = "己" if victim_team == self_team else ("敌" if victim_team == enemy_team else "?")
+            lines.append(f"  {fmt_time(int(t_sec))} [{side}] {victim_name} ← {killer_name} ({cause})")
+
+    return "\n".join(lines)
+
+
+SYSTEM_PROMPT = """你是战舰世界 (World of Warships) 的资深玩家兼教练,基于给定的对局战报,
+用中文给主角写一段简短的战后复盘 (200-400 字)。
+
+要求:
+1. 先一句话点出输/赢的关键原因 (从双方阵容、输出分布、死亡顺序看)
+2. 主角表现: 1 句亮点 + 1-2 句失误或可改进点 (要具体到数字、时机、或位置)
+3. 关键转折点 (死亡时间轴看哪几个人倒下后局势开始崩)
+4. 不要重复罗列数据,只讲分析和判断
+5. 不要客套话、不要 markdown 标题/列表,直接成段落写
+"""
+
+
+def call_deepseek(summary):
+    if not API_KEY:
+        raise RuntimeError("缺 WOWS_DEEPSEEK_KEY 环境变量")
+
+    body = json.dumps({
+        "model": API_MODEL,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": summary},
+        ],
+        "stream": False,
+        "temperature": 0.6,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        API_URL,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {API_KEY}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="ignore")[:500]
+        raise RuntimeError(f"DeepSeek HTTP {e.code}: {body}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"DeepSeek 网络错误: {e}")
+
+    try:
+        return data["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError):
+        raise RuntimeError(f"DeepSeek 响应无 content: {data}")
+
+
+def main():
+    if len(sys.argv) < 2:
+        log("usage: wows_analyze <battle.json>")
+        sys.exit(2)
+
+    raw = json.load(open(sys.argv[1], encoding="utf-8"))
+    log("[1/2] 压缩战报摘要 ...")
+    summary = build_summary(raw)
+    log(f"摘要 {len(summary)} 字符")
+
+    log("[2/2] 调 DeepSeek ...")
+    text = call_deepseek(summary)
+    print(text)
+
+
+if __name__ == "__main__":
+    main()

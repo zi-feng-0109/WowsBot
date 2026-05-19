@@ -1,31 +1,42 @@
 """
 NoneBot 插件: 接收 .wowsreplay 文件,并行渲染 MP4 (小地图) + PNG (战报),合并发送回 QQ。
+开启分析后,会在 MP4+PNG 之后追发一条 DeepSeek 出的中文战后复盘。
 
 可调环境变量 (默认值对应 docs/DEPLOY.md 的统一布局):
   WOWS_RENDER_SH       MP4 渲染脚本路径    默认 /opt/wows-bot/minimap/render.sh
   WOWS_REPORT_CMD      战报 PNG 入口        默认 /opt/wows-bot/report/bin/wows_full_report
+  WOWS_ANALYZE_CMD     LLM 分析入口         默认 /opt/wows-bot/report/bin/wows_analyze
   WOWS_REPLAY_BASEDIR  回放/产物临时目录    默认 ~/wows-bot-replay
   WOWS_MP4_TIMEOUT     MP4 渲染超时 (秒)    默认 600
   WOWS_PNG_TIMEOUT     PNG 渲染超时 (秒)    默认 300
+  WOWS_ANALYZE_TIMEOUT LLM 分析超时 (秒)    默认 120
+  WOWS_TOGGLE_FILE     分析开关状态文件     默认 <BASEDIR>/analyze_toggle.json
+
+DeepSeek API key 在 wows_analyze 那边读 WOWS_DEEPSEEK_KEY,不在本插件。
 """
 import os
+import json
 import shutil
 import asyncio
 import aiohttp
 from typing import Optional, Tuple
 from pathlib import Path
 
-from nonebot import on_message, get_driver
-from nonebot.adapters.onebot.v11 import Bot, Event, MessageSegment
+from nonebot import on_message, on_command, get_driver
+from nonebot.adapters.onebot.v11 import Bot, Event, Message, MessageSegment
 from nonebot.adapters.onebot.v11.event import GroupMessageEvent
+from nonebot.params import CommandArg
 from nonebot.typing import T_State
 from nonebot.log import logger
 
-RENDER_SH      = os.environ.get("WOWS_RENDER_SH",  "/opt/wows-bot/minimap/render.sh")
-REPORT_CMD     = os.environ.get("WOWS_REPORT_CMD", "/opt/wows-bot/report/bin/wows_full_report")
-BASE_DIR       = os.path.expanduser(os.environ.get("WOWS_REPLAY_BASEDIR", "~/wows-bot-replay"))
-MP4_TIMEOUT    = int(os.environ.get("WOWS_MP4_TIMEOUT", "600"))
-PNG_TIMEOUT    = int(os.environ.get("WOWS_PNG_TIMEOUT", "300"))
+RENDER_SH        = os.environ.get("WOWS_RENDER_SH",   "/opt/wows-bot/minimap/render.sh")
+REPORT_CMD       = os.environ.get("WOWS_REPORT_CMD",  "/opt/wows-bot/report/bin/wows_full_report")
+ANALYZE_CMD      = os.environ.get("WOWS_ANALYZE_CMD", "/opt/wows-bot/report/bin/wows_analyze")
+BASE_DIR         = os.path.expanduser(os.environ.get("WOWS_REPLAY_BASEDIR", "~/wows-bot-replay"))
+MP4_TIMEOUT      = int(os.environ.get("WOWS_MP4_TIMEOUT", "600"))
+PNG_TIMEOUT      = int(os.environ.get("WOWS_PNG_TIMEOUT", "300"))
+ANALYZE_TIMEOUT  = int(os.environ.get("WOWS_ANALYZE_TIMEOUT", "120"))
+TOGGLE_FILE      = os.environ.get("WOWS_TOGGLE_FILE", os.path.join(BASE_DIR, "analyze_toggle.json"))
 
 replay_handler = on_message(priority=5, block=False)
 
@@ -36,6 +47,79 @@ processing = False
 TaskInfo = Tuple[str, int, Optional[int], str, str]
 
 driver = get_driver()
+
+
+# ====== 分析开关: 按聊天上下文持久化 ============================================
+# 状态结构: {"g:123456": true, "u:987654": false, ...}
+# group 聊天 key 是 "g:<group_id>",私聊是 "u:<user_id>"
+
+_toggle_state: dict = {}
+_toggle_loaded = False
+
+
+def _toggle_load():
+    global _toggle_state, _toggle_loaded
+    if _toggle_loaded:
+        return
+    _toggle_loaded = True
+    try:
+        if os.path.isfile(TOGGLE_FILE):
+            with open(TOGGLE_FILE, "r", encoding="utf-8") as f:
+                _toggle_state = json.load(f)
+    except Exception as e:
+        logger.warning(f"读 toggle 文件失败: {e}")
+        _toggle_state = {}
+
+
+def _toggle_save():
+    try:
+        os.makedirs(os.path.dirname(TOGGLE_FILE), exist_ok=True)
+        with open(TOGGLE_FILE, "w", encoding="utf-8") as f:
+            json.dump(_toggle_state, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"写 toggle 文件失败: {e}")
+
+
+def chat_key(group_id: Optional[int], user_id: str) -> str:
+    return f"g:{group_id}" if group_id else f"u:{user_id}"
+
+
+def analyze_enabled(group_id: Optional[int], user_id: str) -> bool:
+    _toggle_load()
+    return bool(_toggle_state.get(chat_key(group_id, user_id), False))
+
+
+def analyze_set(group_id: Optional[int], user_id: str, enabled: bool):
+    _toggle_load()
+    _toggle_state[chat_key(group_id, user_id)] = enabled
+    _toggle_save()
+
+
+# ====== /分析 指令 =============================================================
+
+analyze_cmd = on_command("分析", priority=5, block=True)
+
+
+@analyze_cmd.handle()
+async def handle_analyze_cmd(bot: Bot, event: Event, args: Message = CommandArg()):
+    user_id = str(event.get_user_id())
+    group_id = event.group_id if isinstance(event, GroupMessageEvent) else None
+    arg = args.extract_plain_text().strip()
+
+    if arg in ("开", "on", "enable", "开启"):
+        analyze_set(group_id, user_id, True)
+        await analyze_cmd.finish("✅ 战报分析已开启,后续每份 replay 都会附带 LLM 复盘文本。")
+    elif arg in ("关", "off", "disable", "关闭"):
+        analyze_set(group_id, user_id, False)
+        await analyze_cmd.finish("已关闭战报分析。MP4 + 战报图正常发,不再调 LLM。")
+    elif arg in ("", "状态", "status"):
+        on = analyze_enabled(group_id, user_id)
+        await analyze_cmd.finish(
+            f"当前分析: {'开启' if on else '关闭'}\n"
+            f"用法: /分析 开 | /分析 关 | /分析 状态"
+        )
+    else:
+        await analyze_cmd.finish("用法: /分析 开 | /分析 关 | /分析 状态")
 
 
 @replay_handler.handle()
@@ -163,6 +247,22 @@ async def process_queue(bot: Bot):
 
             await upload_and_notify(bot, user_id, group_id, message_id,
                                     mp4_path, png_path, png_error)
+
+            # 开了分析就追发一条 LLM 复盘文本
+            if analyze_enabled(group_id, user_id):
+                json_path = os.path.join(user_dir, f"{Path(replay_path).stem}.json")
+                if os.path.isfile(json_path):
+                    try:
+                        analysis = await run_analyze(json_path)
+                        await send_message(bot, user_id, group_id, message_id,
+                                           f"🧠 战后复盘:\n{analysis}")
+                    except Exception as e:
+                        logger.warning(f"LLM 分析失败 (不影响 MP4/PNG): {e}")
+                        await send_message(bot, user_id, group_id, message_id,
+                                           f"⚠️ LLM 分析失败: {e}")
+                else:
+                    logger.warning(f"未找到战报 JSON,跳过分析: {json_path}")
+
             logger.info(f"用户 {user_id} 任务完成")
 
         except Exception as e:
@@ -205,6 +305,31 @@ async def render_mp4(replay_path: str, work_dir: str):
         logger.info(f"MP4 完成: {output_path}")
     except FileNotFoundError:
         raise RuntimeError(f"找不到 MP4 渲染脚本: {RENDER_SH}")
+
+
+async def run_analyze(json_path: str) -> str:
+    """调用 wows_analyze,返回 LLM 输出的分析文本。"""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            ANALYZE_CMD, json_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=ANALYZE_TIMEOUT)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError(f"分析超时({ANALYZE_TIMEOUT}s)")
+        if proc.returncode != 0:
+            tail = stderr.decode('utf-8', errors='ignore')[-500:] if stderr else "未知错误"
+            raise RuntimeError(f"分析失败: {tail}")
+        text = stdout.decode('utf-8', errors='ignore').strip()
+        if not text:
+            raise RuntimeError("分析输出为空")
+        return text
+    except FileNotFoundError:
+        raise RuntimeError(f"找不到分析命令: {ANALYZE_CMD}")
 
 
 async def render_report(replay_path: str, work_dir: str) -> str:
