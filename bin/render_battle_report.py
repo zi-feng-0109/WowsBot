@@ -257,6 +257,7 @@ class PlayerStats:
     exp: Optional[int] = None       # 含 buff 经验
     scouting_damage: Optional[int] = None
     potential_damage: Optional[int] = None  # agro_art + agro_air + agro_tpd + agro_dbomb
+    planes_killed: Optional[int] = None     # planes_killed_by_ship + planes_killed_by_plane
     achievements: list[tuple[int, int]] = None  # list of (achievement_id, count)
 
 
@@ -315,6 +316,10 @@ def load(json_path: str) -> MatchReport:
             potential_damage=sum(
                 result_field(p.get("results_info"), k, 0) or 0
                 for k in ("agro_art", "agro_air", "agro_tpd", "agro_dbomb")
+            ) or None,
+            planes_killed=(
+                (result_field(p.get("results_info"), "planes_killed_by_ship", 0) or 0)
+                + (result_field(p.get("results_info"), "planes_killed_by_plane", 0) or 0)
             ) or None,
             achievements=[
                 (int(aid), int(cnt))
@@ -391,7 +396,7 @@ def hp_pct(p: PlayerStats) -> float:
 
 
 def render(report: MatchReport, out_path: str):
-    W = 2100
+    W = 2200
     row_h = 40
     team0_n = sum(1 for p in report.players if p.team_id == 0)
     team1_n = sum(1 for p in report.players if p.team_id == 1)
@@ -491,21 +496,22 @@ def render(report: MatchReport, out_path: str):
         draw.text((x + panel_w - (cb[2] - cb[0]) - 12, y_top + 7),
                   count_str, (10, 16, 28), f_h2)
 
-        # column layout (panel_w = ~1968)
+        # column layout (panel_w = ~2168)
         cols = [
             (16,   "玩家",     None),
             (340,  "战舰",     None),
             (540,  "类型",     None),
             (600,  "击杀",     None),
             (680,  "击伤",     None),
-            (790,  "侦查",     None),
-            (890,  "潜在",     None),
-            (1010, "裸经验",   None),
-            (1110, "血量",     None),
-            (1270, "存活时长", None),
-            (1370, "结局",     None),
-            (1530, "凶手",     None),
-            (1760, "成就",     None),
+            (790,  "飞机",     None),
+            (870,  "侦查",     None),
+            (970,  "潜在",     None),
+            (1090, "裸经验",   None),
+            (1190, "血量",     None),
+            (1350, "存活时长", None),
+            (1450, "结局",     None),
+            (1610, "凶手",     None),
+            (1840, "成就",     None),
         ]
         ry = y_top + 36 + 8
         for cx, label, _ in cols:
@@ -546,52 +552,60 @@ def render(report: MatchReport, out_path: str):
                          GAME_GOLD if dmg >= 100_000 else
                          GAME_TEXT if dmg >= 30_000 else GAME_DIM)
             draw.text((x + 680, ty), f"{dmg:>6,}".replace(",", " "), dmg_color, f_num)
+            # planes shot down (own AA + own planes)
+            if p.planes_killed is not None and p.planes_killed > 0:
+                pk = int(p.planes_killed)
+                pk_color = (GAME_PURPLE if pk >= 35 else
+                            GAME_GOLD if pk >= 20 else GAME_TEXT)
+                draw.text((x + 790, ty), str(pk), pk_color, f_num)
+            else:
+                draw.text((x + 790, ty), "—", GAME_DIM, f_row)
             # scouting (spotting) damage
             if p.scouting_damage is not None and p.scouting_damage > 0:
                 sd = int(p.scouting_damage)
                 sd_color = GAME_GOLD if sd >= 50000 else GAME_TEXT
-                draw.text((x + 790, ty), f"{sd:>5,}".replace(",", " "), sd_color, f_num)
+                draw.text((x + 870, ty), f"{sd:>5,}".replace(",", " "), sd_color, f_num)
             else:
-                draw.text((x + 790, ty), "—", GAME_DIM, f_row)
+                draw.text((x + 870, ty), "—", GAME_DIM, f_row)
             # potential damage (fall back to actual damage taken if not available)
             if p.potential_damage is not None and p.potential_damage > 0:
                 pot = int(p.potential_damage)
                 pot_color = (GAME_PURPLE if pot >= 3_000_000 else
                              GAME_GOLD if pot >= 1_500_000 else GAME_TEXT)
-                draw.text((x + 890, ty), f"{pot:>7,}".replace(",", " "), pot_color, f_num)
+                draw.text((x + 970, ty), f"{pot:>7,}".replace(",", " "), pot_color, f_num)
             else:
                 taken = int(p.max_hp - p.final_hp)
-                draw.text((x + 890, ty), f"{taken:>7,}".replace(",", " "), GAME_DIM, f_num)
+                draw.text((x + 970, ty), f"{taken:>7,}".replace(",", " "), GAME_DIM, f_num)
             # raw xp
             if p.exp is not None:
                 xp_color = GAME_GOLD if p.exp >= 1500 else GAME_TEXT
-                draw.text((x + 1010, ty), f"{int(p.exp):>5,}".replace(",", " "), xp_color, f_num)
+                draw.text((x + 1090, ty), f"{int(p.exp):>5,}".replace(",", " "), xp_color, f_num)
             else:
-                draw.text((x + 1010, ty), "—", GAME_DIM, f_row)
+                draw.text((x + 1090, ty), "—", GAME_DIM, f_row)
             # hp bar
             pct = hp_pct(p)
             bar_w = 130
-            draw.rectangle([x + 1110, bar_y, x + 1110 + bar_w, bar_y + 10],
+            draw.rectangle([x + 1190, bar_y, x + 1190 + bar_w, bar_y + 10],
                            fill=(40, 50, 70))
             if pct > 0:
                 hp_col = GAME_GREEN if pct > 0.5 else (GAME_GOLD if pct > 0.25 else GAME_RED)
-                draw.rectangle([x + 1110, bar_y,
-                                x + 1110 + int(bar_w * pct), bar_y + 10], fill=hp_col)
+                draw.rectangle([x + 1190, bar_y,
+                                x + 1190 + int(bar_w * pct), bar_y + 10], fill=hp_col)
             # time lived
             if p.is_alive:
-                draw.text((x + 1270, ty), "全程", GAME_GREEN, f_row)
+                draw.text((x + 1350, ty), "全程", GAME_GREEN, f_row)
             else:
-                draw.text((x + 1270, ty),
+                draw.text((x + 1350, ty),
                           fmt_time(p.time_lived_secs or 0), GAME_TEXT, f_num)
             # outcome / cause
             if p.is_alive:
-                draw.text((x + 1370, ty), "存活", GAME_GREEN, f_row)
+                draw.text((x + 1450, ty), "存活", GAME_GREEN, f_row)
             else:
                 cause_cn = DEATH_CAUSE_CN.get(p.death_cause or "", p.death_cause or "?")
-                draw.text((x + 1370, ty), f"亡于 {cause_cn}", GAME_DIM, f_row)
+                draw.text((x + 1450, ty), f"亡于 {cause_cn}", GAME_DIM, f_row)
             # killer
             if p.is_alive:
-                draw.text((x + 1530, ty), "—", GAME_DIM, f_row)
+                draw.text((x + 1610, ty), "—", GAME_DIM, f_row)
             else:
                 killer = eid_to_player_panel.get(p.killer_entity_id) if p.killer_entity_id else None
                 if killer is None:
@@ -604,13 +618,13 @@ def render(report: MatchReport, out_path: str):
                 # truncate killer column to keep room for 成就
                 while f_row.getbbox(killer_txt)[2] > 220:
                     killer_txt = killer_txt[:-2] + "…"
-                draw.text((x + 1530, ty), killer_txt, GAME_DIM, f_row)
+                draw.text((x + 1610, ty), killer_txt, GAME_DIM, f_row)
             # achievements — icons
             if p.achievements:
                 icon_size = 32
                 gap = 5
-                max_width = 320  # column width budget (W=2100 gives more room)
-                ax = x + 1760
+                max_width = 320  # column width budget (W=2200 gives more room)
+                ax = x + 1840
                 ay = ry + (row_h - icon_size) // 2 - 1
                 # cap icons; rest summarized as "+N"
                 MAX_ICONS = max_width // (icon_size + gap)
@@ -636,7 +650,7 @@ def render(report: MatchReport, out_path: str):
                 if hidden > 0:
                     draw.text((ax + 2, ty), f"+{hidden}", GAME_GOLD, f_tiny)
             else:
-                draw.text((x + 1760, ty), "—", GAME_DIM, f_row)
+                draw.text((x + 1840, ty), "—", GAME_DIM, f_row)
             ry += row_h
         return y_top + 56 + len(members) * row_h + 14
 
@@ -790,6 +804,7 @@ def render(report: MatchReport, out_path: str):
         boxes = [
             ("击伤",    f"{int(self_p.damage_dealt):,}", GAME_GOLD, False),
             ("击杀",    str(self_p.frags),               GAME_GOLD, False),
+            ("飞机",    str(self_p.planes_killed) if self_p.planes_killed else "0", GAME_TEXT, False),
             ("侦查伤害", f"{sd_self:,}" if sd_self else "—", GAME_TEXT, False),
             ("潜在伤害", f"{pot_self:,}" if pot_self else "—", GAME_TEXT, False),
             ("实际承伤", f"{int(self_p.max_hp - self_p.final_hp):,}", GAME_TEXT, False),
