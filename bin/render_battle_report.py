@@ -406,8 +406,11 @@ def render(report: MatchReport, out_path: str):
     timeline_h = 220
     owner_box_h = 110
     pad = 16
+    skip_personal = _os.environ.get("WOWS_SKIP_PERSONAL") == "1"
     H = (header_h + pad + team_panel_h_0 + pad + team_panel_h_1 + pad
-         + timeline_h + pad + owner_box_h + pad)
+         + timeline_h + pad)
+    if not skip_personal:
+        H += owner_box_h + pad
 
     img = Image.new("RGB", (W, H), GAME_BG)
     draw = ImageDraw.Draw(img)
@@ -784,7 +787,7 @@ def render(report: MatchReport, out_path: str):
 
     # ---- Self player stats ----
     self_p = next((p for p in report.players if p.name == report.self_player_name), None)
-    if self_p:
+    if self_p and not skip_personal:
         draw.rounded_rectangle([pad, y, W - pad, y + owner_box_h], radius=8,
                                fill=GAME_PANEL)
         self_ship_zh = t(f"IDS_{self_p.ship_index}", self_p.ship_name) if self_p.ship_index else self_p.ship_name

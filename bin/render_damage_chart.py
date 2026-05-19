@@ -259,7 +259,8 @@ def render(json_path: str, out_path: str):
 
     # Layout
     W = 1700
-    header_h = 110
+    skip_header = os.environ.get("WOWS_SKIP_HEADER") == "1"
+    header_h = 0 if skip_header else 110
     pie_h = 580
     ribbon_h = 130
     pad = 20
@@ -279,31 +280,32 @@ def render(json_path: str, out_path: str):
     f_tiny = f(CJK_FONT, 12)
 
     # ---- HEADER ----
-    draw.rectangle([0, 0, W, header_h], fill=(14, 19, 30))
-    draw.line([0, header_h, W, header_h], fill=GAME_GOLD, width=2)
-    map_zh = t(f"IDS_SPACES/{m['map_name'].split('/')[-1].upper()}",
-               m["map_name"].split("/")[-1])
-    ship_index = self_p["ship"].get("index", "")
-    ship_zh = t(f"IDS_{ship_index}", self_p["ship"]["name"]) if ship_index else self_p["ship"]["name"]
-    title = f"战斗复盘 — {self_p['name']} · {ship_zh}"
-    draw.text((24, 14), title, GAME_TEXT, f_title)
-    br = m.get("battle_result") or {}
-    result_label = {"Win": "胜利", "Loss": "失败", "Draw": "平局"}.get(br.get("type", "?"), "?")
-    result_color = {"胜利": GAME_GREEN, "失败": GAME_RED, "平局": GAME_GOLD}.get(result_label, GAME_DIM)
-    # Render the sub-header as a sequence of (text, color) segments, advancing
-    # x by the actual width of each piece so nothing overlaps.
-    segments = [
-        (map_zh, GAME_DIM),
-        ("   ", GAME_DIM),
-        (result_label, result_color),
-        ("   ", GAME_DIM),
-        (m.get("date_time", "?"), GAME_DIM),
-        ("   时长 " + fmt_time(int(m.get("duration_seconds_played") or 0)), GAME_DIM),
-    ]
-    sx = 24
-    for text, color in segments:
-        draw.text((sx, 60), text, color, f_h2)
-        sx += f_h2.getbbox(text)[2]
+    if not skip_header:
+        draw.rectangle([0, 0, W, header_h], fill=(14, 19, 30))
+        draw.line([0, header_h, W, header_h], fill=GAME_GOLD, width=2)
+        map_zh = t(f"IDS_SPACES/{m['map_name'].split('/')[-1].upper()}",
+                   m["map_name"].split("/")[-1])
+        ship_index = self_p["ship"].get("index", "")
+        ship_zh = t(f"IDS_{ship_index}", self_p["ship"]["name"]) if ship_index else self_p["ship"]["name"]
+        title = f"战斗复盘 — {self_p['name']} · {ship_zh}"
+        draw.text((24, 14), title, GAME_TEXT, f_title)
+        br = m.get("battle_result") or {}
+        result_label = {"Win": "胜利", "Loss": "失败", "Draw": "平局"}.get(br.get("type", "?"), "?")
+        result_color = {"胜利": GAME_GREEN, "失败": GAME_RED, "平局": GAME_GOLD}.get(result_label, GAME_DIM)
+        # Render the sub-header as a sequence of (text, color) segments, advancing
+        # x by the actual width of each piece so nothing overlaps.
+        segments = [
+            (map_zh, GAME_DIM),
+            ("   ", GAME_DIM),
+            (result_label, result_color),
+            ("   ", GAME_DIM),
+            (m.get("date_time", "?"), GAME_DIM),
+            ("   时长 " + fmt_time(int(m.get("duration_seconds_played") or 0)), GAME_DIM),
+        ]
+        sx = 24
+        for text, color in segments:
+            draw.text((sx, 60), text, color, f_h2)
+            sx += f_h2.getbbox(text)[2]
 
     # ---- TWO PIES ----
     y = header_h + pad
