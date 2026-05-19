@@ -32,9 +32,27 @@ BOT_HOME = Path(__file__).resolve().parent.parent
 
 REPLAYSHARK = os.environ.get("WOWS_REPLAYSHARK", str(BOT_HOME / "replayshark"))
 SPECS_DIR   = os.environ.get("WOWS_SPECS_DIR",   str(BOT_HOME / "specs"))
-PY_VENV     = os.environ.get("WOWS_PY_VENV",     str(BOT_HOME / "venv"))
 RENDER_PY   = os.environ.get("WOWS_RENDER_PY",   str(BOT_HOME / "bin" / "render_battle_report.py"))
 DEFAULT_OUT_DIR = os.environ.get("WOWS_OUT_DIR", "/tmp/wows_report")
+
+
+def find_python() -> str:
+    """Pick the Python interpreter to use.
+
+    Priority:
+      1. $WOWS_PYTHON (explicit override)
+      2. $WOWS_PY_VENV/bin/python (legacy venv layout)
+      3. $BOT_HOME/venv/bin/python (auto-detected local venv if present)
+      4. system 'python3' on PATH
+    """
+    override = os.environ.get("WOWS_PYTHON")
+    if override:
+        return override
+    venv = os.environ.get("WOWS_PY_VENV") or str(BOT_HOME / "venv")
+    candidate = Path(venv) / "bin" / "python"
+    if candidate.exists():
+        return str(candidate)
+    return "python3"
 
 REPLAY_SIGNATURE = b"\x12\x32\x34\x11"
 
@@ -133,13 +151,9 @@ def main():
         )
 
         log("[2/2] rendering PNG ...")
-        py = Path(PY_VENV) / "bin" / "python"
-        if not py.exists():
-            log(f"error: Python venv not found at {PY_VENV}")
-            log("  set WOWS_PY_VENV env var, or create venv (see DEPLOY.md)")
-            sys.exit(1)
+        py = find_python()
         subprocess.run(
-            [str(py), RENDER_PY, str(json_path), str(png_path)],
+            [py, RENDER_PY, str(json_path), str(png_path)],
             check=True, stdout=sys.stderr,
         )
     finally:

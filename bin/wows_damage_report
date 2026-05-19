@@ -19,8 +19,18 @@ from pathlib import Path
 BOT_HOME = Path(__file__).resolve().parent.parent
 WOWS_REPORT = BOT_HOME / "bin" / "wows_report"
 RENDER_PY   = BOT_HOME / "bin" / "render_damage_chart.py"
-PY_VENV     = os.environ.get("WOWS_PY_VENV", str(BOT_HOME / "venv"))
 DEFAULT_OUT = os.environ.get("WOWS_OUT_DIR", "/tmp/wows_report")
+
+
+def find_python() -> str:
+    override = os.environ.get("WOWS_PYTHON")
+    if override:
+        return override
+    venv = os.environ.get("WOWS_PY_VENV") or str(BOT_HOME / "venv")
+    candidate = Path(venv) / "bin" / "python"
+    if candidate.exists():
+        return str(candidate)
+    return "python3"
 
 
 def main():
@@ -35,25 +45,34 @@ def main():
     json_path = out_dir / f"{base}.json"
     png_path = out_dir / f"{base}.damage.png"
 
-    # Run wows_report to ensure JSON exists (also produces the main PNG, but
-    # that's harmless and we ignore it). Captures progress to stderr.
-    print("[1/2] producing battle JSON ...", file=sys.stderr)
-    result = subprocess.run(
-        [str(WOWS_REPORT), str(replay), str(out_dir)],
-        stdout=subprocess.PIPE, stderr=sys.stderr,
+    # If JSON already exists and is newer than the replay file, reuse it to
+    # skip a redundant replayshark parse. (Set WOWS_FORCE_PARSE=1 to override.)
+    force = os.environ.get("WOWS_FORCE_PARSE") == "1"
+    reuse = (
+        not force
+        and json_path.exists()
+        and json_path.stat().st_mtime >= replay.stat().st_mtime
     )
-    if result.returncode != 0:
-        print("error: wows_report failed", file=sys.stderr)
-        sys.exit(result.returncode)
-    # JSON must now exist
-    if not json_path.exists():
-        print(f"error: expected JSON not found at {json_path}", file=sys.stderr)
-        sys.exit(1)
+
+    if reuse:
+        print(f"[1/2] reusing cached JSON at {json_path}", file=sys.stderr)
+    else:
+        print("[1/2] producing battle JSON ...", file=sys.stderr)
+        result = subprocess.run(
+            [str(WOWS_REPORT), str(replay), str(out_dir)],
+            stdout=subprocess.PIPE, stderr=sys.stderr,
+        )
+        if result.returncode != 0:
+            print("error: wows_report failed", file=sys.stderr)
+            sys.exit(result.returncode)
+        if not json_path.exists():
+            print(f"error: expected JSON not found at {json_path}", file=sys.stderr)
+            sys.exit(1)
 
     print("[2/2] rendering damage chart ...", file=sys.stderr)
-    py = Path(PY_VENV) / "bin" / "python"
+    py = find_python()
     subprocess.run(
-        [str(py), str(RENDER_PY), str(json_path), str(png_path)],
+        [py, str(RENDER_PY), str(json_path), str(png_path)],
         check=True, stdout=sys.stderr,
     )
 
