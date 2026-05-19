@@ -1,0 +1,13 @@
+* text=auto
+*.sh text eol=lf
+bin/wows_report text eol=lf
+bin/wows_damage_report text eol=lf
+bin/wows_full_report text eol=lf
+report/bin/wows_report text eol=lf
+report/bin/wows_damage_report text eol=lf
+report/bin/wows_full_report text eol=lf
+*.png binary
+*.jpg binary
+*.mo binary
+prebuilt/replayshark-linux-x86_64 binary
+report/prebuilt/replayshark-linux-x86_64 binary

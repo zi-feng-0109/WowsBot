@@ -9,7 +9,7 @@ Usage:
     python update_specs.py [--out DIR] [--repo URL] [--branch BRANCH]
 
 After running:
-    scp -r specs_out/ user@bot-host:/path/to/wows_report_bot/specs/
+    scp -r specs_out/ user@bot-host:/path/to/wows-bot/report/specs/
 """
 import argparse
 import json
@@ -96,7 +96,7 @@ def main():
 
     size_mb = sum(p.stat().st_size for p in out.rglob("*") if p.is_file()) / 1e6
     print(f"\ndone — {out}  ({size_mb:.1f} MB)")
-    print(f"\nNext: scp -r {out}/ user@bot-host:/path/to/wows_report_bot/specs/")
+    print(f"\nNext: scp -r {out}/ user@bot-host:/path/to/wows-bot/report/specs/")
 
 
 if __name__ == "__main__":

@@ -1,11 +1,9 @@
-# Per-platform / per-machine artifacts (rebuild on each host)
-venv/
-replayshark
+# 各机器各自重建,不入仓
+report/venv/
+report/replayshark
 
-# Version-specific data (regenerate via tools/update_specs.py)
-specs/scripts/
-specs/content/
-specs/metadata.toml
+# 版本专用数据,用 tools/build_specs_from_local.py 或 update_specs.py 重新生成
+report/specs/
 specs_out/
 
 # Python
@@ -18,3 +16,4 @@ __pycache__/
 .idea/
 .vscode/
 *.swp
+*.bak
