@@ -1,0 +1,226 @@
+diff --git a/crates/replayshark/src/main.rs b/crates/replayshark/src/main.rs
+index bd80d52..e9c93ec 100644
+--- a/crates/replayshark/src/main.rs
++++ b/crates/replayshark/src/main.rs
+@@ -62,6 +62,15 @@ enum Commands {
+         /// The replay file to use
+         replay: PathBuf,
+     },
++    /// Generate full battle report (all players, JSON) using BattleController.
++    /// Requires --extracted with both scripts/ and content/GameParams.data.
++    BattleReport {
++        /// The replay file to use
++        replay: PathBuf,
++        /// Optional output file (default: stdout)
++        #[arg(short, long)]
++        output: Option<PathBuf>,
++    },
+     /// Dump the packets to console
+     Dump {
+         /// Output filename to dump to
+@@ -664,6 +673,9 @@ fn main() {
+             })
+             .unwrap();
+         }
++        Commands::BattleReport { replay, output } => {
++            run_battle_report(&replay, extracted, constants_path, output.as_deref()).unwrap();
++        }
+         Commands::Chat { replay } => {
+             parse_replay(&replay, game_dir, extracted, |meta| {
+                 wows_replays::analyzer::chat::ChatLoggerBuilder::new().build(meta)
+@@ -736,3 +748,195 @@ fn main() {
+         }
+     }
+ }
++
++fn run_battle_report(
++    replay: &Path,
++    extracted_dir: Option<&str>,
++    constants_path: Option<&Path>,
++    output: Option<&Path>,
++) -> anyhow::Result<()> {
++    use wowsunpack::data::ResourceLoader;
++    use wowsunpack::game_params::provider::GameMetadataProvider;
++    use wowsunpack::game_params::types::ParamData;
++    use wowsunpack::vfs::PhysicalFS;
++    use wowsunpack::vfs::VfsPath;
++    use wows_replays::analyzer::battle_controller::BattleController;
++
++    let extracted = extracted_dir.ok_or_else(|| anyhow!("--extracted is required for battle-report"))?;
++    let replay_file = ReplayFile::from_file(replay).map_err(|e| anyhow!("failed to read replay: {}", e))?;
++    let version = Version::from_client_exe(&replay_file.meta.clientVersionFromExe);
++
++    let extracted_dir = resolve_extracted_dir(Path::new(extracted), &version)?;
++    let vfs: VfsPath = VfsPath::new(PhysicalFS::new(&extracted_dir));
++
++    eprintln!("loading GameParams.data ...");
++    let provider = GameMetadataProvider::from_vfs(&vfs).map_err(|e| anyhow!("{}", e))?;
++
++    let gc = load_game_constants(constants_path, version.build);
++
++    eprintln!("running BattleController over {} bytes of packets ...", replay_file.packet_data.len());
++    let mut controller = BattleController::new(&replay_file.meta, &provider, Some(gc));
++    let mut parser = wows_replays::packet2::Parser::new(provider.entity_specs());
++
++    let mut remaining = &replay_file.packet_data[..];
++    let mut count = 0usize;
++    while !remaining.is_empty() {
++        match parser.parse_packet(&mut remaining) {
++            Ok(packet) => {
++                controller.process(&packet);
++                count += 1;
++            }
++            Err(e) => {
++                eprintln!("parse_packet error after {} packets: {:?}", count, e);
++                break;
++            }
++        }
++    }
++    controller.finish();
++    eprintln!("processed {} packets, building flat report ...", count);
++
++    let report = controller.build_report();
++
++    // Build a JSON-friendly flat structure (BattleReport has HashMap with non-string keys)
++    let mut players_json = Vec::new();
++    let mut deaths_json = Vec::new();
++
++    for player in report.players() {
++        let vehicle_param = player.vehicle();
++        let (level, species_str) = match vehicle_param.data() {
++            ParamData::Vehicle(v) => {
++                let species = vehicle_param.species().map(|s| format!("{:?}", s));
++                (v.level() as i64, species.unwrap_or_else(|| "?".to_string()))
++            }
++            _ => (0i64, "?".to_string()),
++        };
++        let ship_index = vehicle_param.index().to_string();
++        let ship_id = format!("{:?}", vehicle_param.id());
++
++        let veh_opt = player.vehicle_entity();
++        let vehicle_entity_id = veh_opt.map(|v| format!("{:?}", v.id()));
++        let results_info = veh_opt.and_then(|v| v.results_info().cloned());
++        let (damage, frags, max_hp, final_hp, is_alive, time_lived_secs, killer_id, death_cause) =
++            if let Some(v) = veh_opt {
++                let max_hp = v.props().max_health() as f64;
++                let cur_hp = v.props().health() as f64;
++                let dmg = v.damage();
++                let frags_n = v.frags().len();
++                let (dt, kid, cause) = if let Some(di) = v.death_info() {
++                    let cause_str = format!("{:?}", di.cause());
++                    (
++                        Some(di.time_lived().as_secs_f64()),
++                        Some(format!("{:?}", di.killer())),
++                        Some(cause_str),
++                    )
++                } else {
++                    (None, None, None)
++                };
++                let is_alive = v.death_info().is_none();
++                (dmg, frags_n, max_hp, cur_hp, is_alive, dt, kid, cause)
++            } else {
++                (0.0_f64, 0_usize, 0.0_f64, 0.0_f64, true, None, None, None)
++            };
++
++        let init_state = player.initial_state();
++        let player_name = init_state.username().to_string();
++        let account_id = init_state.db_id();
++
++        // Use each player's own death_info as the canonical "X died at T, killed by K" event
++        if let Some(v) = veh_opt {
++            if let Some(di) = v.death_info() {
++                deaths_json.push(serde_json::json!({
++                    "time_secs": di.time_lived().as_secs_f64(),
++                    "victim_name": player_name,
++                    "victim_account_id": format!("{:?}", account_id),
++                    "victim_entity_id": format!("{:?}", v.id()),
++                    "killer_entity_id": format!("{:?}", di.killer()),
++                    "cause": format!("{:?}", di.cause()),
++                }));
++            }
++        }
++
++        players_json.push(serde_json::json!({
++            "account_id": format!("{:?}", account_id),
++            "name": player_name,
++            "clan": init_state.clan(),
++            "team_id": init_state.team_id(),
++            "relation": format!("{:?}", player.relation()),
++            "is_bot": false,
++            "ship": {
++                "id": ship_id,
++                "index": ship_index,
++                "name": player.vehicle().name(),
++                "level": level,
++                "species": species_str,
++            },
++            "stats": {
++                "damage_dealt": damage,
++                "frags": frags,
++                "max_health": max_hp,
++                "final_health": final_hp,
++                "is_alive": is_alive,
++                "time_lived_secs": time_lived_secs,
++                "killer_entity_id": killer_id,
++                "death_cause": death_cause,
++            },
++            "meta_ship_id": format!("{:?}", init_state.meta_ship_id()),
++            "vehicle_entity_id": vehicle_entity_id,
++            "results_info": results_info,
++        }));
++    }
++
++    let mut team_scores = Vec::new();
++    for ts in report.team_scores() {
++        team_scores.push(serde_json::json!({
++            "team_index": ts.team_index,
++            "score": ts.score,
++        }));
++    }
++
++    let battle_result = report.battle_result();
++
++    let chat_log: Vec<_> = report
++        .game_chat()
++        .iter()
++        .map(|m| {
++            serde_json::json!({
++                "sender_name": m.sender_name,
++                "sender_relation": m.sender_relation.map(|r| format!("{:?}", r)),
++                "channel": format!("{:?}", m.channel),
++                "message": m.message,
++            })
++        })
++        .collect();
++
++    let out_json = serde_json::json!({
++        "match": {
++            "map_name": report.map_name(),
++            "version": format!("{:?}", report.version()),
++            "game_mode": report.game_mode(),
++            "match_group": report.match_group(),
++            "game_type": format!("{:?}", report.game_type()),
++            "duration_seconds_max": report.max_duration(),
++            "duration_seconds_played": report.played_duration(),
++            "arena_id": report.arena_id(),
++            "battle_result": battle_result,
++            "team_scores": team_scores,
++            "self_player_name": replay_file.meta.playerName,
++            "self_vehicle": replay_file.meta.playerVehicle,
++            "date_time": replay_file.meta.dateTime,
++        },
++        "players": players_json,
++        "deaths": deaths_json,
++        "chat": chat_log,
++    });
++
++    let json = serde_json::to_string_pretty(&out_json)?;
++
++    if let Some(out) = output {
++        std::fs::write(out, json)?;
++        eprintln!("wrote JSON to {}", out.display());
++    } else {
++        println!("{}", json);
++    }
++    Ok(())
++}

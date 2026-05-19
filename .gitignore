@@ -1,0 +1,20 @@
+# Per-platform / per-machine artifacts (rebuild on each host)
+venv/
+replayshark
+
+# Version-specific data (regenerate via tools/update_specs.py)
+specs/scripts/
+specs/content/
+specs/metadata.toml
+specs_out/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""wows_report — one-shot WoWs battle report generator.
+
+Usage:
+    wows_report <replay.wowsreplay> [out_dir]
+
+Output:
+    stdout: absolute path of generated PNG (last line — easy to capture from a bot)
+    stderr: progress logs
+
+Auto-handles build mismatch: if the replay's build number differs from the
+canonical specs dir, creates a temporary spoofed dir (symlinks to scripts/ +
+content/, fresh metadata.toml) and uses that.
+
+Paths default to the bot deployment layout but can be overridden via env vars:
+    WOWS_REPLAYSHARK   path to replayshark binary
+    WOWS_SPECS_DIR     dir containing metadata.toml + scripts/ + content/
+    WOWS_PY_VENV       Python venv dir (with bin/python that has PIL, polib)
+    WOWS_RENDER_PY     path to render_battle_report.py
+    WOWS_OUT_DIR       default output dir (overridable by arg #2)
+"""
+import json
+import os
+import struct
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+# ---- locate bot home (parent of this script's dir) -------------------------
+BOT_HOME = Path(__file__).resolve().parent.parent
+
+REPLAYSHARK = os.environ.get("WOWS_REPLAYSHARK", str(BOT_HOME / "replayshark"))
+SPECS_DIR   = os.environ.get("WOWS_SPECS_DIR",   str(BOT_HOME / "specs"))
+PY_VENV     = os.environ.get("WOWS_PY_VENV",     str(BOT_HOME / "venv"))
+RENDER_PY   = os.environ.get("WOWS_RENDER_PY",   str(BOT_HOME / "bin" / "render_battle_report.py"))
+DEFAULT_OUT_DIR = os.environ.get("WOWS_OUT_DIR", "/tmp/wows_report")
+
+REPLAY_SIGNATURE = b"\x12\x32\x34\x11"
+
+
+def log(msg: str):
+    print(msg, file=sys.stderr)
+
+
+def read_replay_meta(path: Path) -> dict:
+    with open(path, "rb") as fp:
+        sig = fp.read(4)
+        if sig != REPLAY_SIGNATURE:
+            raise ValueError(f"not a valid WoWs replay: {path}")
+        _ = fp.read(4)
+        block_size = struct.unpack("i", fp.read(4))[0]
+        return json.loads(fp.read(block_size))
+
+
+def parse_build(meta: dict) -> int:
+    ver = meta.get("clientVersionFromExe", "")
+    parts = [p.strip() for p in ver.split(",")]
+    if len(parts) >= 4:
+        return int(parts[3])
+    raise ValueError(f"cannot parse build from {ver!r}")
+
+
+def read_specs_build(specs_dir):
+    meta_path = specs_dir / "metadata.toml"
+    if not meta_path.exists():
+        return None
+    for line in meta_path.read_text().splitlines():
+        line = line.strip()
+        if line.startswith("build"):
+            _, _, val = line.partition("=")
+            try:
+                return int(val.strip().strip('"'))
+            except ValueError:
+                return None
+    return None
+
+
+def make_spoofed_specs(canonical: Path, target_build: int, target_version: str) -> Path:
+    tmp = Path(tempfile.mkdtemp(prefix=f"wows_specs_b{target_build}_"))
+    (tmp / "scripts").symlink_to(canonical / "scripts")
+    (tmp / "content").symlink_to(canonical / "content")
+    (tmp / "metadata.toml").write_text(
+        f'version = "{target_version}"\nbuild = {target_build}\n'
+    )
+    return tmp
+
+
+def main():
+    if len(sys.argv) < 2:
+        log("usage: wows_report <replay.wowsreplay> [out_dir]")
+        sys.exit(2)
+
+    replay = Path(sys.argv[1]).expanduser().resolve()
+    out_dir = Path(sys.argv[2] if len(sys.argv) >= 3 else DEFAULT_OUT_DIR).expanduser()
+
+    if not replay.is_file():
+        log(f"error: replay not found: {replay}")
+        sys.exit(1)
+    if not Path(REPLAYSHARK).exists():
+        log(f"error: replayshark binary not found at {REPLAYSHARK}")
+        log("  set WOWS_REPLAYSHARK env var, or build it (see DEPLOY.md)")
+        sys.exit(1)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base = replay.stem
+    json_path = out_dir / f"{base}.json"
+    png_path = out_dir / f"{base}.png"
+
+    canonical = Path(SPECS_DIR)
+    meta = read_replay_meta(replay)
+    replay_build = parse_build(meta)
+    canonical_build = read_specs_build(canonical)
+    version_str = ".".join(meta.get("clientVersionFromExe", "").split(",")[:3]) or "0.0.0"
+
+    spoofed_dir = None
+    if canonical_build is not None and replay_build != canonical_build:
+        log(
+            f"[spoof] replay build {replay_build} != specs build {canonical_build}; "
+            f"creating temp dir for {version_str} build {replay_build}"
+        )
+        spoofed_dir = make_spoofed_specs(canonical, replay_build, version_str)
+        specs_dir = spoofed_dir
+    else:
+        specs_dir = canonical
+
+    try:
+        log(f"[1/2] parsing replay with replayshark (specs: {specs_dir}) ...")
+        subprocess.run(
+            [REPLAYSHARK, "-e", str(specs_dir), "battle-report",
+             str(replay), "-o", str(json_path)],
+            check=True, stdout=sys.stderr,
+        )
+
+        log("[2/2] rendering PNG ...")
+        py = Path(PY_VENV) / "bin" / "python"
+        if not py.exists():
+            log(f"error: Python venv not found at {PY_VENV}")
+            log("  set WOWS_PY_VENV env var, or create venv (see DEPLOY.md)")
+            sys.exit(1)
+        subprocess.run(
+            [str(py), RENDER_PY, str(json_path), str(png_path)],
+            check=True, stdout=sys.stderr,
+        )
+    finally:
+        if spoofed_dir is not None:
+            for p in spoofed_dir.iterdir():
+                p.unlink()
+            spoofed_dir.rmdir()
+
+    print(png_path)
+
+
+if __name__ == "__main__":
+    main()
