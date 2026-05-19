@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""wows_damage_report — render damage breakdown chart (two pies + ribbons).
+
+Usage:
+    wows_damage_report <replay.wowsreplay> [out_dir]
+
+Same I/O contract as wows_report:
+    stdout: PNG path (last line)
+    stderr: progress logs
+
+Internally reuses wows_report's pipeline:
+    .wowsreplay → replayshark battle-report (JSON) → render_damage_chart.py
+"""
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+BOT_HOME = Path(__file__).resolve().parent.parent
+WOWS_REPORT = BOT_HOME / "bin" / "wows_report"
+RENDER_PY   = BOT_HOME / "bin" / "render_damage_chart.py"
+PY_VENV     = os.environ.get("WOWS_PY_VENV", str(BOT_HOME / "venv"))
+DEFAULT_OUT = os.environ.get("WOWS_OUT_DIR", "/tmp/wows_report")
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("usage: wows_damage_report <replay> [out_dir]", file=sys.stderr)
+        sys.exit(2)
+    replay = Path(sys.argv[1]).expanduser().resolve()
+    out_dir = Path(sys.argv[2] if len(sys.argv) >= 3 else DEFAULT_OUT).expanduser()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    base = replay.stem
+    json_path = out_dir / f"{base}.json"
+    png_path = out_dir / f"{base}.damage.png"
+
+    # Run wows_report to ensure JSON exists (also produces the main PNG, but
+    # that's harmless and we ignore it). Captures progress to stderr.
+    print("[1/2] producing battle JSON ...", file=sys.stderr)
+    result = subprocess.run(
+        [str(WOWS_REPORT), str(replay), str(out_dir)],
+        stdout=subprocess.PIPE, stderr=sys.stderr,
+    )
+    if result.returncode != 0:
+        print("error: wows_report failed", file=sys.stderr)
+        sys.exit(result.returncode)
+    # JSON must now exist
+    if not json_path.exists():
+        print(f"error: expected JSON not found at {json_path}", file=sys.stderr)
+        sys.exit(1)
+
+    print("[2/2] rendering damage chart ...", file=sys.stderr)
+    py = Path(PY_VENV) / "bin" / "python"
+    subprocess.run(
+        [str(py), str(RENDER_PY), str(json_path), str(png_path)],
+        check=True, stdout=sys.stderr,
+    )
+
+    print(png_path)
+
+
+if __name__ == "__main__":
+    main()
