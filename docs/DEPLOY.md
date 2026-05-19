@@ -272,6 +272,11 @@ export WOWS_DEEPSEEK_KEY=sk-xxxxxxxx   # https://platform.deepseek.com 申请
 
 状态默认存到 `~/wows-bot-replay/analyze_toggle.json`,可用 `WOWS_TOGGLE_FILE` env 覆盖。
 
+**自定义人格 / 风格** — system prompt 放在 `/opt/wows-bot/report/data/analyze_prompt.txt`,
+直接编辑就能改 LLM 的称呼、口吻、分析侧重点,**不需要重启 bot** (每次调用都重新读)。
+默认是"埃酱"人设 (傲娇雌小鬼参谋 + 称呼指挥官,但战术分析专业)。
+想换路径用 `WOWS_ANALYZE_PROMPT=/your/prompt.txt`。
+
 ### 5.4 (可选) 覆盖默认路径
 
 如果你没按 `/opt/wows-bot` 默认布局,启动 nb 前 export:

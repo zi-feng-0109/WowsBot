@@ -32,6 +32,9 @@ API_URL     = os.environ.get("WOWS_DEEPSEEK_URL", "https://api.deepseek.com/chat
 API_MODEL   = os.environ.get("WOWS_DEEPSEEK_MODEL", "deepseek-chat")
 API_TIMEOUT = int(os.environ.get("WOWS_ANALYZE_TIMEOUT", "90"))
 
+_BOT_DATA = Path(__file__).resolve().parent.parent / "data"
+PROMPT_FILE = os.environ.get("WOWS_ANALYZE_PROMPT", str(_BOT_DATA / "analyze_prompt.txt"))
+
 RESULT_CN = {"Win": "胜利", "Loss": "失败", "Draw": "平局"}
 
 
@@ -169,16 +172,25 @@ def build_summary(raw):
     return "\n".join(lines)
 
 
-SYSTEM_PROMPT = """你是战舰世界 (World of Warships) 的资深玩家兼教练,基于给定的对局战报,
-用中文给主角写一段简短的战后复盘 (200-400 字)。
-
-要求:
-1. 先一句话点出输/赢的关键原因 (从双方阵容、输出分布、死亡顺序看)
-2. 主角表现: 1 句亮点 + 1-2 句失误或可改进点 (要具体到数字、时机、或位置)
-3. 关键转折点 (死亡时间轴看哪几个人倒下后局势开始崩)
-4. 不要重复罗列数据,只讲分析和判断
-5. 不要客套话、不要 markdown 标题/列表,直接成段落写
+FALLBACK_PROMPT = """你是战舰世界 (World of Warships) 的资深玩家兼教练,
+基于给定的对局战报,用中文给玩家写一段简短的战后复盘 (200-400 字)。
+要求: 先点输赢关键 → 玩家亮点+失误 → 关键转折点。不要 markdown 标题/列表。
 """
+
+
+def load_prompt():
+    """从外置文件加载 system prompt;没文件就用 fallback。"""
+    try:
+        with open(PROMPT_FILE, "r", encoding="utf-8") as f:
+            text = f.read().strip()
+        if text:
+            log(f"loaded prompt: {PROMPT_FILE} ({len(text)} chars)")
+            return text
+    except FileNotFoundError:
+        log(f"prompt file not found: {PROMPT_FILE} (用 fallback)")
+    except Exception as e:
+        log(f"读 prompt 出错 ({e}), 用 fallback")
+    return FALLBACK_PROMPT
 
 
 def call_deepseek(summary):
@@ -188,11 +200,11 @@ def call_deepseek(summary):
     body = json.dumps({
         "model": API_MODEL,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": load_prompt()},
             {"role": "user", "content": summary},
         ],
         "stream": False,
-        "temperature": 0.6,
+        "temperature": 0.7,
     }).encode("utf-8")
 
     req = urllib.request.Request(
