@@ -151,10 +151,12 @@ nb create   # 选 simple / onebot-v11
 ### 4.2 挂接本插件
 
 ```bash
-ln -s /opt/wows-bot/plugin/minimap.py ~/my-bot/src/plugins/minimap.py
+cp /opt/wows-bot/plugin/minimap.py ~/my-bot/src/plugins/minimap.py
 ```
 
-(也可以 `cp`,但软链以后跟仓库一起更新更省心。)
+> ⚠️ 别用软链。NoneBot 会 resolve 符号链接,发现真实路径不在你 bot 项目子目录就拒载
+> (`ValueError: '...' is not in the subpath of '...'`)。直接 `cp` 最省事;
+> 仓库更新后再 cp 一遍。
 
 ### 4.3 (可选) 覆盖默认路径
 
