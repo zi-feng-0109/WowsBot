@@ -57,16 +57,20 @@ python3 tools/update_specs.py --repo https://ghfast.top/https://github.com/wowsi
 
 ## MP4 extracted
 
-Windows 上用 wows-toolkit GUI 解一遍 (会从你的 WoWs 安装目录抽数据出来),
-默认产物在 `%APPDATA%\wows-toolkit\game_data\builds\<build>\`。
-整个目录 scp 到服务器:
+Windows 上用 wows-toolkit 自带的 `wows-data-mgr` CLI (见 DEPLOY.md 3.2,首次部署做过的话以后只需重复 dump 那一步):
 
 ```powershell
-scp -r %APPDATA%\wows-toolkit\game_data\builds\<新 build> user@bot主机:/var/lib/wows-data/extracted/
+cd C:\wows-toolkit
+# WoWs 自动更新到新版本后,本地安装路径不变,直接重新 dump:
+.\target\release\wows-data-mgr.exe dump-renderer-data --latest -o .\extracted
+# 产物会出现一个新的 <新 version>_<新 build>\
+
+# scp 到服务器
+scp -r .\extracted\<新 version>_<新 build> <user>@<bot-host>:/var/lib/wows-data/extracted/
 ```
 
-或者你 `/var/lib/wows-data/extracted/` 是个版本目录的爹,
-能保留多个版本时 `render.sh` 默认 `WOWS_DATA_DIR` 指向那个爹,具体看 `minimap/render.sh` 里默认值和 wows-toolkit 的目录约定。
+`/var/lib/wows-data/extracted/` 下可以同时留多个 `<version>_<build>` 子目录,
+`minimap_renderer` 会按回放的 build 号自动选对应的。老版本想清理直接删对应子目录即可。
 
 ## 在 bot 主机验证
 

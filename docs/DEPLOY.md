@@ -90,29 +90,52 @@ cat /opt/wows-bot/report/specs/metadata.toml
 
 ## 3. 部署 MP4 渲染器 (外部 wows-toolkit)
 
-`minimap/render.sh` 只是个 wrapper,真正的渲染靠 [landaire/wows-toolkit](https://github.com/landaire/wows-toolkit) 的 `minimap_renderer` 二进制。默认路径 `/opt/wows-toolkit/target/release/minimap_renderer`。
+`minimap/render.sh` 只是个 wrapper,真正的渲染靠 [landaire/wows-toolkit](https://github.com/landaire/wows-toolkit) 的 `minimap_renderer` 二进制。**Linux 编译渲染器 + Windows 提取游戏数据**,分两边做。
+
+### 3.1 Linux: 编译 minimap_renderer
+
+先把 wows-toolkit 源码搞到服务器 (`/opt/wows-toolkit`)。三种方式任选:
 
 ```bash
-# Rust 工具链 (国外直连)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-# 国内走 ustc 镜像 (任选):
-# export RUSTUP_DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static
-# export RUSTUP_UPDATE_ROOT=https://mirrors.ustc.edu.cn/rust-static/rustup
-# curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-source "$HOME/.cargo/env"
-
-# clone (国外直连)
+# A. 国外直连
 sudo git clone https://github.com/landaire/wows-toolkit /opt/wows-toolkit
-# 国内访问慢的话用镜像 (任选其一):
-# sudo git clone https://gitclone.com/github.com/landaire/wows-toolkit /opt/wows-toolkit
-# sudo git clone https://ghfast.top/https://github.com/landaire/wows-toolkit /opt/wows-toolkit
 
-cd /opt/wows-toolkit
-cargo build --release -p minimap_renderer
-ls target/release/minimap_renderer    # 验证
+# B. gitclone 镜像
+sudo git clone https://gitclone.com/github.com/landaire/wows-toolkit /opt/wows-toolkit
+
+# C. ghfast 镜像
+sudo git clone https://ghfast.top/https://github.com/landaire/wows-toolkit /opt/wows-toolkit
 ```
 
-> Rust 国内编译卡 crates.io 的话,设个 `~/.cargo/config.toml`:
+源码到位后,wows-toolkit 自带 `setup.sh` 帮你一键搞定依赖 + 编译 (apt 装 vulkan/mesa/gtk + 配 USTC 镜像 + 装 rustup + cargo build):
+
+```bash
+sudo chown -R $USER:$USER /opt/wows-toolkit
+cd /opt/wows-toolkit
+./setup.sh
+# 完成后会有: /opt/wows-toolkit/target/release/minimap_renderer
+```
+
+> setup.sh 默认开 `USE_CN_MIRROR=1` (USTC 镜像)。海外网络置 `0` 走默认源。
+> 没装 NVIDIA 驱动会提示先装再重启;**纯 CPU 渲染也可以**,wrapper 已经 `--cpu`。
+
+不想跑 setup.sh 的手动版:
+
+```bash
+sudo apt install -y build-essential pkg-config libssl-dev \
+    libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+    libxkbcommon-dev libgtk-3-dev \
+    vulkan-tools libvulkan-dev mesa-vulkan-drivers
+
+# rustup (国内加 RUSTUP_DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+source "$HOME/.cargo/env"
+
+cd /opt/wows-toolkit
+cargo build --release -p wows_minimap_renderer --features "bin,vulkan,cpu,arc"
+```
+
+> Cargo 国内编译卡 crates.io 的话,`~/.cargo/config.toml` 加:
 > ```toml
 > [source.crates-io]
 > replace-with = "ustc"
@@ -120,18 +143,37 @@ ls target/release/minimap_renderer    # 验证
 > registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
 > ```
 
-### 3.1 准备 extracted 数据
+### 3.2 Windows: 提取游戏数据 (`wows-data-mgr`)
 
-`minimap_renderer` 需要 WoWs 游戏目录解出来的数据 (跟战报 specs 同源但布局不同)。用 wows-toolkit GUI 在 Windows 上解一遍,产物 scp 到 Linux 的 `/var/lib/wows-data/extracted/<version>_<build>/`。
+`minimap_renderer` 需要从你本地 WoWs 安装解出来的数据。wows-toolkit 里的 `wows-data-mgr` CLI 工具专门干这事 (不用 GUI)。
 
-```bash
-sudo mkdir -p /var/lib/wows-data/extracted
-sudo chown -R $USER /var/lib/wows-data/extracted
-# Windows 上 wows-toolkit 解的产物默认在 %APPDATA%\wows-toolkit\game_data\builds\<build>\,
-# 整个目录 scp 上来即可。
+```powershell
+# 1. 在 Windows 上 clone (或拷贝) 同一份 wows-toolkit
+git clone https://github.com/landaire/wows-toolkit C:\wows-toolkit
+cd C:\wows-toolkit
+
+# 2. 编译 wows-data-mgr (需要 Rust + MSVC build tools;仓库自带 _build_datamgr.bat)
+.\_build_datamgr.bat
+# 产物: C:\wows-toolkit\target\release\wows-data-mgr.exe
+
+# 3. 注册你本地 WoWs 安装
+.\target\release\wows-data-mgr.exe register --latest `
+    --path "C:\Program Files (x86)\Steam\steamapps\common\World of Warships"
+
+# 4. dump 渲染器要的数据,产物会出现在 .\extracted\<version>_<build>\
+.\target\release\wows-data-mgr.exe dump-renderer-data --latest -o .\extracted
+
+# 5. scp 到 Linux
+scp -r .\extracted\15.3.0_12267945 <user>@<bot-host>:/var/lib/wows-data/extracted/
 ```
 
-### 3.2 验证 render.sh
+> Linux 这边先建好目录 + 归属:
+> ```bash
+> sudo mkdir -p /var/lib/wows-data/extracted
+> sudo chown -R $USER:$USER /var/lib/wows-data
+> ```
+
+### 3.3 验证 render.sh
 
 ```bash
 chmod +x /opt/wows-bot/minimap/render.sh
