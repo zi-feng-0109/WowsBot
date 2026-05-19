@@ -1,14 +1,18 @@
 # DEPLOY.md — Linux 一站式部署
 
-把 wows-bot 完整跑起来需要三块:
+把 wows-bot 完整跑起来需要四块:
 
-1. **MP4 渲染器** — wows-toolkit 的 `minimap_renderer` (Rust),独立项目,本仓库不内置
-2. **战报 PNG 渲染器** — 本仓库 `report/`,Python + 自带 replayshark
-3. **NoneBot 框架 + 插件** — 你自己的 NoneBot 2 项目 + 本仓库 `plugin/minimap.py`
+1. **游戏数据 (extracted)** — wows-data-mgr 从你本地 WoWs 安装解出,scp 到 Linux
+2. **MP4 渲染器** — wows-toolkit 的 `minimap_renderer` (Rust),独立项目,本仓库不内置
+3. **战报 PNG 渲染器** — 本仓库 `report/`,Python + 自带 replayshark
+4. **NoneBot 框架 + 插件** — 你自己的 NoneBot 2 项目 + 本仓库 `plugin/minimap.py`
 
 每台 bot 主机部署一次。Ubuntu/Debian 写法,其他发行版改包名。
 
 > ⚠️ napcat (或别的 OneBot v11 客户端) 安装/登录不在本文档范围,自行准备。
+>
+> 💡 第 2 节 Linux 编译 (`setup.sh` 跑 cargo build) 和第 1 节 Windows 提取数据
+> 可以并行做,前者要等 5-10 分钟,正好可以同时 dump + scp。
 
 ## 0. 系统依赖
 
@@ -26,91 +30,84 @@ sudo apt install -y \
 
 ```bash
 sudo git clone https://gitee.com/zi-feng-0109/wows-bot.git /opt/wows-bot
+sudo chown -R $USER:$USER /opt/wows-bot
 cd /opt/wows-bot
 ```
 
 后续示例都假设安装在 `/opt/wows-bot`。换位置就改下面对应路径。
 
-## 2. 部署战报 PNG 渲染器
+## 2. 准备游戏数据 (一份给两个渲染器共用)
 
-### 2.1 replayshark 二进制
+`wows-toolkit` 里的 `wows-data-mgr` CLI 工具从你本地 WoWs 安装解出 `extracted/<ver>_<build>/` 目录,**MP4 渲染器和战报 PNG 渲染器都吃同一份**,只 dump 一次。
 
-```bash
-cd /opt/wows-bot
-cp report/prebuilt/replayshark-linux-x86_64 report/replayshark
-chmod +x report/replayshark
-./report/replayshark --help | head -3   # 验证
+### 2.1 Windows: 编译 wows-data-mgr 并 dump
+
+```powershell
+# 在 Windows 上 clone wows-toolkit (三种方式任选)
+git clone https://github.com/landaire/wows-toolkit C:\wows-toolkit
+# git clone https://gitclone.com/github.com/landaire/wows-toolkit C:\wows-toolkit
+# git clone https://ghfast.top/https://github.com/landaire/wows-toolkit C:\wows-toolkit
+
+cd C:\wows-toolkit
+
+# 编译 wows-data-mgr (需要 Rust + MSVC build tools;仓库自带 _build_datamgr.bat)
+.\_build_datamgr.bat
+# 产物: C:\wows-toolkit\target\release\wows-data-mgr.exe
+
+# 注册你本地 WoWs 安装路径 (改成你的实际路径)
+.\target\release\wows-data-mgr.exe register --latest `
+    --path "C:\Program Files (x86)\Steam\steamapps\common\World of Warships"
+
+# dump 渲染数据,产物在 .\extracted\<version>_<build>\
+.\target\release\wows-data-mgr.exe dump-renderer-data --latest -o .\extracted
 ```
 
-aarch64 / 其他架构自己 build (装 Rust + clone wows-toolkit + apply `tools/replayshark_battle_report.patch` + `cargo build --release -p replayshark`)。
-
-### 2.2 Python 依赖
-
-只要 Pillow 和 polib:
+### 2.2 scp 到 Linux
 
 ```bash
-# 优先 apt
-sudo apt install -y python3-pil python3-polib
-
-# 如果你用 pyenv / 虚拟环境,apt 包装的位置不在 PATH 上 — 用 pip
-sudo pip3 install --break-system-packages -i https://pypi.tuna.tsinghua.edu.cn/simple Pillow polib
-
-# 验证
-python3 -c "import polib, PIL; print('polib', polib.__version__, 'PIL', PIL.__version__)"
+# Linux 先建好目录 + 归属
+sudo mkdir -p /var/lib/wows-data/extracted
+sudo chown -R $USER:$USER /var/lib/wows-data
 ```
 
-> ⚠️ 用 pyenv 的话: apt 装的 `python3-polib` 会进系统 Python (`/usr/lib/python3/dist-packages`),
-> pyenv 的 Python 看不见。直接 `pip3 install` 一份给当前 `python3` 最稳。
-
-### 2.3 specs (entity_defs + GameParams.data)
-
-这是和 WoWs 游戏版本绑死的二进制数据,**仓库不内置**,自己准备。两种方式:
-
-- **本地拉 (推荐)**: 你 Windows 上有 wows-toolkit GUI 解过包 → 跑 `tools/build_specs_from_local.py` → scp。见 [UPDATE.md](UPDATE.md)。
-- **服务器联网拉**: 直接在服务器跑 `tools/update_specs.py`,从 wowsinfo/data GitHub 镜像拉 (要能访问 GitHub)。
-
-不论哪种,最后 `/opt/wows-bot/report/specs/` 下应该有 `content/`, `scripts/`, `metadata.toml`:
-
-```bash
-ls /opt/wows-bot/report/specs/
-# content  metadata.toml  scripts
-cat /opt/wows-bot/report/specs/metadata.toml
-# version = "15.3.0"
-# build = 12267945
+```powershell
+# Windows 上 scp 整个版本目录 (改成你实际的版本号)
+scp -r .\extracted\15.3.0_12267945 <user>@<bot-host>:/var/lib/wows-data/extracted/
 ```
 
-### 2.4 手工跑一次验证
+完成后 Linux 应该有:
 
-```bash
-/opt/wows-bot/report/bin/wows_full_report /path/to/some.wowsreplay /tmp/test_out
-# stdout 最后一行 = 生成的 .full.png 路径
 ```
-
-打开看一眼,中文船名、地图名、勋带都得正常。
+/var/lib/wows-data/extracted/15.3.0_12267945/
+├── metadata.toml
+├── game_params.rkyv
+├── translations/
+└── vfs/
+    ├── content/GameParams.data
+    ├── scripts/entity_defs/
+    └── ...
+```
 
 ## 3. 部署 MP4 渲染器 (外部 wows-toolkit)
 
-`minimap/render.sh` 只是个 wrapper,真正的渲染靠 [landaire/wows-toolkit](https://github.com/landaire/wows-toolkit) 的 `minimap_renderer` 二进制。**Linux 编译渲染器 + Windows 提取游戏数据**,分两边做。
+`minimap/render.sh` 只是个 wrapper,真正的渲染靠 [landaire/wows-toolkit](https://github.com/landaire/wows-toolkit) 的 `minimap_renderer` 二进制。Linux 上编译一份。
 
-### 3.1 Linux: 编译 minimap_renderer
-
-先把 wows-toolkit 源码搞到服务器 (`/opt/wows-toolkit`)。三种方式任选:
+### 3.1 clone wows-toolkit 源码
 
 ```bash
-# A. 国外直连
+# 三种方式任选
 sudo git clone https://github.com/landaire/wows-toolkit /opt/wows-toolkit
+# sudo git clone https://gitclone.com/github.com/landaire/wows-toolkit /opt/wows-toolkit
+# sudo git clone https://ghfast.top/https://github.com/landaire/wows-toolkit /opt/wows-toolkit
 
-# B. gitclone 镜像
-sudo git clone https://gitclone.com/github.com/landaire/wows-toolkit /opt/wows-toolkit
-
-# C. ghfast 镜像
-sudo git clone https://ghfast.top/https://github.com/landaire/wows-toolkit /opt/wows-toolkit
+sudo chown -R $USER:$USER /opt/wows-toolkit
 ```
 
-源码到位后,wows-toolkit 自带 `setup.sh` 帮你一键搞定依赖 + 编译 (apt 装 vulkan/mesa/gtk + 配 USTC 镜像 + 装 rustup + cargo build):
+### 3.2 编译 (推荐用自带 setup.sh)
+
+wows-toolkit 自带 `setup.sh` 一键搞定 apt 装 vulkan/mesa/gtk + 配 USTC 镜像 + 装 rustup + cargo build:
 
 ```bash
-sudo chown -R $USER:$USER /opt/wows-toolkit
 cd /opt/wows-toolkit
 ./setup.sh
 # 完成后会有: /opt/wows-toolkit/target/release/minimap_renderer
@@ -143,36 +140,6 @@ cargo build --release -p wows_minimap_renderer --features "bin,vulkan,cpu,arc"
 > registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
 > ```
 
-### 3.2 Windows: 提取游戏数据 (`wows-data-mgr`)
-
-`minimap_renderer` 需要从你本地 WoWs 安装解出来的数据。wows-toolkit 里的 `wows-data-mgr` CLI 工具专门干这事 (不用 GUI)。
-
-```powershell
-# 1. 在 Windows 上 clone (或拷贝) 同一份 wows-toolkit
-git clone https://github.com/landaire/wows-toolkit C:\wows-toolkit
-cd C:\wows-toolkit
-
-# 2. 编译 wows-data-mgr (需要 Rust + MSVC build tools;仓库自带 _build_datamgr.bat)
-.\_build_datamgr.bat
-# 产物: C:\wows-toolkit\target\release\wows-data-mgr.exe
-
-# 3. 注册你本地 WoWs 安装
-.\target\release\wows-data-mgr.exe register --latest `
-    --path "C:\Program Files (x86)\Steam\steamapps\common\World of Warships"
-
-# 4. dump 渲染器要的数据,产物会出现在 .\extracted\<version>_<build>\
-.\target\release\wows-data-mgr.exe dump-renderer-data --latest -o .\extracted
-
-# 5. scp 到 Linux
-scp -r .\extracted\15.3.0_12267945 <user>@<bot-host>:/var/lib/wows-data/extracted/
-```
-
-> Linux 这边先建好目录 + 归属:
-> ```bash
-> sudo mkdir -p /var/lib/wows-data/extracted
-> sudo chown -R $USER:$USER /var/lib/wows-data
-> ```
-
 ### 3.3 验证 render.sh
 
 ```bash
@@ -188,9 +155,73 @@ export WOWS_TOOLKIT_BIN=/your/path/to/minimap_renderer
 export WOWS_DATA_DIR=/your/path/to/extracted
 ```
 
-## 4. 部署 NoneBot 插件
+## 4. 部署战报 PNG 渲染器
 
-### 4.1 装 NoneBot 框架 (如果还没有)
+### 4.1 replayshark 二进制
+
+```bash
+cd /opt/wows-bot
+cp report/prebuilt/replayshark-linux-x86_64 report/replayshark
+chmod +x report/replayshark
+./report/replayshark --help | head -3   # 验证
+```
+
+aarch64 / 其他架构自己 build (在第 3 节装好 Rust + clone wows-toolkit 后):
+`git apply /opt/wows-bot/tools/replayshark_battle_report.patch && cargo build --release -p replayshark`,然后 cp 到 `report/replayshark`。
+
+### 4.2 Python 依赖
+
+只要 Pillow 和 polib:
+
+```bash
+# 优先 apt
+sudo apt install -y python3-pil python3-polib
+
+# 如果你用 pyenv / 虚拟环境,apt 包装的位置不在 PATH 上 — 用 pip
+sudo pip3 install --break-system-packages -i https://pypi.tuna.tsinghua.edu.cn/simple Pillow polib
+
+# 验证
+python3 -c "import polib, PIL; print('polib', polib.__version__, 'PIL', PIL.__version__)"
+```
+
+> ⚠️ 用 pyenv 的话: apt 装的 `python3-polib` 会进系统 Python (`/usr/lib/python3/dist-packages`),
+> pyenv 的 Python 看不见。直接 `pip3 install` 一份给当前 `python3` 最稳。
+
+### 4.3 软链 specs 到第 2 节的 extracted (一行)
+
+```bash
+sudo bash /opt/wows-bot/tools/link_specs.sh
+# 默认扫 /var/lib/wows-data/extracted/ 挑版本号最大的,把 report/specs 下
+# content / scripts / metadata.toml 三个软链全建好
+```
+
+完成后:
+
+```bash
+ls -la /opt/wows-bot/report/specs/
+# content -> /var/lib/wows-data/extracted/15.3.0_12267945/vfs/content
+# scripts -> /var/lib/wows-data/extracted/15.3.0_12267945/vfs/scripts
+# metadata.toml -> /var/lib/wows-data/extracted/15.3.0_12267945/metadata.toml
+cat /opt/wows-bot/report/specs/metadata.toml
+# version = "15.3.0"
+# build = 12267945
+```
+
+> 离线/不想软链的场景可以用 `tools/build_specs_from_local.py`,
+> 但通常场景下软链方案就够了 (版本更新一句 `link_specs.sh` 搞定,见 UPDATE.md)。
+
+### 4.4 手工跑一次验证
+
+```bash
+/opt/wows-bot/report/bin/wows_full_report /path/to/some.wowsreplay /tmp/test_out
+# stdout 最后一行 = 生成的 .full.png 路径
+```
+
+打开看一眼,中文船名、地图名、勋带都得正常。
+
+## 5. 部署 NoneBot 插件
+
+### 5.1 装 NoneBot 框架 (如果还没有)
 
 ```bash
 sudo pip3 install --break-system-packages -i https://pypi.tuna.tsinghua.edu.cn/simple \
@@ -206,7 +237,7 @@ nb create   # 选 simple / onebot-v11
 
 最终目录大致 `~/my-bot/src/plugins/`。
 
-### 4.2 挂接本插件
+### 5.2 挂接本插件
 
 ```bash
 cp /opt/wows-bot/plugin/minimap.py ~/my-bot/src/plugins/minimap.py
@@ -216,7 +247,7 @@ cp /opt/wows-bot/plugin/minimap.py ~/my-bot/src/plugins/minimap.py
 > (`ValueError: '...' is not in the subpath of '...'`)。直接 `cp` 最省事;
 > 仓库更新后再 cp 一遍。
 
-### 4.3 (可选) 覆盖默认路径
+### 5.3 (可选) 覆盖默认路径
 
 如果你没按 `/opt/wows-bot` 默认布局,启动 nb 前 export:
 
@@ -228,7 +259,7 @@ export WOWS_MP4_TIMEOUT=600                    # MP4 超时秒数
 export WOWS_PNG_TIMEOUT=300                    # PNG 超时秒数
 ```
 
-## 5. 启动
+## 6. 启动
 
 ```bash
 cd ~/my-bot
