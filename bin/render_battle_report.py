@@ -297,7 +297,14 @@ def load(json_path: str) -> MatchReport:
             max_hp=float(stats["max_health"]),
             final_hp=float(stats["final_health"]),
             is_alive=bool(stats["is_alive"]),
-            damage_dealt=float(stats["damage_dealt"]),
+            # Server-authoritative damage (index 426) when available — covers
+            # damage dealt outside owner's fog-of-war. Falls back to the
+            # BattleController-rebuilt value (owner-visible events only).
+            damage_dealt=float(
+                result_field(p.get("results_info"), "damage")
+                if result_field(p.get("results_info"), "damage") is not None
+                else stats["damage_dealt"]
+            ),
             frags=int(stats["frags"]),
             time_lived_secs=stats["time_lived_secs"],
             killer_entity_id=strip_id(stats["killer_entity_id"]) if stats["killer_entity_id"] else None,
