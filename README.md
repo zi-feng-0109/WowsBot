@@ -46,7 +46,9 @@ wows_report_bot/
 ├── tools/
 │   ├── update_specs.py            # 从 wowsinfo/data 拉最新 specs
 │   └── replayshark_battle_report.patch
-└── replayshark                    # Rust 二进制（每个平台单独 build，见 DEPLOY.md）
+├── prebuilt/
+│   └── replayshark-linux-x86_64   # 预编译 Linux x86_64 二进制，开箱即用
+└── replayshark                    # 实际使用的二进制（从 prebuilt/ 复制或自己 build，见 DEPLOY.md）
 
 Python 依赖（Pillow + polib）走系统包即可，脚本默认调系统 `python3`，不强制虚拟环境。
 ```

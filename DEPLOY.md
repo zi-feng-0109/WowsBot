@@ -20,26 +20,38 @@ sudo apt install -y \
 > CJK 字体（中文显示）必须装。如果没用 noto，可以装 `fonts-wqy-zenhei`，
 > 或自己设置 `WOWS_CJK_FONT=/path/to/some.ttf` 环境变量。
 
-## 2. Rust 工具链
+## 2. 部署 replayshark 二进制
+
+任选一种方式：
+
+### 方式 A（推荐）：直接用仓库自带的 Linux x86_64 预编译版
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-source "$HOME/.cargo/env"
-rustc --version   # 需 ≥ 1.92
+cd /path/to/wows_report_bot
+cp prebuilt/replayshark-linux-x86_64 replayshark
+chmod +x replayshark
+./replayshark --help    # 验证一下
 ```
 
-## 3. 编译 replayshark（加我们的 battle-report 子命令）
+不需要装 Rust、不需要 clone wows-toolkit。**90% 用户走这条**就够了。
+
+### 方式 B：自己 build（已有 wows-toolkit clone 时最快）
+
+适用场景：你已经为别的事情（如 Rust 版小地图 MP4 渲染）clone 过 wows-toolkit；或者你想用其他 CPU 架构（aarch64 / arm 等）。
 
 ```bash
-cd /tmp
-git clone --depth 1 https://github.com/landaire/wows-toolkit.git
-cd wows-toolkit
+# 1. 装 Rust 工具链（如已有可跳）
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+source "$HOME/.cargo/env"
+
+# 2. 在已有 / 新 clone 的 wows-toolkit 仓库根目录：
+cd /path/to/wows-toolkit       # 你的 clone；没有的话先 git clone --depth 1 https://github.com/landaire/wows-toolkit.git
 git apply /path/to/wows_report_bot/tools/replayshark_battle_report.patch
 cargo build --release -p replayshark
 cp target/release/replayshark /path/to/wows_report_bot/replayshark
 ```
 
-## 4. Python 依赖
+## 3. Python 依赖
 
 只需要 `Pillow` 和 `polib` 两个库。优先用系统包管理：
 
@@ -58,14 +70,14 @@ sudo pip install --break-system-packages Pillow polib
 > 如果你确实有虚拟环境想用，把它放到 `wows_report_bot/venv/`
 > 或设 `WOWS_PY_VENV=/path/to/venv`（或 `WOWS_PYTHON=/path/to/python`）。
 
-## 5. 初始化 specs
+## 4. 初始化 specs
 
 第一次运行前 `specs/` 必须有内容。两种方式任选：
 
 - **家里 Win 跑 `tools/update_specs.py` 然后 scp**（推荐，见 `UPDATE.md`）
 - 直接在 Linux 主机上 `python tools/update_specs.py`（如果机器能联网拉 GitHub）
 
-## 6. 验证
+## 5. 验证
 
 两个命令各跑一次确认：
 
@@ -84,7 +96,7 @@ sudo pip install --break-system-packages Pillow polib
 如果看到 `No CJK font found`，回到第 1 步把 noto-cjk 装上，或设
 `WOWS_CJK_FONT=/path/to/some.ttf`。
 
-## 7. QQ 机器人接入示例
+## 6. QQ 机器人接入示例
 
 两个命令 I/O 完全一致：参数 `<replay> [out_dir]`、stdout 最后一行是 PNG 路径、stderr 是进度日志、退出码非 0 表示失败。所以一个通用 helper 就够了。
 
