@@ -47,6 +47,14 @@ rm -rf report/specs/{content,scripts,metadata.toml}
 mv specs_out/* report/specs/ && rmdir specs_out
 ```
 
+国内走镜像 (任选):
+
+```bash
+python3 tools/update_specs.py --repo https://gitclone.com/github.com/wowsinfo/data.git
+# 或
+python3 tools/update_specs.py --repo https://ghfast.top/https://github.com/wowsinfo/data.git
+```
+
 ## MP4 extracted
 
 Windows 上用 wows-toolkit GUI 解一遍 (会从你的 WoWs 安装目录抽数据出来),

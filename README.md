@@ -26,7 +26,7 @@ wows-bot/
 │   ├── UPDATE.md                   WoWs 游戏版本更新后刷新数据
 │   └── images/                     示例样图
 ├── plugin/
-│   └── minimap.py                  NoneBot 插件 (软链接到你 bot 的 plugins/)
+│   └── minimap.py                  NoneBot 插件 (复制到你 bot 的 plugins/ 下)
 ├── report/                         战报 PNG 渲染器
 │   ├── bin/                        wows_report / wows_damage_report / wows_full_report + 渲染脚本
 │   ├── data/                       图标 / 翻译 .mo / 常量 json

@@ -93,16 +93,32 @@ cat /opt/wows-bot/report/specs/metadata.toml
 `minimap/render.sh` 只是个 wrapper,真正的渲染靠 [landaire/wows-toolkit](https://github.com/landaire/wows-toolkit) 的 `minimap_renderer` 二进制。默认路径 `/opt/wows-toolkit/target/release/minimap_renderer`。
 
 ```bash
-# Rust 工具链
+# Rust 工具链 (国外直连)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+# 国内走 ustc 镜像 (任选):
+# export RUSTUP_DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static
+# export RUSTUP_UPDATE_ROOT=https://mirrors.ustc.edu.cn/rust-static/rustup
+# curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 source "$HOME/.cargo/env"
 
-# clone + build
+# clone (国外直连)
 sudo git clone https://github.com/landaire/wows-toolkit /opt/wows-toolkit
+# 国内访问慢的话用镜像 (任选其一):
+# sudo git clone https://gitclone.com/github.com/landaire/wows-toolkit /opt/wows-toolkit
+# sudo git clone https://ghfast.top/https://github.com/landaire/wows-toolkit /opt/wows-toolkit
+
 cd /opt/wows-toolkit
 cargo build --release -p minimap_renderer
 ls target/release/minimap_renderer    # 验证
 ```
+
+> Rust 国内编译卡 crates.io 的话,设个 `~/.cargo/config.toml`:
+> ```toml
+> [source.crates-io]
+> replace-with = "ustc"
+> [source.ustc]
+> registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
+> ```
 
 ### 3.1 准备 extracted 数据
 
