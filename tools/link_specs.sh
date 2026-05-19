@@ -68,4 +68,5 @@ ln -sfn "$version_dir/metadata.toml" "$SPECS_DIR/metadata.toml"
 
 echo "linked $SPECS_DIR -> $version_dir"
 echo "---"
-cat "$SPECS_DIR/metadata.toml"
+# 只打 version / build 两行,metadata.toml 里还有几千行 CAS 哈希,没必要全刷
+grep -E '^(version|build)\s*=' "$SPECS_DIR/metadata.toml" || true
