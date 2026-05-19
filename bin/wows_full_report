@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""wows_full_report — 战报 + 复盘双图竖向拼接。
+
+Usage:
+    wows_full_report <replay.wowsreplay> [out_dir]
+
+输出 <out_dir>/<basename>.full.png（战报在上、复盘在下）。
+内部串联调用 wows_report + wows_damage_report，后者会复用前者的 JSON。
+"""
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+BOT_HOME = Path(__file__).resolve().parent.parent
+WOWS_REPORT        = BOT_HOME / "bin" / "wows_report"
+WOWS_DAMAGE_REPORT = BOT_HOME / "bin" / "wows_damage_report"
+DEFAULT_OUT = os.environ.get("WOWS_OUT_DIR", "/tmp/wows_report")
+GAP = 16
+BG  = (18, 24, 38)  # GAME_BG
+
+
+def run(cmd):
+    """Run sub-command, return its last stdout line (= PNG path)."""
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    sys.stderr.write(res.stderr)
+    if res.returncode != 0:
+        raise RuntimeError(f"{cmd[0]} exited {res.returncode}")
+    return res.stdout.strip().splitlines()[-1]
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("usage: wows_full_report <replay> [out_dir]", file=sys.stderr)
+        sys.exit(2)
+    replay = Path(sys.argv[1]).expanduser().resolve()
+    out_dir = Path(sys.argv[2] if len(sys.argv) >= 3 else DEFAULT_OUT).expanduser()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    base = replay.stem
+    out_path = out_dir / f"{base}.full.png"
+
+    print("[1/3] 全队战报 ...", file=sys.stderr)
+    battle_path = run([str(WOWS_REPORT), str(replay), str(out_dir)])
+
+    print("[2/3] 主角复盘 ...", file=sys.stderr)
+    damage_path = run([str(WOWS_DAMAGE_REPORT), str(replay), str(out_dir)])
+
+    print("[3/3] 拼接 ...", file=sys.stderr)
+    from PIL import Image
+    battle = Image.open(battle_path).convert("RGB")
+    damage = Image.open(damage_path).convert("RGB")
+    W = max(battle.width, damage.width)
+    H = battle.height + GAP + damage.height
+    canvas = Image.new("RGB", (W, H), BG)
+    canvas.paste(battle, ((W - battle.width) // 2, 0))
+    canvas.paste(damage, ((W - damage.width) // 2, battle.height + GAP))
+    canvas.save(out_path)
+    print(f"saved: {out_path}", file=sys.stderr)
+    print(out_path)
+
+
+if __name__ == "__main__":
+    main()
