@@ -417,24 +417,30 @@ def render(json_path: str, out_path: str, max_cards: int = 4):
     sub = "按规则评分 + 事件级时间轴(集火/装甲区)综合判定"
     draw.text((24 + f_title.getbbox(title)[2] + 32, 22), sub, GAME_DIM, f_card_ship)
 
+    # 级别: rank 0=甲, 1=乙, 2=丙, 3=丁。颜色深→浅。
+    CRIMINAL_GRADES = [
+        ("甲级战犯", GAME_RED),
+        ("乙级战犯", GAME_GOLD),
+        ("丙级战犯", (220, 160, 60)),
+        ("丁级战犯", GAME_DIM),
+    ]
+
     # 卡片
     y0 = title_h + pad
     for i, (p, score, reasons, is_ring) in enumerate(criminals):
         x0 = pad + i * (card_w + pad)
         x1 = x0 + card_w
         y1 = y0 + card_h
+        grade_label, grade_color = CRIMINAL_GRADES[min(i, len(CRIMINAL_GRADES) - 1)]
         # 卡片背景
         bg = GAME_PANEL if (i % 2 == 0) else GAME_PANEL_ALT
-        border = GAME_RED if is_ring else GAME_GOLD
-        draw.rounded_rectangle([x0, y0, x1, y1], radius=10, fill=bg, outline=border, width=2)
+        draw.rounded_rectangle([x0, y0, x1, y1], radius=10, fill=bg, outline=grade_color, width=2)
 
-        # 头号战犯角标
-        badge_text = "头号战犯" if is_ring else "战犯"
-        badge_color = GAME_RED if is_ring else GAME_GOLD
-        bw = f_badge.getbbox(badge_text)[2] + 16
+        # 级别角标
+        bw = f_badge.getbbox(grade_label)[2] + 16
         draw.rounded_rectangle([x0 + 14, y0 + 12, x0 + 14 + bw, y0 + 12 + 28],
-                               radius=6, fill=badge_color)
-        draw.text((x0 + 22, y0 + 16), badge_text, (12, 16, 26), f_badge)
+                               radius=6, fill=grade_color)
+        draw.text((x0 + 22, y0 + 16), grade_label, (12, 16, 26), f_badge)
 
         # 分数
         score_txt = f"score {score}"
