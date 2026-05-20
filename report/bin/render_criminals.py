@@ -86,24 +86,34 @@ CONSUMABLE_MIN_LIVED_SECS = 5 * 60  # 存活 >5min 才评判(避免误伤开局�
 CONSUMABLE_LOW_USES_THRESHOLD = 1   # 全场使用 <=1 次 = 严重不开消耗品
 
 # 强相关消耗品: 带了就该用,不用扣分。
-# 字段 = (ability_name 内的关键字, 显示名, consumable_uses 里对应的 enum 名)。
+# 字段 = (ability_name 内的关键字, consumable_uses 里对应的 enum 名)。
 # 一个玩家可能带多个强相关消耗品,每个 0 次使用各扣 1 分。
+# 中文显示名直接查 .mo 里的 IDS_DOCK_CONSUME_TITLE_<UPPER(ability_name)>,
+# 拿到的是 WG 官方游戏内名(比如带 I/II/III 罗马数字, 或"短程对海搜索"等变体)。
 STRONG_CONSUMABLES = [
-    # (ability keyword, display name, enum name in uses log)
-    ("RLSSearch",        "雷达",       "Radar"),
-    ("SonarSearch",      "对海搜索",   "HydroacousticSearch"),
-    ("Hydrophone",       "水听器",     "Hydrophone"),
-    ("Fighter",          "战斗机",     "CatapultFighter"),
+    # (ability_name 关键字, consumable_uses enum 名)
+    ("RLSSearch",             "Radar"),
+    ("SonarSearch",           "HydroacousticSearch"),
+    ("Hydrophone",            "Hydrophone"),
+    ("Fighter",               "CatapultFighter"),
     # --- CV 飞机级消耗品(从 Vehicle.plane_refs 链路下游) ---
-    ("PlaneTacticalFighters", "巡逻战斗机", "CatapultFighter"),  # 飞机自带的战斗机覆盖
-    ("ForsageBooster",   "引擎冷却",   "SpeedBoost"),            # 飞机引擎散热(避免过热)
-    ("ActiveManeuvering","主动机动",   "EnhancedRudders"),       # 跳炸/鱼雷机的机动调整
-    ("PlaneSmokeGenerator","飞机烟雾","PlaneSmokeGenerator"),    # 飞机喷烟自掩护
-    ("Spotter",          "侦察机",     "SpottingAircraft"),
-    ("AirDefenseDisp",   "防空指挥",   "DefensiveAntiAircraft"),
-    ("SmokeGenerator",   "烟雾",       "Smoke"),
-    ("SubmarineLocator", "反潜雷达",   "SubmarineSurveillance"),
+    ("PlaneTacticalFighters", "CatapultFighter"),       # 飞机自带的战斗机覆盖
+    ("ForsageBooster",        "SpeedBoost"),            # 飞机引擎散热(避免过热)
+    ("ActiveManeuvering",     "EnhancedRudders"),       # 跳炸/鱼雷机的机动调整
+    ("PlaneSmokeGenerator",   "PlaneSmokeGenerator"),   # 飞机喷烟自掩护
+    ("Spotter",               "SpottingAircraft"),
+    ("AirDefenseDisp",        "DefensiveAntiAircraft"),
+    ("SmokeGenerator",        "Smoke"),
+    ("SubmarineLocator",      "SubmarineSurveillance"),
 ]
+
+
+def consumable_display(ability_name):
+    """ability_name (如 PCY034_ForsageBooster) 查 WoWs 官方中文。
+    Pattern: IDS_DOCK_CONSUME_TITLE_<UPPER>。查不到就用 ability_name 兜底。"""
+    if not ability_name:
+        return ability_name
+    return t(f"IDS_DOCK_CONSUME_TITLE_{ability_name.upper()}", ability_name)
 
 
 # ---- 数据加载 ----
@@ -170,14 +180,16 @@ def count_consumable_uses(consumable_uses, user_entity_id, enum_names=None):
 def strong_consumable_slots(consumable_slots):
     """返回该船带的强相关消耗品 slot 列表 [(display_names_in_slot, enum_names_in_slot)]。
     consumable_slots 是嵌套结构: 外层 slot, 内层 ability_name 候选(玩家二选一)。
-    一个 slot 内的所有强相关 variant 算作一组 (用斜杠 join 显示, enum 名集合用于查使用)。"""
+    一个 slot 内的所有强相关 variant 算作一组 (用斜杠 join 显示, enum 名集合用于查使用)。
+    显示名从 .mo 里查官方中文,不再用手工硬编码表。"""
     out = []
     for slot in consumable_slots or []:
         slot_displays = []
         slot_enums = []
         for ab_name in slot:
-            for keyword, display, enum_name in STRONG_CONSUMABLES:
+            for keyword, enum_name in STRONG_CONSUMABLES:
                 if keyword in ab_name:
+                    display = consumable_display(ab_name)
                     if display not in slot_displays:
                         slot_displays.append(display)
                     if enum_name not in slot_enums:
