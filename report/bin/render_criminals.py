@@ -91,13 +91,18 @@ CONSUMABLE_LOW_USES_THRESHOLD = 1   # 全场使用 <=1 次 = 严重不开消耗�
 STRONG_CONSUMABLES = [
     # (ability keyword, display name, enum name in uses log)
     ("RLSSearch",        "雷达",       "Radar"),
-    ("SonarSearch",      "声呐",       "HydroacousticSearch"),
-    ("Hydrophone",       "水听",       "Hydrophone"),
+    ("SonarSearch",      "对海搜索",   "HydroacousticSearch"),
+    ("Hydrophone",       "水听器",     "Hydrophone"),
     ("Fighter",          "战斗机",     "CatapultFighter"),
+    # --- CV 飞机级消耗品(从 Vehicle.plane_refs 链路下游) ---
+    ("PlaneTacticalFighters", "巡逻战斗机", "CatapultFighter"),  # 飞机自带的战斗机覆盖
+    ("ForsageBooster",   "引擎冷却",   "SpeedBoost"),            # 飞机引擎散热(避免过热)
+    ("ActiveManeuvering","主动机动",   "EnhancedRudders"),       # 跳炸/鱼雷机的机动调整
+    ("PlaneSmokeGenerator","飞机烟雾","PlaneSmokeGenerator"),    # 飞机喷烟自掩护
     ("Spotter",          "侦察机",     "SpottingAircraft"),
     ("AirDefenseDisp",   "防空指挥",   "DefensiveAntiAircraft"),
     ("SmokeGenerator",   "烟雾",       "Smoke"),
-    ("SubmarineLocator", "反潜空袭",   "SubmarineSurveillance"),
+    ("SubmarineLocator", "反潜雷达",   "SubmarineSurveillance"),
 ]
 
 

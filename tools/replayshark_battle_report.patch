@@ -1,8 +1,8 @@
 diff --git a/crates/replayshark/src/main.rs b/crates/replayshark/src/main.rs
-index bd80d52..da4e8a3 100644
+index bd80d52..d9070a7 100644
 --- a/crates/replayshark/src/main.rs
 +++ b/crates/replayshark/src/main.rs
-@@ -62,6 +62,15 @@ enum Commands {
+@@ -62,6 +62,22 @@ enum Commands {
          /// The replay file to use
          replay: PathBuf,
      },
@@ -15,23 +15,133 @@ index bd80d52..da4e8a3 100644
 +        #[arg(short, long)]
 +        output: Option<PathBuf>,
 +    },
++    /// Dump all Ability params from GameParams: name, all variants, consumable_type.
++    /// Requires --extracted. Outputs JSON.
++    ConsumablesDump {
++        /// Optional output file (default: stdout)
++        #[arg(short, long)]
++        output: Option<PathBuf>,
++    },
      /// Dump the packets to console
      Dump {
          /// Output filename to dump to
-@@ -664,6 +673,9 @@ fn main() {
+@@ -664,6 +680,12 @@ fn main() {
              })
              .unwrap();
          }
 +        Commands::BattleReport { replay, output } => {
 +            run_battle_report(&replay, extracted, constants_path, output.as_deref()).unwrap();
 +        }
++        Commands::ConsumablesDump { output } => {
++            run_consumables_dump(extracted, output.as_deref()).unwrap();
++        }
          Commands::Chat { replay } => {
              parse_replay(&replay, game_dir, extracted, |meta| {
                  wows_replays::analyzer::chat::ChatLoggerBuilder::new().build(meta)
-@@ -736,3 +748,252 @@ fn main() {
+@@ -736,3 +758,370 @@ fn main() {
          }
      }
  }
++
++fn run_consumables_dump(
++    extracted_dir: Option<&str>,
++    output: Option<&Path>,
++) -> anyhow::Result<()> {
++    use wowsunpack::game_params::provider::GameMetadataProvider;
++    use wowsunpack::game_params::types::{GameParamProvider, ParamData};
++    use wowsunpack::vfs::PhysicalFS;
++    use wowsunpack::vfs::VfsPath;
++
++    let extracted = extracted_dir.ok_or_else(|| anyhow!("--extracted is required"))?;
++    let path = Path::new(extracted);
++
++    // 支持两种布局:
++    //   a) path/{content,scripts}/...        (战报 bot 自带 specs)
++    //   b) path/vfs/{content,scripts}/...    (wows-data-mgr 解出来的)
++    //   c) path/<ver_build>/vfs/...          (含版本子目录的)
++    let vfs_dir = if path.join("content").join("GameParams.data").is_file() {
++        path.to_path_buf()
++    } else if path.join("vfs").join("content").is_dir() {
++        path.join("vfs")
++    } else {
++        let mut chosen: Option<PathBuf> = None;
++        if let Ok(entries) = std::fs::read_dir(path) {
++            for entry in entries.flatten() {
++                let sub = entry.path();
++                if sub.join("vfs").join("content").is_dir() {
++                    chosen = Some(sub.join("vfs"));
++                    break;
++                }
++            }
++        }
++        chosen.ok_or_else(|| anyhow!("没在 {} 下找到 content/GameParams.data", path.display()))?
++    };
++
++    eprintln!("loading GameParams.data from {} ...", vfs_dir.display());
++    let vfs: VfsPath = VfsPath::new(PhysicalFS::new(&vfs_dir));
++    let provider = GameMetadataProvider::from_vfs(&vfs).map_err(|e| anyhow!("{}", e))?;
++
++    let mut abilities = Vec::new();
++    let mut planes = Vec::new();
++    for param in provider.params() {
++        match param.data() {
++            ParamData::Ability(ab) => {
++                let mut cats = Vec::new();
++                for (variant_name, cat) in ab.categories() {
++                    cats.push(serde_json::json!({
++                        "variant": variant_name,
++                        "consumable_type_raw": cat.consumable_type_raw(),
++                        "work_time": cat.work_time(),
++                    }));
++                }
++                abilities.push(serde_json::json!({
++                    "ability_name": param.name(),
++                    "ability_index": param.index(),
++                    "num_variants": cats.len(),
++                    "variants": cats,
++                }));
++            }
++            ParamData::Aircraft(a) => {
++                let plane_consumables: Vec<Vec<String>> = a.abilities().map(|slots| {
++                    slots.iter()
++                        .filter(|s| !s.is_empty())
++                        .map(|slot| slot.iter().map(|(name, _)| name.clone()).collect())
++                        .collect()
++                }).unwrap_or_default();
++                planes.push(serde_json::json!({
++                    "plane_name": param.name(),
++                    "plane_index": param.index(),
++                    "category": format!("{:?}", a.category()),
++                    "ammo_type": a.ammo_type(),
++                    "consumable_slots": plane_consumables,
++                }));
++            }
++            _ => {}
++        }
++    }
++    abilities.sort_by(|a, b| {
++        a["ability_name"].as_str().unwrap_or("").cmp(b["ability_name"].as_str().unwrap_or(""))
++    });
++    planes.sort_by(|a, b| {
++        a["plane_index"].as_str().unwrap_or("").cmp(b["plane_index"].as_str().unwrap_or(""))
++    });
++
++    eprintln!("found {} Ability params, {} Aircraft params", abilities.len(), planes.len());
++    let json = serde_json::to_string_pretty(&serde_json::json!({
++        "abilities": abilities,
++        "planes": planes,
++        "total_abilities": abilities.len(),
++        "total_planes": planes.len(),
++    }))?;
++    if let Some(out) = output {
++        std::fs::write(out, json)?;
++        eprintln!("wrote to {}", out.display());
++    } else {
++        println!("{}", json);
++    }
++    Ok(())
++}
++
 +
 +fn run_battle_report(
 +    replay: &Path,
@@ -112,6 +222,24 @@ index bd80d52..da4e8a3 100644
 +                            .map(|(ab_name, _)| ab_name.clone())
 +                            .collect();
 +                        consumable_slots.push(alternatives);
++                    }
++                }
++                // CV: 把每个挂载飞机的 PlaneAbilities 也并入 slot 列表(去重),
++                // 这样 Python 端检测时能识别"巡逻战斗机/引擎冷却带了但 0 次使用"。
++                use wowsunpack::game_params::types::GameParamProvider as GPP;
++                for plane_idx in v.plane_refs() {
++                    // plane_refs 来自 ship pickle 的 planes 列表,实际是 param 的 name(不是 index)
++                    let Some(plane_param) = GPP::game_param_by_name(&provider, plane_idx) else { continue };
++                    let ParamData::Aircraft(plane) = plane_param.data() else { continue };
++                    let Some(plane_slots) = plane.abilities() else { continue };
++                    for slot in plane_slots {
++                        if slot.is_empty() { continue; }
++                        let alternatives: Vec<String> = slot.iter()
++                            .map(|(ab_name, _)| ab_name.clone())
++                            .collect();
++                        if !consumable_slots.contains(&alternatives) {
++                            consumable_slots.push(alternatives);
++                        }
 +                    }
 +                }
 +                (v.level() as i64, species.unwrap_or_else(|| "?".to_string()), consumable_slots)
@@ -424,3 +552,149 @@ index 98a527d..35c4f6e 100644
                  self.active_consumables.entry(entity).or_default().push(ActiveConsumable {
                      consumable,
                      activated_at: packet.clock,
+diff --git a/crates/wowsunpack/src/game_params/provider.rs b/crates/wowsunpack/src/game_params/provider.rs
+index f612b04..363c3ce 100644
+--- a/crates/wowsunpack/src/game_params/provider.rs
++++ b/crates/wowsunpack/src/game_params/provider.rs
+@@ -645,6 +645,27 @@ fn extract_mounts(ship_data: &BTreeMap<HashableValue, Value>, component_name: &s
+ }
+ 
+ fn build_ship(ship_data: &BTreeMap<HashableValue, Value>) -> Vehicle {
++    // 提取 CV 飞机引用: A_TorpedoBomber.planes / A_DiveBomber.planes /
++    // A_SkipBomber.planes / A_AirArmament.hangar_1.planes 等。
++    // plane_refs 是扁平的 plane_index 列表(如 ["PJAB211_SHINANO"]),
++    // 飞机的消耗品需要 main.rs 用 provider 二次查询。
++    let mut plane_refs: Vec<String> = Vec::new();
++    for comp_key in ["A_TorpedoBomber", "A_DiveBomber", "A_SkipBomber"] {
++        if let Some(v) = ship_data.get(&HashableValue::String(comp_key.to_string().into()))
++            && let Some(d) = v.dict_or_object_dict()
++            && let Some(planes) = d.inner().get(&HashableValue::String("planes".to_string().into()))
++            && let Some(list) = planes.list_ref()
++        {
++            for p in list.inner().iter() {
++                if let Some(s) = p.string_ref() {
++                    let name = s.inner().to_string();
++                    if !plane_refs.contains(&name) {
++                        plane_refs.push(name);
++                    }
++                }
++            }
++        }
++    }
+     let ability_data = game_param_to_type!(ship_data, keys::SHIP_ABILITIES, Option<HashMap<(), ()>>);
+     let abilities: Option<Vec<Vec<(String, String)>>> = ability_data.map(|abilities_data| {
+         abilities_data
+@@ -997,6 +1018,7 @@ fn build_ship(ship_data: &BTreeMap<HashableValue, Value>) -> Vehicle {
+         .maybe_armor(armor)
+         .maybe_hit_locations(hit_locations)
+         .permoflages(permoflages)
++        .plane_refs(plane_refs)
+         .build()
+ }
+ 
+@@ -1150,6 +1172,41 @@ impl GameMetadataProvider {
+                                 ))
+                             }
+                             ParamType::Aircraft => {
++                                // 提取 PlaneAbilities (跟 Vehicle 的 ShipAbilities 同结构):
++                                // 外层 = slot 索引,内层 = 该 slot 的 (ability_name, variant) 列表。
++                                // 飞机消耗品(巡逻战斗机/引擎冷却 等)在这里。
++                                let plane_abilities: Option<Vec<Vec<(String, String)>>> =
++                                    param_data.get(&pk("PlaneAbilities"))
++                                        .and_then(|v| v.dict_or_object_dict())
++                                        .map(|ab_dict| {
++                                            ab_dict.inner().iter()
++                                                .filter_map(|(_slot_name, slot_data)| {
++                                                    if slot_data.is_none() { return None; }
++                                                    let slot_data = slot_data.dict_or_object_dict()?;
++                                                    let slot_data = slot_data.inner();
++                                                    let slot = game_param_to_type!(slot_data, "slot", usize);
++                                                    let abils = game_param_to_type!(slot_data, "abils", &[()]).inner();
++                                                    let abils: Vec<(String, String)> = abils.iter()
++                                                        .filter_map(|abil| {
++                                                            let map_abil = |abil: &Vec<Value>| -> Option<(String,String)> {
++                                                                Some((
++                                                                    abil.get(0)?.string_ref()?.inner().clone(),
++                                                                    abil.get(1)?.string_ref()?.inner().clone(),
++                                                                ))
++                                                            };
++                                                            match abil {
++                                                                Value::Tuple(inner) => map_abil(inner.inner()),
++                                                                Value::List(inner) => map_abil(&inner.inner()),
++                                                                _ => None,
++                                                            }
++                                                        })
++                                                        .collect();
++                                                    Some((slot, abils))
++                                                })
++                                                .sorted_by(|a, b| a.0.cmp(&b.0))
++                                                .map(|(_slot, abils)| abils)
++                                                .collect()
++                                        });
+                                 let subtypes: Vec<String> = param_data
+                                     .get(&pk("planeSubtype"))
+                                     .and_then(|v| v.list_ref())
+@@ -1187,7 +1244,11 @@ impl GameMetadataProvider {
+                                     })
+                                     .unwrap_or_default();
+                                 Some(ParamData::Aircraft(
+-                                    Aircraft::builder().category(category).ammo_type(ammo_type).build(),
++                                    Aircraft::builder()
++                                        .category(category)
++                                        .ammo_type(ammo_type)
++                                        .maybe_abilities(plane_abilities)
++                                        .build(),
+                                 ))
+                             }
+                             ParamType::Projectile => {
+diff --git a/crates/wowsunpack/src/game_params/types.rs b/crates/wowsunpack/src/game_params/types.rs
+index f11118d..75a66cf 100644
+--- a/crates/wowsunpack/src/game_params/types.rs
++++ b/crates/wowsunpack/src/game_params/types.rs
+@@ -1264,6 +1264,12 @@ pub struct Vehicle {
+     hit_locations: Option<HashMap<String, HitLocation>>,
+     #[cfg_attr(feature = "serde", serde(default))]
+     permoflages: Vec<String>,
++    /// For CV ships only: list of plane param indices referenced from
++    /// A_TorpedoBomber/A_DiveBomber/A_SkipBomber.planes. Use these to look up
++    /// individual planes via GameParamProvider.game_param_by_index to read
++    /// their PlaneAbilities. Empty for non-CV ships.
++    #[cfg_attr(feature = "serde", serde(default))]
++    plane_refs: Vec<String>,
+ }
+ 
+ impl Vehicle {
+@@ -1303,6 +1309,10 @@ impl Vehicle {
+         &self.permoflages
+     }
+ 
++    pub fn plane_refs(&self) -> &[String] {
++        &self.plane_refs
++    }
++
+     /// Look up a specific hull upgrade config by name.
+     pub fn hull_upgrade(&self, name: &str) -> Option<&HullUpgradeConfig> {
+         self.config_data.as_ref()?.hull_upgrades.get(name)
+@@ -1816,6 +1826,11 @@ pub struct Aircraft {
+     category: PlaneCategory,
+     #[cfg_attr(feature = "serde", serde(default))]
+     ammo_type: String,
++    /// Plane-level consumable slots, parsed from PlaneAbilities key.
++    /// Same structure as Vehicle.abilities: Outer = slot index, inner = (ability_name, variant).
++    /// 飞机消耗品(巡逻战斗机/引擎冷却 等)挂在这里,而不是船的 ShipAbilities。
++    #[cfg_attr(feature = "serde", serde(default))]
++    abilities: Option<Vec<Vec<(String, String)>>>,
+ }
+ 
+ impl Aircraft {
+@@ -1827,6 +1842,10 @@ impl Aircraft {
+         &self.ammo_type
+     }
+ 
++    pub fn abilities(&self) -> Option<&[Vec<(String, String)>]> {
++        self.abilities.as_deref()
++    }
++
+     /// Determine the effective plane category for display/icon purposes.
+     ///
+     /// The raw `category` from `planeSubtype` isn't always sufficient:
