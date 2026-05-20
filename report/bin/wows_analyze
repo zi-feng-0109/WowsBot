@@ -314,7 +314,8 @@ def call_deepseek(summary):
             {"role": "user", "content": summary},
         ],
         "stream": False,
-        "temperature": 0.7,
+        # 0.3 比默认 0.7 更"老实",显著减少 LLM 凭印象编反事实推测和"差点/说不定"类脑补
+        "temperature": 0.3,
     }).encode("utf-8")
 
     req = urllib.request.Request(
