@@ -1,5 +1,5 @@
 diff --git a/crates/replayshark/src/main.rs b/crates/replayshark/src/main.rs
-index bd80d52..e9c93ec 100644
+index bd80d52..e409037 100644
 --- a/crates/replayshark/src/main.rs
 +++ b/crates/replayshark/src/main.rs
 @@ -62,6 +62,15 @@ enum Commands {
@@ -28,7 +28,7 @@ index bd80d52..e9c93ec 100644
          Commands::Chat { replay } => {
              parse_replay(&replay, game_dir, extracted, |meta| {
                  wows_replays::analyzer::chat::ChatLoggerBuilder::new().build(meta)
-@@ -736,3 +748,195 @@ fn main() {
+@@ -736,3 +748,212 @@ fn main() {
          }
      }
  }
@@ -193,6 +193,22 @@ index bd80d52..e9c93ec 100644
 +        })
 +        .collect();
 +
++    // Per-event damage timeline (attacker, victim, elapsed seconds, amount).
++    // Format entity IDs as "EntityId(N)" strings to match other ID fields in this JSON
++    // so Python-side strip_id() works uniformly.
++    let damage_events_json: Vec<_> = report
++        .damage_events()
++        .iter()
++        .map(|e| {
++            serde_json::json!({
++                "time_secs": e.time_secs,
++                "attacker_entity_id": format!("EntityId({})", e.attacker_entity_id),
++                "victim_entity_id": format!("EntityId({})", e.victim_entity_id),
++                "amount": e.amount,
++            })
++        })
++        .collect();
++
 +    let out_json = serde_json::json!({
 +        "match": {
 +            "map_name": report.map_name(),
@@ -211,6 +227,7 @@ index bd80d52..e9c93ec 100644
 +        },
 +        "players": players_json,
 +        "deaths": deaths_json,
++        "damage_events": damage_events_json,
 +        "chat": chat_log,
 +    });
 +
@@ -224,3 +241,84 @@ index bd80d52..e9c93ec 100644
 +    }
 +    Ok(())
 +}
+diff --git a/crates/wows-replays/src/analyzer/battle_controller/controller.rs b/crates/wows-replays/src/analyzer/battle_controller/controller.rs
+index 98a527d..715e592 100644
+--- a/crates/wows-replays/src/analyzer/battle_controller/controller.rs
++++ b/crates/wows-replays/src/analyzer/battle_controller/controller.rs
+@@ -447,6 +447,9 @@ pub struct BattleReport {
+     played_duration: Option<f32>,
+     /// Time between battle end and last recorded packet, in seconds.
+     extra_duration: Option<f32>,
++    /// Every damage event (drained from BattleController.damage_dealt at build time).
++    /// time_secs is elapsed-from-battle-start so it matches DeathInfo.time_lived.
++    damage_events: Vec<DamageEventOut>,
+ }
+ 
+ impl BattleReport {
+@@ -454,6 +457,12 @@ impl BattleReport {
+         &self.self_player
+     }
+ 
++    /// All per-event damage records observed via receiveDamagesOnShip packets.
++    /// time_secs is seconds-since-battle-start. Empty if no damage events were recorded.
++    pub fn damage_events(&self) -> &[DamageEventOut] {
++        &self.damage_events
++    }
++
+     pub fn game_chat(&self) -> &[GameMessage] {
+         self.game_chat.as_ref()
+     }
+@@ -568,6 +577,22 @@ struct DamageEvent {
+     clock: GameClock,
+ }
+ 
++/// Serializable per-event damage record exposed via BattleReport.damage_events().
++/// Used by downstream tooling (战犯分析, 走位回放等) that needs the timeline,
++/// not just the aggregated per-player total in DamageEvent.
++#[derive(Serialize, Clone, Debug)]
++pub struct DamageEventOut {
++    /// Vehicle EntityId that dealt the damage (.raw() u32 form).
++    pub attacker_entity_id: u32,
++    /// Vehicle EntityId that received the damage.
++    pub victim_entity_id: u32,
++    /// Seconds elapsed since battle start (matches DeathInfo.time_lived semantics).
++    /// Negative values would mean pre-battle (shouldn't happen, but kept f32 for safety).
++    pub time_secs: f32,
++    /// Hit points dealt by this single event.
++    pub amount: f32,
++}
++
+ pub struct BattleController<'res, 'replay, G> {
+     game_meta: &'replay ReplayMeta,
+     game_resources: &'res G,
+@@ -1012,6 +1037,22 @@ where
+             _ => None,
+         };
+ 
++        // Flatten damage_dealt into a serializable timeline.
++        // Time is relative to battle start so it matches DeathInfo.time_lived.
++        let start_secs = self.battle_start_clock.map(|c| c.seconds()).unwrap_or(0.0);
++        let damage_events_out: Vec<DamageEventOut> = self
++            .damage_dealt
++            .iter()
++            .flat_map(|(attacker, events)| {
++                events.iter().map(move |e| DamageEventOut {
++                    attacker_entity_id: attacker.raw(),
++                    victim_entity_id: e.victim.raw(),
++                    time_secs: e.clock.seconds() - start_secs,
++                    amount: e.amount,
++                })
++            })
++            .collect();
++
+         BattleReport {
+             arena_id: self.arena_id,
+             match_result: if self.match_finished {
+@@ -1049,6 +1090,7 @@ where
+             max_duration: self.game_meta.duration,
+             played_duration,
+             extra_duration,
++            damage_events: damage_events_out,
+         }
+     }
+ 
