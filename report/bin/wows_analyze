@@ -26,6 +26,10 @@ from render_battle_report import (  # noqa: E402
     t, result_field, load_translations, load_result_indices,
     fmt_time, strip_known, strip_id, clean_ship_name, MATCH_GROUP_CN,
 )
+# 复用 damage-chart 的字段分类表 + 勋带映射,保证 LLM 摘要里的口径和图表一致
+from render_damage_chart import (  # noqa: E402
+    DEALT_CATEGORIES, RECEIVED_CATEGORIES, aggregate, extract_ribbons,
+)
 
 API_KEY     = os.environ.get("WOWS_DEEPSEEK_KEY", "")
 API_URL     = os.environ.get("WOWS_DEEPSEEK_URL", "https://api.deepseek.com/chat/completions")
@@ -60,6 +64,56 @@ def mode_zh(m):
     mg = MATCH_GROUP_CN.get(mg_raw, mg_raw)
     gm = t(f"IDS_SCENARIO_{gm_raw.upper()}", t(f"IDS_{gm_raw.upper()}", gm_raw))
     return f"{mg}·{gm}" if gm else mg
+
+
+# ---------- 新增: 给 LLM 一些"抓手"信号(武器分布/受伤来源/勋带/队内排名) ---------
+
+def dmg_breakdown(ri, categories, max_items=5):
+    """Top-N (label, value, pct) for one side (DEALT or RECEIVED). [] if no data."""
+    agg = aggregate(ri, categories)  # [(label, color, value)] desc, drops zeros
+    total = sum(v for _, _, v in agg)
+    if total <= 0:
+        return []
+    return [(lab, v, v / total * 100) for lab, _c, v in agg[:max_items]]
+
+
+def top_dmg_label(ri, max_items=2, threshold_pct=20):
+    """给队伍表里每行的简短"主输出类型"标签 — 列出占比 >= threshold 的前 max_items 项。"""
+    parts = dmg_breakdown(ri, DEALT_CATEGORIES, max_items=max_items)
+    keep = [(lab, pct) for lab, _v, pct in parts if pct >= threshold_pct]
+    if not keep:
+        return ""
+    return " · ".join(f"{lab} {pct:.0f}%" for lab, pct in keep)
+
+
+def rank_in_team(self_p, team, key_fn):
+    """返回 self_p 在 team 里按 key_fn 排第几 (1-based) 以及该值, 没数据返回 (None, 0)。"""
+    rows = [(p, key_fn(p) or 0) for p in team]
+    rows.sort(key=lambda x: -x[1])
+    for i, (p, v) in enumerate(rows, 1):
+        if p is self_p:
+            return i, v
+    return None, 0
+
+
+# 勋带按这个顺序输出,小到大概念性分组(主炮 → 副炮/防空 → 异常击中 → 击杀类 → 反潜/损管)
+_RIBBON_ORDER = [
+    "主炮命中", "穿透", "未穿", "过穿", "跳弹", "命中装甲区",
+    "副炮", "击落", "瘫痪",
+    "纵火", "进水",
+    "击沉", "协助击杀", "摧毁建筑",
+    "鱼雷命中", "鱼雷防护命中", "鱼雷防护被吸收",
+    "深弹命中", "深弹直击", "深弹溅伤",
+    "拾取增益",
+]
+
+
+def format_ribbons(ri):
+    items = extract_ribbons(ri)  # [(label, icon, count)]
+    by_label = {lab: cnt for lab, _icon, cnt in items}
+    ordered = [(lab, by_label[lab]) for lab in _RIBBON_ORDER if lab in by_label]
+    leftovers = [(lab, cnt) for lab, cnt in by_label.items() if lab not in set(_RIBBON_ORDER)]
+    return " | ".join(f"{lab}×{cnt}" for lab, cnt in ordered + leftovers)
 
 
 def build_summary(raw):
@@ -104,10 +158,12 @@ def build_summary(raw):
         final_hp = st.get("final_health", 0) or 0
         taken = max(0, int(max_hp - final_hp))
         dmg = st.get("damage_dealt") or 0
-        kills = st.get("kills") or 0
-        spotting = result_field(ri, "DAMAGE_SCOUTING", 0) or 0
-        potential = result_field(ri, "ART_AGRO", 0) or 0
-        xp = result_field(ri, "EXP", 0) or 0
+        kills = st.get("frags") or 0  # JSON 里键名是 frags 不是 kills
+        spotting = result_field(ri, "scouting_damage", 0) or 0
+        potential = sum((result_field(ri, k, 0) or 0)
+                        for k in ("agro_art", "agro_air", "agro_tpd", "agro_dbomb"))
+        xp = result_field(ri, "exp", 0) or 0
+        time_lived = st.get("time_lived_secs")
         plane_kills = (result_field(ri, "planes_killed_by_ship", 0) or 0) + \
                       (result_field(ri, "planes_killed_by_plane", 0) or 0)
 
@@ -118,10 +174,55 @@ def build_summary(raw):
             f"侦查 {fmt_int(spotting)} | 潜在 {fmt_int(potential)} | 经验 {fmt_int(xp)}"
         )
         cause = strip_known(st.get("death_cause") or "") if not st.get("is_alive") else ""
-        lines.append(
-            f"  血量 {fmt_int(final_hp)}/{fmt_int(max_hp)} 承伤 {fmt_int(taken)} | "
-            f"{'生还' if st.get('is_alive') else f'阵亡 ({cause})'}"
+        live_str = (
+            "生还(全程)" if st.get("is_alive") else
+            f"阵亡 ({cause}, 存活 {fmt_time(int(time_lived))})" if time_lived is not None else
+            f"阵亡 ({cause})"
         )
+        lines.append(
+            f"  血量 {fmt_int(final_hp)}/{fmt_int(max_hp)} 承伤 {fmt_int(taken)} | {live_str}"
+        )
+
+        # --- 输出武器分布(主角) ---
+        dealt_top = dmg_breakdown(ri, DEALT_CATEGORIES, max_items=6)
+        if dealt_top:
+            total_d = sum(v for _, v, _ in dealt_top)  # 仅 top-6 总和,仅用于上下文
+            lines.append("  输出分布: " + " · ".join(
+                f"{lab} {fmt_int(v)} ({pct:.0f}%)" for lab, v, pct in dealt_top
+            ))
+
+        # --- 受伤来源(主角) ---
+        recvd_top = dmg_breakdown(ri, RECEIVED_CATEGORIES, max_items=6)
+        if recvd_top:
+            recvd_total = sum((result_field(ri, k, 0) or 0)
+                              for _, _, keys in RECEIVED_CATEGORIES for k in keys)
+            healed = max(0, recvd_total - taken)
+            lines.append(
+                f"  受伤来源 (累计被打 {fmt_int(recvd_total)} / 实际承伤 {fmt_int(taken)} / 被治疗 {fmt_int(healed)}): "
+                + " · ".join(f"{lab} {fmt_int(v)} ({pct:.0f}%)" for lab, v, pct in recvd_top)
+            )
+
+        # --- 勋带(主角) ---
+        rib = format_ribbons(ri)
+        if rib:
+            lines.append(f"  勋带: {rib}")
+
+        # --- 主角在己方阵营的排名(让 LLM 知道这分数算高还是低) ---
+        own_team = [p for p in players if p.get("team_id") == self_team]
+        if len(own_team) > 1:
+            def _pot(p):
+                ri_ = p.get("results_info")
+                return sum((result_field(ri_, k, 0) or 0)
+                           for k in ("agro_art", "agro_air", "agro_tpd", "agro_dbomb"))
+            r_dmg,  _ = rank_in_team(self_p, own_team, lambda p: (p.get("stats") or {}).get("damage_dealt"))
+            r_spot, _ = rank_in_team(self_p, own_team, lambda p: result_field(p.get("results_info"), "scouting_damage", 0) or 0)
+            r_pot,  _ = rank_in_team(self_p, own_team, _pot)
+            r_xp,   _ = rank_in_team(self_p, own_team, lambda p: result_field(p.get("results_info"), "exp", 0) or 0)
+            r_kill, _ = rank_in_team(self_p, own_team, lambda p: (p.get("stats") or {}).get("frags"))
+            lines.append(
+                f"  队内排名 (己方 {len(own_team)} 人): "
+                f"击伤 #{r_dmg} · 击杀 #{r_kill} · 侦查 #{r_spot} · 潜在 #{r_pot} · 经验 #{r_xp}"
+            )
 
     # ----- 双队战绩 -----
     def team_block(label, tid):
@@ -131,15 +232,24 @@ def build_summary(raw):
         team.sort(key=lambda p: -((p.get("stats") or {}).get("damage_dealt") or 0))
         alive = sum(1 for p in team if (p.get("stats") or {}).get("is_alive"))
         total_dmg = sum(((p.get("stats") or {}).get("damage_dealt") or 0) for p in team)
-        total_frags = sum(((p.get("stats") or {}).get("kills") or 0) for p in team)
+        total_frags = sum(((p.get("stats") or {}).get("frags") or 0) for p in team)
         out = ["", f"【{label}】{alive}/{len(team)} 存活, 总击伤 {fmt_int(total_dmg)}, 总击杀 {total_frags}"]
         for p in team:
             st = p.get("stats") or {}
+            ri = p.get("results_info") or []
             mark = "★" if p["name"] == self_name else " "
+            cause = ""
+            if not st.get("is_alive"):
+                cause_raw = strip_known(st.get("death_cause") or "")
+                cause = f"亡于{cause_raw}" if cause_raw else "亡"
+            else:
+                cause = "存"
+            wpn = top_dmg_label(ri)  # 主输出类型: e.g. "主炮 AP 73%" 或 "跳炸 31% · 鱼雷机 36%"
+            wpn_str = f"  [{wpn}]" if wpn else ""
             out.append(
                 f"  {mark}{p['name']:<22} {ship_label(p):<28} "
-                f"K{st.get('kills', 0)} D{fmt_int(st.get('damage_dealt', 0))} "
-                f"{'存' if st.get('is_alive') else '亡'}"
+                f"K{st.get('frags', 0) or 0} D{fmt_int(st.get('damage_dealt', 0))} "
+                f"{cause}{wpn_str}"
             )
         return out
 
