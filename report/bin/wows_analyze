@@ -15,6 +15,7 @@ stderr: 进度日志
 """
 import json
 import os
+import random
 import sys
 import urllib.request
 import urllib.error
@@ -37,7 +38,9 @@ API_MODEL   = os.environ.get("WOWS_DEEPSEEK_MODEL", "deepseek-chat")
 API_TIMEOUT = int(os.environ.get("WOWS_ANALYZE_TIMEOUT", "90"))
 
 _BOT_DATA = Path(__file__).resolve().parent.parent / "data"
-PROMPT_FILE = os.environ.get("WOWS_ANALYZE_PROMPT", str(_BOT_DATA / "analyze_prompt.txt"))
+PROMPT_FILE = os.environ.get("WOWS_ANALYZE_PROMPT")  # 显式单文件强制覆盖,跳过 personas 机制
+PERSONAS_DIR = Path(os.environ.get("WOWS_PERSONAS_DIR", str(_BOT_DATA / "personas")))
+PERSONA_FORCE = os.environ.get("WOWS_PERSONA", "").strip()  # e.g. "aichan" / "shion",空=随机
 
 RESULT_CN = {"Win": "胜利", "Loss": "失败", "Draw": "平局"}
 
@@ -288,18 +291,51 @@ FALLBACK_PROMPT = """你是战舰世界 (World of Warships) 的资深玩家兼�
 """
 
 
-def load_prompt():
-    """从外置文件加载 system prompt;没文件就用 fallback。"""
+def _read_prompt_file(path):
     try:
-        with open(PROMPT_FILE, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             text = f.read().strip()
+        return text or None
+    except (FileNotFoundError, OSError):
+        return None
+
+
+def load_prompt():
+    """选 system prompt,优先级如下:
+       1. WOWS_ANALYZE_PROMPT 指了具体文件 → 用它(老接口,兼容)。
+       2. WOWS_PERSONAS_DIR 下能找到至少一个 .txt:
+          - WOWS_PERSONA=<name> 强制选 personas/<name>.txt
+          - 否则在所有 .txt 里随机抽一个 (bot 用)
+       3. 都没找到 → 用兜底常量 FALLBACK_PROMPT。
+    """
+    # 1. 显式单文件强制覆盖
+    if PROMPT_FILE:
+        text = _read_prompt_file(PROMPT_FILE)
         if text:
-            log(f"loaded prompt: {PROMPT_FILE} ({len(text)} chars)")
+            log(f"loaded prompt (explicit override): {PROMPT_FILE} ({len(text)} chars)")
             return text
-    except FileNotFoundError:
-        log(f"prompt file not found: {PROMPT_FILE} (用 fallback)")
-    except Exception as e:
-        log(f"读 prompt 出错 ({e}), 用 fallback")
+        log(f"warn: WOWS_ANALYZE_PROMPT={PROMPT_FILE} 读不出来,继续走 personas")
+
+    # 2. personas 目录
+    if PERSONAS_DIR.is_dir():
+        files = sorted(PERSONAS_DIR.glob("*.txt"))
+        if files:
+            picked = None
+            if PERSONA_FORCE:
+                forced = PERSONAS_DIR / f"{PERSONA_FORCE}.txt"
+                if forced.is_file():
+                    picked = forced
+                else:
+                    log(f"warn: 找不到 personas/{PERSONA_FORCE}.txt,随机回退")
+            if picked is None:
+                picked = random.choice(files)
+            text = _read_prompt_file(picked)
+            if text:
+                log(f"loaded prompt (persona): {picked.name} ({len(text)} chars)")
+                return text
+
+    # 3. 兜底
+    log("没找到任何 prompt 文件,用 fallback")
     return FALLBACK_PROMPT
 
 
