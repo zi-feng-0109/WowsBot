@@ -1,5 +1,5 @@
 diff --git a/crates/replayshark/src/main.rs b/crates/replayshark/src/main.rs
-index bd80d52..a87210c 100644
+index bd80d52..da4e8a3 100644
 --- a/crates/replayshark/src/main.rs
 +++ b/crates/replayshark/src/main.rs
 @@ -62,6 +62,15 @@ enum Commands {
@@ -28,7 +28,7 @@ index bd80d52..a87210c 100644
          Commands::Chat { replay } => {
              parse_replay(&replay, game_dir, extracted, |meta| {
                  wows_replays::analyzer::chat::ChatLoggerBuilder::new().build(meta)
-@@ -736,3 +748,249 @@ fn main() {
+@@ -736,3 +748,252 @@ fn main() {
          }
      }
  }
@@ -87,7 +87,7 @@ index bd80d52..a87210c 100644
 +
 +    for player in report.players() {
 +        let vehicle_param = player.vehicle();
-+        let (level, species_str, ship_consumables) = match vehicle_param.data() {
++        let (level, species_str, consumable_slots) = match vehicle_param.data() {
 +            ParamData::Vehicle(v) => {
 +                let species = vehicle_param.species().map(|s| format!("{:?}", s));
 +                // 从 Vehicle.abilities 提取该船能装的消耗品类型(去重)。
@@ -95,26 +95,28 @@ index bd80d52..a87210c 100644
 +                //   外层 = slot 索引 (1-6),内层 = 该 slot 的所有候选 variant。
 +                // 我们只关心存在的(非空) slot,且每个 slot 取 first variant 即可
 +                // (同一 slot 的所有 variant 都是同一消耗品类型)。
-+                // 注:Rust 端 Ability.categories() 在新版本 WoWs GameParams 里 parser
-+                // 返回空,所以走不通"取 consumable_type 枚举"那条路。退而求其次:
-+                // 直接 dump 原始 ability_name(去重),由 Python 端按关键字模式识别。
-+                // ability_name 格式形如 PCY009_CrashCrewPremium / PCY059_RegenCrewPremium /
-+                // PCY016_AirDefenseDisp_/PCY010_RLSSearch_ / PCY013_SmokeGenerator 等。
-+                let mut consumables: Vec<String> = Vec::new();
++                // 按 slot 嵌套 dump:外层 = slot 索引,内层 = 该 slot 的所有可选
++                // ability_name (玩家二选一)。这样 Python 端判断"slot 0 次使用"时,
++                // 只要 slot 内任何一个 variant 被用过就算用过,避免把"侦察机/战斗机
++                // 二选一 slot"误判成"两种都没开"。
++                // 注:Rust 端 Ability.categories() 在新版本 WoWs GameParams parse 为空,
++                // 拿不到 consumable_type 枚举,只能 dump 原始 ability_name 让 Python
++                // 按关键字模式识别(PCY010_RLSSearch -> 雷达 等)。
++                let mut consumable_slots: Vec<Vec<String>> = Vec::new();
 +                if let Some(slots) = v.abilities() {
 +                    for slot in slots {
 +                        if slot.is_empty() {
 +                            continue;
 +                        }
-+                        let (ability_name, _variant_name) = &slot[0];
-+                        if !consumables.contains(ability_name) {
-+                            consumables.push(ability_name.clone());
-+                        }
++                        let alternatives: Vec<String> = slot.iter()
++                            .map(|(ab_name, _)| ab_name.clone())
++                            .collect();
++                        consumable_slots.push(alternatives);
 +                    }
 +                }
-+                (v.level() as i64, species.unwrap_or_else(|| "?".to_string()), consumables)
++                (v.level() as i64, species.unwrap_or_else(|| "?".to_string()), consumable_slots)
 +            }
-+            _ => (0i64, "?".to_string(), Vec::new()),
++            _ => (0i64, "?".to_string(), Vec::<Vec<String>>::new()),
 +        };
 +        let ship_index = vehicle_param.index().to_string();
 +        let ship_id = format!("{:?}", vehicle_param.id());
@@ -175,7 +177,8 @@ index bd80d52..a87210c 100644
 +                "name": player.vehicle().name(),
 +                "level": level,
 +                "species": species_str,
-+                "consumables": ship_consumables,
++                // consumable_slots: 嵌套结构,外层 slot,内层 alt ability_names
++                "consumable_slots": consumable_slots,
 +            },
 +            "stats": {
 +                "damage_dealt": damage,

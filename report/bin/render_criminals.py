@@ -145,27 +145,41 @@ def teammates_alive_at(all_players, team_id, t, exclude_eid):
     return n
 
 
-def count_consumable_uses(consumable_uses, user_entity_id, consumable_name=None):
-    """该 entity 全场使用消耗品总次数 (consumable_name=None) 或某个具体类型的次数。"""
+def count_consumable_uses(consumable_uses, user_entity_id, enum_names=None):
+    """该 entity 全场使用消耗品总次数 (enum_names=None) 或 enum_names 集合内总次数。"""
     if not user_entity_id:
         return 0
+    if enum_names is None:
+        return sum(
+            1 for u in consumable_uses
+            if strip_id(u.get("user_entity_id") or "") == user_entity_id
+        )
+    name_set = set(enum_names)
     return sum(
         1 for u in consumable_uses
         if strip_id(u.get("user_entity_id") or "") == user_entity_id
-        and (consumable_name is None or u.get("consumable_name") == consumable_name)
+        and u.get("consumable_name") in name_set
     )
 
 
-def strong_consumables_brought(ship_consumables):
-    """返回该船带的强相关消耗品列表 [(display_name, enum_name)]。
-    ship_consumables 是 ability_name 字符串列表。"""
+def strong_consumable_slots(consumable_slots):
+    """返回该船带的强相关消耗品 slot 列表 [(display_names_in_slot, enum_names_in_slot)]。
+    consumable_slots 是嵌套结构: 外层 slot, 内层 ability_name 候选(玩家二选一)。
+    一个 slot 内的所有强相关 variant 算作一组 (用斜杠 join 显示, enum 名集合用于查使用)。"""
     out = []
-    for ab_name in ship_consumables or []:
-        for keyword, display, enum_name in STRONG_CONSUMABLES:
-            if keyword in ab_name:
-                if (display, enum_name) not in out:
-                    out.append((display, enum_name))
-                break
+    for slot in consumable_slots or []:
+        slot_displays = []
+        slot_enums = []
+        for ab_name in slot:
+            for keyword, display, enum_name in STRONG_CONSUMABLES:
+                if keyword in ab_name:
+                    if display not in slot_displays:
+                        slot_displays.append(display)
+                    if enum_name not in slot_enums:
+                        slot_enums.append(enum_name)
+                    break
+        if slot_displays:  # 此 slot 至少有一个强相关 variant
+            out.append((slot_displays, slot_enums))
     return out
 
 
@@ -262,12 +276,14 @@ def analyze_player(p, damage_events, match_duration_secs, all_players=None, cons
         (match_duration_secs if is_alive else 0)
     )
     if effective_lived >= CONSUMABLE_MIN_LIVED_SECS and consumable_uses is not None and eid:
-        # 精确:每个"带了的强相关消耗品但 0 次使用" = 1 分
-        ship_cons = (p.get("ship") or {}).get("consumables") or []
-        for display, enum_name in strong_consumables_brought(ship_cons):
-            uses_n = count_consumable_uses(consumable_uses, eid, enum_name)
+        # 精确:按 slot 整体判断,slot 内任何 variant 用过都算 slot 用过。
+        # slot 内所有 alternatives 0 次使用 -> +1 分(显示斜杠拼接的备选名)。
+        ship_slots = (p.get("ship") or {}).get("consumable_slots") or []
+        for displays, enums in strong_consumable_slots(ship_slots):
+            uses_n = count_consumable_uses(consumable_uses, eid, enums)
             if uses_n == 0:
-                reasons.append(f"{display}带了但全程 0 次使用")
+                label_str = "/".join(displays)
+                reasons.append(f"{label_str}带了但全程 0 次使用")
                 score += 1
 
         # 粗指标:全场总使用过低(即使没有强相关消耗品也兜底)
