@@ -10,7 +10,6 @@ NoneBot 插件: 接收 .wowsreplay 文件,并行渲染 MP4 (小地图) + PNG (�
   WOWS_MP4_TIMEOUT     MP4 渲染超时 (秒)    默认 600
   WOWS_PNG_TIMEOUT     PNG 渲染超时 (秒)    默认 300
   WOWS_ANALYZE_TIMEOUT LLM 分析超时 (秒)    默认 120
-  WOWS_TOGGLE_FILE     分析开关状态文件     默认 <BASEDIR>/analyze_toggle.json
 
 DeepSeek API key 在 wows_analyze 那边读 WOWS_DEEPSEEK_KEY,不在本插件。
 """
@@ -29,6 +28,8 @@ from nonebot.params import CommandArg
 from nonebot.typing import T_State
 from nonebot.log import logger
 
+from . import permissions
+
 RENDER_SH        = os.environ.get("WOWS_RENDER_SH",   "/opt/wows-bot/minimap/render.sh")
 REPORT_CMD       = os.environ.get("WOWS_REPORT_CMD",  "/opt/wows-bot/report/bin/wows_full_report")
 ANALYZE_CMD      = os.environ.get("WOWS_ANALYZE_CMD", "/opt/wows-bot/report/bin/wows_analyze")
@@ -36,7 +37,6 @@ BASE_DIR         = os.path.expanduser(os.environ.get("WOWS_REPLAY_BASEDIR", "~/w
 MP4_TIMEOUT      = int(os.environ.get("WOWS_MP4_TIMEOUT", "600"))
 PNG_TIMEOUT      = int(os.environ.get("WOWS_PNG_TIMEOUT", "300"))
 ANALYZE_TIMEOUT  = int(os.environ.get("WOWS_ANALYZE_TIMEOUT", "120"))
-TOGGLE_FILE      = os.environ.get("WOWS_TOGGLE_FILE", os.path.join(BASE_DIR, "analyze_toggle.json"))
 
 replay_handler = on_message(priority=5, block=False)
 
@@ -49,50 +49,17 @@ TaskInfo = Tuple[str, int, Optional[int], str, str]
 driver = get_driver()
 
 
-# ====== 分析开关: 按聊天上下文持久化 ============================================
-# 状态结构: {"g:123456": true, "u:987654": false, ...}
-# group 聊天 key 是 "g:<group_id>",私聊是 "u:<user_id>"
+# ====== 启动初始化 =============================================================
+# permissions 模块需要知道状态文件目录;复用 BASE_DIR (跟 replay 临时目录同位置)
 
-_toggle_state: dict = {}
-_toggle_loaded = False
-
-
-def _toggle_load():
-    global _toggle_state, _toggle_loaded
-    if _toggle_loaded:
-        return
-    _toggle_loaded = True
+@driver.on_startup
+async def _init_permissions():
     try:
-        if os.path.isfile(TOGGLE_FILE):
-            with open(TOGGLE_FILE, "r", encoding="utf-8") as f:
-                _toggle_state = json.load(f)
+        permissions.init(BASE_DIR)
+        logger.info(f"permissions inited at {BASE_DIR}")
     except Exception as e:
-        logger.warning(f"读 toggle 文件失败: {e}")
-        _toggle_state = {}
-
-
-def _toggle_save():
-    try:
-        os.makedirs(os.path.dirname(TOGGLE_FILE), exist_ok=True)
-        with open(TOGGLE_FILE, "w", encoding="utf-8") as f:
-            json.dump(_toggle_state, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.error(f"写 toggle 文件失败: {e}")
-
-
-def chat_key(group_id: Optional[int], user_id: str) -> str:
-    return f"g:{group_id}" if group_id else f"u:{user_id}"
-
-
-def analyze_enabled(group_id: Optional[int], user_id: str) -> bool:
-    _toggle_load()
-    return bool(_toggle_state.get(chat_key(group_id, user_id), False))
-
-
-def analyze_set(group_id: Optional[int], user_id: str, enabled: bool):
-    _toggle_load()
-    _toggle_state[chat_key(group_id, user_id)] = enabled
-    _toggle_save()
+        logger.error(f"permissions 初始化失败: {e}")
+        raise
 
 
 # ====== /分析 指令 =============================================================
@@ -102,18 +69,23 @@ analyze_cmd = on_command("分析", priority=5, block=True)
 
 @analyze_cmd.handle()
 async def handle_analyze_cmd(bot: Bot, event: Event, args: Message = CommandArg()):
-    user_id = str(event.get_user_id())
-    group_id = event.group_id if isinstance(event, GroupMessageEvent) else None
     arg = args.extract_plain_text().strip()
+    scope, ident = permissions.scope_of(event)
 
     if arg in ("开", "on", "enable", "开启"):
-        analyze_set(group_id, user_id, True)
+        if not permissions.can_toggle(event, ident):
+            await analyze_cmd.finish("仅群主 / 管理员 / 超管可以改本群开关")
+        if "分析" in permissions.global_blacklist():
+            await analyze_cmd.finish("分析 已被超管全局禁用,无法本群启用")
+        permissions.set_feature(scope, ident, "分析", True)
         await analyze_cmd.finish("✅ 战报分析已开启,后续每份 replay 都会附带 LLM 复盘文本。")
     elif arg in ("关", "off", "disable", "关闭"):
-        analyze_set(group_id, user_id, False)
+        if not permissions.can_toggle(event, ident):
+            await analyze_cmd.finish("仅群主 / 管理员 / 超管可以改本群开关")
+        permissions.set_feature(scope, ident, "分析", False)
         await analyze_cmd.finish("已关闭战报分析。MP4 + 战报图正常发,不再调 LLM。")
     elif arg in ("", "状态", "status"):
-        on = analyze_enabled(group_id, user_id)
+        on = permissions.feature_enabled(scope, ident, "分析")
         await analyze_cmd.finish(
             f"当前分析: {'开启' if on else '关闭'}\n"
             f"用法: /分析 开 | /分析 关 | /分析 状态"
@@ -249,7 +221,10 @@ async def process_queue(bot: Bot):
                                     mp4_path, png_path, png_error)
 
             # 开了分析就追发一条 LLM 复盘文本
-            if analyze_enabled(group_id, user_id):
+            # 用 permissions 替代旧的 analyze_enabled
+            scope = "group" if group_id else "private"
+            ident = str(group_id) if group_id else user_id
+            if permissions.feature_enabled(scope, ident, "分析"):
                 json_path = os.path.join(user_dir, f"{Path(replay_path).stem}.json")
                 if os.path.isfile(json_path):
                     try:
