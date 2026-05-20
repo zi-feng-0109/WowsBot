@@ -201,14 +201,18 @@ RIBBON_DISPLAY = {
 _RIBBON_ICON_CACHE = {}
 
 
-def load_ribbon_icon(basename: str, size: int = 36) -> Optional[Image.Image]:
-    key = f"{basename}@{size}"
+def load_ribbon_icon(basename: str, target_w: int = 36) -> Optional[Image.Image]:
+    """加载勋带 PNG 并缩放(按宽度,保持原比例)。
+    原图通常是 133x51 的横向 banner,target_w 可以大于原宽实现上采样。"""
+    key = f"{basename}@w{target_w}"
     if key in _RIBBON_ICON_CACHE:
         return _RIBBON_ICON_CACHE[key]
     path = Path(RIBBON_ICON_DIR) / f"{basename}.png"
     try:
-        img = Image.open(path).convert("RGBA")
-        img.thumbnail((size, size))
+        src = Image.open(path).convert("RGBA")
+        sw, sh = src.size
+        target_h = max(1, round(target_w * sh / sw))
+        img = src.resize((target_w, target_h), Image.LANCZOS)
         _RIBBON_ICON_CACHE[key] = img
         return img
     except Exception:
@@ -294,8 +298,17 @@ def render(json_path: str, out_path: str):
     skip_header = os.environ.get("WOWS_SKIP_HEADER") == "1"
     header_h = 0 if skip_header else 110
     pie_h = 580
-    ribbon_h = 130
     pad = 20
+
+    # 勋带块: 模仿 WG 后战屏 —— 横向 banner ribbon + 上叠白色 xN + 下方 label。
+    # 原始 PNG 是 ~133x51 (2.6:1),拉到 RIBBON_BANNER_W 宽,高按比例。
+    RIBBON_BANNER_W = 180       # ribbon 主图宽度(像素),高度自动按比例
+    RIBBON_ITEMS_PER_ROW = 8    # 每行 8 个,紧排,1700 宽足够
+    RIBBON_ROW_HEIGHT = 110     # ribbon banner ~69 + label 20 + padding
+    RIBBON_TITLE_BAND = 50
+    ribbon_rows = max(1, -(-len(ribbons) // RIBBON_ITEMS_PER_ROW))  # ceil div
+    ribbon_h = RIBBON_TITLE_BAND + ribbon_rows * RIBBON_ROW_HEIGHT + 16
+
     H = header_h + pad + pie_h + pad + ribbon_h + pad
 
     img = Image.new("RGB", (W, H), GAME_BG)
@@ -391,24 +404,38 @@ def render(json_path: str, out_path: str):
     if not ribbons:
         draw.text((pad + 20, y + 56), "本场无勋带数据", GAME_DIM, f_h3)
     else:
-        # tile ribbons horizontally; wrap if needed
-        ax = pad + 20
-        ay = y + 50
-        item_w = 130
-        item_h = 60
-        max_x = W - pad - 30
-        for label, icon_base, count in ribbons:
-            if ax + item_w > max_x:
-                break  # truncate if overflow
-            icon = load_ribbon_icon(icon_base, 36)
+        # WG 后战屏样式: banner + xN 覆盖在右半 + label 在 banner 下方
+        inner_w = W - 2 * pad - 32
+        item_w = inner_w // RIBBON_ITEMS_PER_ROW
+        row_y0 = y + RIBBON_TITLE_BAND
+        f_ribbon_count = f(MONO_FONT, 22)   # xN 字号(略小于上一版)
+        f_ribbon_label = f(CJK_FONT, 16)    # label 字号
+        for i, (label, icon_base, count) in enumerate(ribbons):
+            row = i // RIBBON_ITEMS_PER_ROW
+            col = i % RIBBON_ITEMS_PER_ROW
+            ax = pad + 16 + col * item_w
+            ay = row_y0 + row * RIBBON_ROW_HEIGHT + 6
+            icon = load_ribbon_icon(icon_base, RIBBON_BANNER_W)
             if icon:
                 img.paste(icon, (ax, ay), icon)
-            # count next to icon
-            draw.text((ax + 44, ay - 2),
-                      f"x{count}", GAME_GOLD, f(MONO_FONT, 20))
-            # label below
-            draw.text((ax + 44, ay + 28), label, GAME_TEXT, f_tiny)
-            ax += item_w
+                bw, bh = icon.size
+            else:
+                bw, bh = RIBBON_BANNER_W, int(RIBBON_BANNER_W * 51 / 133)
+
+            # xN 叠在 banner 右半部分(白色 + 1px 黑边,任何底色都可读)
+            cnt_str = f"x{count}"
+            cb = f_ribbon_count.getbbox(cnt_str)
+            cw = cb[2] - cb[0]
+            ch = cb[3] - cb[1]
+            cx = ax + bw - cw - 12  # 距 banner 右边 12px
+            cy = ay + (bh - ch) // 2 - 2
+            # 简易黑色描边
+            for ox, oy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                draw.text((cx + ox, cy + oy), cnt_str, (0, 0, 0), f_ribbon_count)
+            draw.text((cx, cy), cnt_str, (255, 255, 255), f_ribbon_count)
+
+            # label 在 banner 下方(banner 左对齐)
+            draw.text((ax + 4, ay + bh + 4), label, GAME_TEXT, f_ribbon_label)
 
     img.save(out_path)
     print(f"saved: {out_path}", file=sys.stderr)

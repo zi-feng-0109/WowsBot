@@ -74,7 +74,31 @@ VERY_LOW_RAW_XP = 500
 # 事件级阈值
 BURST_LOOKBACK_SECS = 60          # 1 分钟前还满血就算"集火暴毙"
 BURST_HP_RATIO = 0.80             # 1 分钟前 HP >= 80% max_hp
+BURST_MIN_TEAMMATES_ALIVE = 3     # 1 分钟前还需要至少 N 个**其他**队友活着,
+                                  # 不然队伍已经崩了,自己被集火是无解,不算走位错
 CITADEL_SINGLE_HIT_RATIO = 0.30   # 单次受伤 >= 30% max_hp
+
+# 消耗品使用检测。
+# 精确指标: 用 ship.consumables (Rust 端 dump 的 ability_name 列表) 知道玩家带了什么,
+# 用 consumable_uses 时间轴知道实际开了几次,如果"带了强相关消耗品但 0 次使用"=> 战犯。
+# 粗指标: 全场消耗品使用次数过低也算挂机型战犯(双保险,不依赖船种识别)。
+CONSUMABLE_MIN_LIVED_SECS = 5 * 60  # 存活 >5min 才评判(避免误伤开局秒退)
+CONSUMABLE_LOW_USES_THRESHOLD = 1   # 全场使用 <=1 次 = 严重不开消耗品
+
+# 强相关消耗品: 带了就该用,不用扣分。
+# 字段 = (ability_name 内的关键字, 显示名, consumable_uses 里对应的 enum 名)。
+# 一个玩家可能带多个强相关消耗品,每个 0 次使用各扣 1 分。
+STRONG_CONSUMABLES = [
+    # (ability keyword, display name, enum name in uses log)
+    ("RLSSearch",        "雷达",       "Radar"),
+    ("SonarSearch",      "声呐",       "HydroacousticSearch"),
+    ("Hydrophone",       "水听",       "Hydrophone"),
+    ("Fighter",          "战斗机",     "CatapultFighter"),
+    ("Spotter",          "侦察机",     "SpottingAircraft"),
+    ("AirDefenseDisp",   "防空指挥",   "DefensiveAntiAircraft"),
+    ("SmokeGenerator",   "烟雾",       "Smoke"),
+    ("SubmarineLocator", "反潜空袭",   "SubmarineSurveillance"),
+]
 
 
 # ---- 数据加载 ----
@@ -102,7 +126,50 @@ def hp_at_time(received_events, max_hp, query_time):
     return max(0.0, max_hp - taken)
 
 
-def analyze_player(p, damage_events, match_duration_secs):
+def teammates_alive_at(all_players, team_id, t, exclude_eid):
+    """在时间 t 时 team_id 中除 exclude_eid 之外还活着的玩家数。
+    "活着" = 全场未死(is_alive=true) 或 time_lived_secs > t。"""
+    n = 0
+    for p in all_players:
+        if p.get("team_id") != team_id:
+            continue
+        if strip_id(p.get("vehicle_entity_id") or "") == exclude_eid:
+            continue
+        st = p.get("stats") or {}
+        if st.get("is_alive"):
+            n += 1
+        else:
+            tl = st.get("time_lived_secs")
+            if tl is not None and tl > t:
+                n += 1
+    return n
+
+
+def count_consumable_uses(consumable_uses, user_entity_id, consumable_name=None):
+    """该 entity 全场使用消耗品总次数 (consumable_name=None) 或某个具体类型的次数。"""
+    if not user_entity_id:
+        return 0
+    return sum(
+        1 for u in consumable_uses
+        if strip_id(u.get("user_entity_id") or "") == user_entity_id
+        and (consumable_name is None or u.get("consumable_name") == consumable_name)
+    )
+
+
+def strong_consumables_brought(ship_consumables):
+    """返回该船带的强相关消耗品列表 [(display_name, enum_name)]。
+    ship_consumables 是 ability_name 字符串列表。"""
+    out = []
+    for ab_name in ship_consumables or []:
+        for keyword, display, enum_name in STRONG_CONSUMABLES:
+            if keyword in ab_name:
+                if (display, enum_name) not in out:
+                    out.append((display, enum_name))
+                break
+    return out
+
+
+def analyze_player(p, damage_events, match_duration_secs, all_players=None, consumable_uses=None):
     """对一个玩家算所有触发条件,返回 (score, reasons[], is_ringleader_bool)。"""
     st = p.get("stats") or {}
     ri = p.get("results_info") or []
@@ -133,17 +200,17 @@ def analyze_player(p, damage_events, match_duration_secs):
 
     # --- 低输出 ---
     if damage < thr["low_damage"]:
-        reasons.append(f"击伤 {damage:,} (该船种 {thr['low_damage']:,}+ 才合格)".replace(",", " "))
+        reasons.append(f"击伤 {damage:,}".replace(",", " "))
         score += 1
 
     # --- 低潜在 (抗线船) ---
     if thr["low_potential"] is not None and potential < thr["low_potential"]:
-        reasons.append(f"潜在 {potential:,} (抗线船 {thr['low_potential']:,}+)".replace(",", " "))
+        reasons.append(f"潜在 {potential:,}".replace(",", " "))
         score += 1
 
     # --- 低侦查 (侦查船) ---
     if thr["low_scouting"] is not None and scouting < thr["low_scouting"]:
-        reasons.append(f"侦查 {scouting:,} (该船种 {thr['low_scouting']:,}+)".replace(",", " "))
+        reasons.append(f"侦查 {scouting:,}".replace(",", " "))
         score += 1
 
     # --- 低裸经验 ---
@@ -160,17 +227,24 @@ def analyze_player(p, damage_events, match_duration_secs):
     if not is_alive and time_lived is not None and damage_events and eid:
         received = collect_received_events(damage_events, eid)
         if received:
-            # 1) 集火走位错: 死亡时间 - 60s 时 HP 还满
+            # 1) 集火走位错: 死亡时间 - 60s 时 HP 还满,且队伍尚未崩
+            #    (如果队伍只剩自己 + 寥寥几人,被多人集火是无解,不算走位错)
             death_t = float(time_lived)
             t_back = death_t - BURST_LOOKBACK_SECS
             if t_back >= 0:
                 hp_then = hp_at_time(received, max_hp, t_back)
                 if hp_then >= max_hp * BURST_HP_RATIO:
-                    pct_hp = int(hp_then / max_hp * 100)
-                    reasons.append(
-                        f"集火走位错: 死前 60s 还有 {pct_hp}% HP, 一分钟内被打穿"
+                    teammates = (
+                        teammates_alive_at(all_players, p.get("team_id"), t_back, eid)
+                        if all_players is not None else BURST_MIN_TEAMMATES_ALIVE
                     )
-                    score += 2
+                    if teammates >= BURST_MIN_TEAMMATES_ALIVE:
+                        pct_hp = int(hp_then / max_hp * 100)
+                        reasons.append(
+                            f"集火走位错: 死前 60s 还有 {pct_hp}% HP, 一分钟内被打穿"
+                        )
+                        score += 2
+                    # 否则: 队伍已崩,无视该规则
 
             # 2) 装甲区暴毙: 任意单次 >= 30% max_hp
             #    (装甲区是受害者,不自动升级"头号";头号只看裸经验 <500)
@@ -181,6 +255,28 @@ def analyze_player(p, damage_events, match_duration_secs):
                     f"装甲区暴毙: 单发吃 {int(max_single):,} ({pct}% max HP)".replace(",", " ")
                 )
                 score += 2
+
+    # --- 消耗品检测 ---
+    effective_lived = (
+        time_lived if time_lived is not None else
+        (match_duration_secs if is_alive else 0)
+    )
+    if effective_lived >= CONSUMABLE_MIN_LIVED_SECS and consumable_uses is not None and eid:
+        # 精确:每个"带了的强相关消耗品但 0 次使用" = 1 分
+        ship_cons = (p.get("ship") or {}).get("consumables") or []
+        for display, enum_name in strong_consumables_brought(ship_cons):
+            uses_n = count_consumable_uses(consumable_uses, eid, enum_name)
+            if uses_n == 0:
+                reasons.append(f"{display}带了但全程 0 次使用")
+                score += 1
+
+        # 粗指标:全场总使用过低(即使没有强相关消耗品也兜底)
+        total_uses = count_consumable_uses(consumable_uses, eid)
+        if total_uses <= CONSUMABLE_LOW_USES_THRESHOLD:
+            reasons.append(
+                f"消耗品基本没开: 存活 {fmt_time(int(effective_lived))} 全场仅 {total_uses} 次"
+            )
+            score += 1
 
     return score, reasons, is_ringleader
 
@@ -205,9 +301,13 @@ def find_criminals(raw):
     damage_events = raw.get("damage_events") or []
     match_dur = m.get("duration_seconds_played") or m.get("duration_seconds_max") or 0
 
+    all_players = raw.get("players", [])
+    consumable_uses = raw.get("consumable_uses") or []
     scored = []
     for p in losers:
-        score, reasons, is_ring = analyze_player(p, damage_events, match_dur)
+        score, reasons, is_ring = analyze_player(
+            p, damage_events, match_dur, all_players, consumable_uses
+        )
         if score >= 2 and reasons:
             scored.append((p, score, reasons, is_ring))
 

@@ -1,5 +1,5 @@
 diff --git a/crates/replayshark/src/main.rs b/crates/replayshark/src/main.rs
-index bd80d52..e409037 100644
+index bd80d52..a87210c 100644
 --- a/crates/replayshark/src/main.rs
 +++ b/crates/replayshark/src/main.rs
 @@ -62,6 +62,15 @@ enum Commands {
@@ -28,7 +28,7 @@ index bd80d52..e409037 100644
          Commands::Chat { replay } => {
              parse_replay(&replay, game_dir, extracted, |meta| {
                  wows_replays::analyzer::chat::ChatLoggerBuilder::new().build(meta)
-@@ -736,3 +748,212 @@ fn main() {
+@@ -736,3 +748,249 @@ fn main() {
          }
      }
  }
@@ -87,12 +87,34 @@ index bd80d52..e409037 100644
 +
 +    for player in report.players() {
 +        let vehicle_param = player.vehicle();
-+        let (level, species_str) = match vehicle_param.data() {
++        let (level, species_str, ship_consumables) = match vehicle_param.data() {
 +            ParamData::Vehicle(v) => {
 +                let species = vehicle_param.species().map(|s| format!("{:?}", s));
-+                (v.level() as i64, species.unwrap_or_else(|| "?".to_string()))
++                // 从 Vehicle.abilities 提取该船能装的消耗品类型(去重)。
++                // abilities = Vec<Vec<(ability_name, variant_name)>>:
++                //   外层 = slot 索引 (1-6),内层 = 该 slot 的所有候选 variant。
++                // 我们只关心存在的(非空) slot,且每个 slot 取 first variant 即可
++                // (同一 slot 的所有 variant 都是同一消耗品类型)。
++                // 注:Rust 端 Ability.categories() 在新版本 WoWs GameParams 里 parser
++                // 返回空,所以走不通"取 consumable_type 枚举"那条路。退而求其次:
++                // 直接 dump 原始 ability_name(去重),由 Python 端按关键字模式识别。
++                // ability_name 格式形如 PCY009_CrashCrewPremium / PCY059_RegenCrewPremium /
++                // PCY016_AirDefenseDisp_/PCY010_RLSSearch_ / PCY013_SmokeGenerator 等。
++                let mut consumables: Vec<String> = Vec::new();
++                if let Some(slots) = v.abilities() {
++                    for slot in slots {
++                        if slot.is_empty() {
++                            continue;
++                        }
++                        let (ability_name, _variant_name) = &slot[0];
++                        if !consumables.contains(ability_name) {
++                            consumables.push(ability_name.clone());
++                        }
++                    }
++                }
++                (v.level() as i64, species.unwrap_or_else(|| "?".to_string()), consumables)
 +            }
-+            _ => (0i64, "?".to_string()),
++            _ => (0i64, "?".to_string(), Vec::new()),
 +        };
 +        let ship_index = vehicle_param.index().to_string();
 +        let ship_id = format!("{:?}", vehicle_param.id());
@@ -153,6 +175,7 @@ index bd80d52..e409037 100644
 +                "name": player.vehicle().name(),
 +                "level": level,
 +                "species": species_str,
++                "consumables": ship_consumables,
 +            },
 +            "stats": {
 +                "damage_dealt": damage,
@@ -209,6 +232,19 @@ index bd80d52..e409037 100644
 +        })
 +        .collect();
 +
++    // Per-event consumable activation log (user, consumable type, elapsed seconds).
++    let consumable_uses_json: Vec<_> = report
++        .consumable_uses()
++        .iter()
++        .map(|u| {
++            serde_json::json!({
++                "time_secs": u.time_secs,
++                "user_entity_id": format!("EntityId({})", u.user_entity_id),
++                "consumable_name": u.consumable_name,
++            })
++        })
++        .collect();
++
 +    let out_json = serde_json::json!({
 +        "match": {
 +            "map_name": report.map_name(),
@@ -228,6 +264,7 @@ index bd80d52..e409037 100644
 +        "players": players_json,
 +        "deaths": deaths_json,
 +        "damage_events": damage_events_json,
++        "consumable_uses": consumable_uses_json,
 +        "chat": chat_log,
 +    });
 +
@@ -242,20 +279,23 @@ index bd80d52..e409037 100644
 +    Ok(())
 +}
 diff --git a/crates/wows-replays/src/analyzer/battle_controller/controller.rs b/crates/wows-replays/src/analyzer/battle_controller/controller.rs
-index 98a527d..715e592 100644
+index 98a527d..35c4f6e 100644
 --- a/crates/wows-replays/src/analyzer/battle_controller/controller.rs
 +++ b/crates/wows-replays/src/analyzer/battle_controller/controller.rs
-@@ -447,6 +447,9 @@ pub struct BattleReport {
+@@ -447,6 +447,12 @@ pub struct BattleReport {
      played_duration: Option<f32>,
      /// Time between battle end and last recorded packet, in seconds.
      extra_duration: Option<f32>,
 +    /// Every damage event (drained from BattleController.damage_dealt at build time).
 +    /// time_secs is elapsed-from-battle-start so it matches DeathInfo.time_lived.
 +    damage_events: Vec<DamageEventOut>,
++    /// Every consumable activation observed in the replay (cumulative, not just active).
++    /// Lets downstream tooling count "how many times did player X use radar".
++    consumable_uses: Vec<ConsumableUseOut>,
  }
  
  impl BattleReport {
-@@ -454,6 +457,12 @@ impl BattleReport {
+@@ -454,6 +460,18 @@ impl BattleReport {
          &self.self_player
      }
  
@@ -265,10 +305,16 @@ index 98a527d..715e592 100644
 +        &self.damage_events
 +    }
 +
++    /// Every consumable activation observed in the replay (cumulative).
++    /// time_secs is seconds-since-battle-start.
++    pub fn consumable_uses(&self) -> &[ConsumableUseOut] {
++        &self.consumable_uses
++    }
++
      pub fn game_chat(&self) -> &[GameMessage] {
          self.game_chat.as_ref()
      }
-@@ -568,6 +577,22 @@ struct DamageEvent {
+@@ -568,6 +586,37 @@ struct DamageEvent {
      clock: GameClock,
  }
  
@@ -288,10 +334,43 @@ index 98a527d..715e592 100644
 +    pub amount: f32,
 +}
 +
++/// Serializable per-event consumable activation record exposed via
++/// BattleReport.consumable_uses(). Each Consumable packet in the replay produces
++/// one entry. Downstream tooling (战犯分析) uses this to detect "ship brought
++/// radar but never used it" kind of cases.
++#[derive(Serialize, Clone, Debug)]
++pub struct ConsumableUseOut {
++    /// Vehicle EntityId that activated the consumable (.raw() u32 form).
++    pub user_entity_id: u32,
++    /// Consumable variant name. Either the Debug name of the Known enum
++    /// (e.g. "Radar", "HydroacousticSearch") or the raw string for Unknown.
++    pub consumable_name: String,
++    /// Seconds elapsed since battle start.
++    pub time_secs: f32,
++}
++
  pub struct BattleController<'res, 'replay, G> {
      game_meta: &'replay ReplayMeta,
      game_resources: &'res G,
-@@ -1012,6 +1037,22 @@ where
+@@ -575,6 +624,9 @@ pub struct BattleController<'res, 'replay, G> {
+     player_entities: HashMap<EntityId, Rc<Player>>,
+     entities_by_id: HashMap<EntityId, Entity>,
+     damage_dealt: HashMap<EntityId, Vec<DamageEvent>>,
++    /// Cumulative consumable activations (every Consumable packet pushes one).
++    /// Independent of active_consumables which only tracks currently-active ones.
++    consumable_uses: Vec<ConsumableUseOut>,
+     frags: HashMap<EntityId, Vec<Death>>,
+     game_chat: Vec<GameMessage>,
+     version: Version,
+@@ -693,6 +745,7 @@ where
+             game_chat: Default::default(),
+             version: Version::from_client_exe(&game_meta.clientVersionFromExe),
+             damage_dealt: Default::default(),
++            consumable_uses: Vec::new(),
+             frags: Default::default(),
+             battle_results: Default::default(),
+             match_finished: false,
+@@ -1012,6 +1065,22 @@ where
              _ => None,
          };
  
@@ -314,11 +393,31 @@ index 98a527d..715e592 100644
          BattleReport {
              arena_id: self.arena_id,
              match_result: if self.match_finished {
-@@ -1049,6 +1090,7 @@ where
+@@ -1049,6 +1118,8 @@ where
              max_duration: self.game_meta.duration,
              played_duration,
              extra_duration,
 +            damage_events: damage_events_out,
++            consumable_uses: std::mem::take(&mut self.consumable_uses),
          }
      }
  
+@@ -3040,6 +3111,18 @@ where
+                 duration,
+                 usage_params,
+             } => {
++                // 累计历史 (downstream 战犯分析等用)
++                let name = match &consumable {
++                    wowsunpack::recognized::Recognized::Known(c) => format!("{:?}", c),
++                    wowsunpack::recognized::Recognized::Unknown(s) => s.to_string(),
++                };
++                let start_secs = self.battle_start_clock.map(|c| c.seconds()).unwrap_or(0.0);
++                self.consumable_uses.push(ConsumableUseOut {
++                    user_entity_id: entity.raw(),
++                    consumable_name: name,
++                    time_secs: packet.clock.seconds() - start_secs,
++                });
++
+                 self.active_consumables.entry(entity).or_default().push(ActiveConsumable {
+                     consumable,
+                     activated_at: packet.clock,
