@@ -43,11 +43,12 @@ def _empty_state() -> dict:
 
 def init(state_dir: str) -> None:
     """显式初始化:bot 启动时调一次。state_dir 通常 = WOWS_REPLAY_BASEDIR。
-    幂等;重复调只会重新读盘。"""
+    幂等;重复调只会重新读盘。会自动迁移旧的 analyze_toggle.json。"""
     global _state_path, _state, _loaded
     with _lock:
         _state_path = Path(state_dir) / _STATE_FILE_NAME
         _state_path.parent.mkdir(parents=True, exist_ok=True)
+        migrate_legacy(state_dir)   # 幂等;已迁移过会跳过
         _load()
         _loaded = True
 
@@ -77,6 +78,35 @@ def _save() -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(_state, f, ensure_ascii=False, indent=2)
     os.replace(tmp, _state_path)
+
+
+def migrate_legacy(state_dir: str | Path) -> bool:
+    """从 analyze_toggle.json 迁移到 toggle_state.json。
+    幂等:目标文件已存在或源文件不存在时返回 False,不动手。
+    成功迁移返回 True,旧文件改名 .bak 留底。"""
+    legacy = Path(state_dir) / _LEGACY_FILE_NAME
+    new = Path(state_dir) / _STATE_FILE_NAME
+    if new.exists() or not legacy.is_file():
+        return False
+    try:
+        old = json.loads(legacy.read_text("utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    state = _empty_state()
+    for key, val in old.items():
+        if ":" not in key:
+            continue
+        bucket_marker, ident = key.split(":", 1)
+        if bucket_marker == "g":
+            target = "groups"
+        elif bucket_marker == "u":
+            target = "private"
+        else:
+            continue
+        state[target].setdefault(ident, {})["分析"] = bool(val)
+    new.write_text(json.dumps(state, ensure_ascii=False, indent=2), "utf-8")
+    legacy.rename(legacy.parent / (legacy.name + ".bak"))
+    return True
 
 
 def scope_of(event: MessageEvent) -> Tuple[str, str]:

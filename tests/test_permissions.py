@@ -116,6 +116,47 @@ def test_unknown_feature_assertion():
     print("  unknown_feature_assertion PASS")
 
 
+def test_migrate_legacy():
+    perms = _reset_module()
+    with tempfile.TemporaryDirectory() as d:
+        legacy = Path(d) / "analyze_toggle.json"
+        legacy.write_text(json.dumps({
+            "g:111": True,
+            "g:222": False,
+            "u:333": True,
+            "garbage_key": True,  # 应该被跳过
+        }), "utf-8")
+        ok = perms.migrate_legacy(d)
+        assert ok is True
+        # 新文件出现
+        new = Path(d) / "toggle_state.json"
+        assert new.is_file()
+        data = json.loads(new.read_text("utf-8"))
+        assert data["groups"]["111"]["分析"] is True
+        assert data["groups"]["222"]["分析"] is False
+        assert data["private"]["333"]["分析"] is True
+        assert "garbage_key" not in data["groups"]
+        # 旧文件被改名
+        assert not legacy.exists()
+        assert (Path(d) / "analyze_toggle.json.bak").exists()
+        # 再迁一次是 no-op
+        assert perms.migrate_legacy(d) is False
+    print("  migrate_legacy PASS")
+
+
+def test_init_auto_migrates():
+    perms = _reset_module()
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "analyze_toggle.json").write_text(
+            json.dumps({"g:777": True}), "utf-8"
+        )
+        perms.init(d)
+        assert perms.feature_enabled("group", "777", "分析") is True
+        # 其他 feature 走 DEFAULT_ON
+        assert perms.feature_enabled("group", "777", "视频") is True
+    print("  init_auto_migrates PASS")
+
+
 if __name__ == "__main__":
     print("== test_permissions ==")
     test_default_state()
@@ -124,4 +165,6 @@ if __name__ == "__main__":
     test_is_super_admin()
     test_can_toggle_group_admin()
     test_unknown_feature_assertion()
+    test_migrate_legacy()
+    test_init_auto_migrates()
     print("== ALL PASS ==")
