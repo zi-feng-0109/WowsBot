@@ -7,7 +7,7 @@ import json
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # 让脚本能 import plugin/
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -15,7 +15,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 def _reset_module():
     """每个 case 起一次新 tempdir + 重导模块,避免单例污染。"""
-    import importlib
     if "plugin.permissions" in sys.modules:
         del sys.modules["plugin.permissions"]
     if "plugin" in sys.modules:
