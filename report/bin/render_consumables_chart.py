@@ -41,13 +41,17 @@ ABILITY_KEYWORD_TO_ENUM = [
     ("AirDefenseDisp",        "DefensiveAntiAircraft"),
     ("SmokeGenerator",        "Smoke"),
     ("SubmarineLocator",      "SubmarineSurveillance"),
-    ("CrashCrew",             "CrashCrew"),
-    ("RegenCrew",             "RegenCrew"),
+    ("CrashCrew",             "DamageControl"),
+    ("RegenCrew",             "RepairParty"),
     ("RepairParty",           "RepairParty"),
+    ("ArtilleryBooster",      "MainBatteryReloadBooster"),
+    ("TorpedoReloader",       "TorpedoReloadBooster"),
     ("SpeedBoosterPremium",   "SpeedBoost"),
     ("SpeedBooster",          "SpeedBoost"),
     ("ReserveBattery",        "ReserveBattery"),
     ("SubmarineSurveillance", "SubmarineSurveillance"),
+    ("FastDeepRudders",       "FastDeepRudders"),
+    ("SubmarineEnergyFreeze", "SubmarineEnergyFreeze"),
 ]
 
 
