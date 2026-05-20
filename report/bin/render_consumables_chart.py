@@ -28,33 +28,6 @@ SPECIES_CN = {
     "Submarine": "潜艇",
 }
 
-ABILITY_KEYWORD_TO_ENUM = [
-    ("RLSSearch",             "Radar"),
-    ("SonarSearch",           "HydroacousticSearch"),
-    ("Hydrophone",            "Hydrophone"),
-    ("PlaneTacticalFighters", "CatapultFighter"),
-    ("Fighter",               "CatapultFighter"),
-    ("ForsageBooster",        "SpeedBoost"),
-    ("ActiveManeuvering",     "EnhancedRudders"),
-    ("PlaneSmokeGenerator",   "PlaneSmokeGenerator"),
-    ("Spotter",               "SpottingAircraft"),
-    ("AirDefenseDisp",        "DefensiveAntiAircraft"),
-    ("SmokeGenerator",        "Smoke"),
-    ("SubmarineLocator",      "SubmarineSurveillance"),
-    ("CrashCrew",             "DamageControl"),
-    ("RegenCrew",             "RepairParty"),
-    ("RepairParty",           "RepairParty"),
-    ("ArtilleryBooster",      "MainBatteryReloadBooster"),
-    ("TorpedoReloader",       "TorpedoReloadBooster"),
-    ("SpeedBoosterPremium",   "SpeedBoost"),
-    ("SpeedBooster",          "SpeedBoost"),
-    ("ReserveBattery",        "ReserveBattery"),
-    ("SubmarineSurveillance", "SubmarineSurveillance"),
-    ("FastDeepRudders",       "FastDeepRudders"),
-    ("SubmarineEnergyFreeze", "SubmarineEnergyFreeze"),
-]
-
-
 W = 2200
 PAD = 16
 TITLE_H = 60
@@ -120,9 +93,17 @@ def num_consumables_of(slot_entry):
     return None
 
 
+def consumable_type_of(slot_entry):
+    """新 schema 的官方 enum (跟 consumable_uses.consumable_name 同源)。旧 schema 返回空。"""
+    if isinstance(slot_entry, dict):
+        return slot_entry.get("consumable_type") or ""
+    return ""
+
+
 def collect_slot_info(slot):
+    """返回 (display_name_str, total, consumable_type_set)。"""
     if not slot:
-        return ("", None, [])
+        return ("", None, set())
     names = [ability_name_of(e) for e in slot if ability_name_of(e)]
     displays = []
     for n in names:
@@ -130,21 +111,18 @@ def collect_slot_info(slot):
         if d not in displays:
             displays.append(d)
     total = num_consumables_of(slot[0])
-    return ("/".join(displays), total, names)
+    ctypes = {consumable_type_of(e) for e in slot if consumable_type_of(e)}
+    return ("/".join(displays), total, ctypes)
 
 
-def count_uses_for_ability(consumable_uses, user_eid, ability_name):
-    target_enum = None
-    for keyword, enum_name in ABILITY_KEYWORD_TO_ENUM:
-        if keyword in ability_name:
-            target_enum = enum_name
-            break
-    if target_enum is None:
+def count_uses_for_slot(consumable_uses, user_eid, ctypes):
+    """按 consumable_type 集合精确匹配 (slot 多 variant 任一被触发都算 slot 用过)。"""
+    if not ctypes:
         return 0
     return sum(
         1 for u in consumable_uses
         if strip_id(u.get("user_entity_id") or "") == user_eid
-        and u.get("consumable_name") == target_enum
+        and u.get("consumable_name") in ctypes
     )
 
 
@@ -175,10 +153,10 @@ def _draw_ship_row(draw, p, y, consumable_uses, fonts):
     ship = p.get("ship") or {}
     eid = strip_id(p.get("vehicle_entity_id") or "")
     for slot in ship.get("consumable_slots") or []:
-        disp, total, names = collect_slot_info(slot)
-        if not names:
+        disp, total, ctypes = collect_slot_info(slot)
+        if not disp:
             continue
-        used = max(count_uses_for_ability(consumable_uses, eid, n) for n in names)
+        used = count_uses_for_slot(consumable_uses, eid, ctypes)
         bg = cell_bg_color(used, total)
         cy = y + (ROW_H - CELL_H) // 2
         draw.rounded_rectangle(
