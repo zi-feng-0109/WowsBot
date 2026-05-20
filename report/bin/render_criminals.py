@@ -186,7 +186,13 @@ def strong_consumable_slots(consumable_slots):
     for slot in consumable_slots or []:
         slot_displays = []
         slot_enums = []
-        for ab_name in slot:
+        for entry in slot:
+            if isinstance(entry, dict):
+                ab_name = entry.get("ability_name", "")
+            else:
+                ab_name = entry
+            if not ab_name:
+                continue
             for keyword, enum_name in STRONG_CONSUMABLES:
                 if keyword in ab_name:
                     display = consumable_display(ab_name)
