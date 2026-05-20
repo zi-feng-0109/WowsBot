@@ -1,0 +1,158 @@
+# plugin/permissions.py
+"""权限模型 + 群级开关状态持久化。
+
+状态结构 (toggle_state.json):
+    {
+      "version": 1,
+      "global_blacklist": [],
+      "groups": {"<group_id>": {"视频": true, "战报": true, ...}},
+      "private": {"<user_id>": {"分析": true, ...}}
+    }
+
+唯一来源原则:bot 任何地方查/改开关都过本模块的函数,不要直接读 state 字典。
+"""
+import json
+import os
+import threading
+from pathlib import Path
+from typing import Tuple
+
+from nonebot import get_driver
+from nonebot.adapters.onebot.v11 import GroupMessageEvent, MessageEvent
+
+FEATURES = ["视频", "战报", "复盘", "分析"]
+DEFAULT_ON = True
+_STATE_VERSION = 1
+_LEGACY_FILE_NAME = "analyze_toggle.json"
+_STATE_FILE_NAME = "toggle_state.json"
+
+_lock = threading.RLock()
+_state: dict = {}
+_loaded = False
+_state_path: Path | None = None
+
+
+def _empty_state() -> dict:
+    return {
+        "version": _STATE_VERSION,
+        "global_blacklist": [],
+        "groups": {},
+        "private": {},
+    }
+
+
+def init(state_dir: str) -> None:
+    """显式初始化:bot 启动时调一次。state_dir 通常 = WOWS_REPLAY_BASEDIR。
+    幂等;重复调只会重新读盘。"""
+    global _state_path, _state, _loaded
+    with _lock:
+        _state_path = Path(state_dir) / _STATE_FILE_NAME
+        _state_path.parent.mkdir(parents=True, exist_ok=True)
+        _load()
+        _loaded = True
+
+
+def _load() -> None:
+    """从盘上读 state;不存在或损坏时用空 state。需在 _lock 内调用。"""
+    global _state
+    assert _state_path is not None, "permissions.init() not called"
+    if _state_path.is_file():
+        try:
+            with open(_state_path, "r", encoding="utf-8") as f:
+                _state = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            _state = _empty_state()
+    else:
+        _state = _empty_state()
+    # 兜底:旧文件可能字段缺失
+    for k in ("global_blacklist", "groups", "private"):
+        _state.setdefault(k, [] if k == "global_blacklist" else {})
+    _state.setdefault("version", _STATE_VERSION)
+
+
+def _save() -> None:
+    """原子写:tmp + rename。需在 _lock 内调用。"""
+    assert _state_path is not None
+    tmp = _state_path.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(_state, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, _state_path)
+
+
+def scope_of(event: MessageEvent) -> Tuple[str, str]:
+    """根据 event 返回 (scope, ident) — 群消息 -> ('group', group_id);否则 ('private', user_id)。"""
+    if isinstance(event, GroupMessageEvent):
+        return ("group", str(event.group_id))
+    return ("private", str(event.user_id))
+
+
+def _bucket_name(scope: str) -> str:
+    if scope == "group":
+        return "groups"
+    if scope == "private":
+        return "private"
+    raise ValueError(f"unknown scope: {scope}")
+
+
+def feature_enabled(scope: str, ident: str, feature: str) -> bool:
+    """权威开关查询:超管黑名单优先,然后查作用域开关,缺失走 DEFAULT_ON。"""
+    assert feature in FEATURES, f"unknown feature: {feature}"
+    with _lock:
+        if feature in _state["global_blacklist"]:
+            return False
+        bucket = _state[_bucket_name(scope)]
+        return bucket.get(str(ident), {}).get(feature, DEFAULT_ON)
+
+
+def set_feature(scope: str, ident: str, feature: str, value: bool) -> None:
+    """改作用域开关并落盘。不检查权限 — 调用方先用 can_toggle 鉴权。"""
+    assert feature in FEATURES, f"unknown feature: {feature}"
+    with _lock:
+        bucket = _state[_bucket_name(scope)]
+        bucket.setdefault(str(ident), {})[feature] = bool(value)
+        _save()
+
+
+def is_super_admin(user_id: str | int) -> bool:
+    """对照 NoneBot superusers 配置;每次现读,不缓存(便于热改 .env)。"""
+    return str(user_id) in get_driver().config.superusers
+
+
+def can_toggle(event: MessageEvent, scope_ident: str) -> bool:
+    """谁能改某作用域开关:超管全能;群管/群主能改本群;私聊只能改自己。"""
+    if is_super_admin(event.user_id):
+        return True
+    if isinstance(event, GroupMessageEvent):
+        return event.sender.role in ("owner", "admin")
+    return scope_ident == str(event.user_id)
+
+
+def super_admin_ban(feature: str) -> None:
+    """超管全局禁用 — 任何作用域都开不了。"""
+    assert feature in FEATURES
+    with _lock:
+        bl = set(_state["global_blacklist"])
+        bl.add(feature)
+        _state["global_blacklist"] = sorted(bl)
+        _save()
+
+
+def super_admin_unban(feature: str) -> None:
+    assert feature in FEATURES
+    with _lock:
+        bl = set(_state["global_blacklist"])
+        bl.discard(feature)
+        _state["global_blacklist"] = sorted(bl)
+        _save()
+
+
+def global_blacklist() -> list[str]:
+    """只读快照,UI/菜单用。"""
+    with _lock:
+        return list(_state["global_blacklist"])
+
+
+def snapshot() -> dict:
+    """整份状态的只读深拷贝 — 给 render_menu / /sa stats 用。"""
+    with _lock:
+        return json.loads(json.dumps(_state))
