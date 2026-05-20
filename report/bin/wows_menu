@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""wows_menu — bot 调用入口,生成菜单 PNG。
+
+用法:
+    wows_menu <out.png> [--scope group --ident 123456] [--super] [--state-json path]
+
+直接 forward 到 render_menu.py。存在的目的是统一 bin/ 入口风格 (类比 wows_report)。
+"""
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+BOT_HOME = Path(__file__).resolve().parent.parent
+RENDER_PY = BOT_HOME / "bin" / "render_menu.py"
+
+
+def find_python() -> str:
+    override = os.environ.get("WOWS_PYTHON")
+    if override:
+        return override
+    venv = os.environ.get("WOWS_PY_VENV") or str(BOT_HOME / "venv")
+    candidate = Path(venv) / "bin" / "python"
+    if candidate.exists():
+        return str(candidate)
+    return "python3"
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("usage: wows_menu <out.png> [--scope group --ident <id>] [--super] [--state-json <path>]",
+              file=sys.stderr)
+        sys.exit(2)
+    py = find_python()
+    res = subprocess.run([py, str(RENDER_PY)] + sys.argv[1:])
+    sys.exit(res.returncode)
+
+
+if __name__ == "__main__":
+    main()
