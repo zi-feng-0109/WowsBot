@@ -117,23 +117,31 @@ def _draw_status_dot(draw: ImageDraw.ImageDraw, x: int, y: int,
     x0, x1 = x - pill_w // 2, x + pill_w // 2
     y0, y1 = y - pill_h // 2, y + pill_h // 2
 
+    f_pill = _font(MONO_FONT, 12)
+    label = "ON" if status == "on" else "OFF"
+    label_w = int(f_pill.getlength(label))
+    text_pad = 4   # 文本与 knob / pill 边的间隙
+
     if status == "on":
         bg = GAME_GREEN
         knob_cx = x1 - knob_r - inset
-        label = "ON"
-        label_x = x0 + 10
-    else:  # off
-        bg = (130, 145, 165)   # iOS 风灰色 off,在亮蓝底上仍易区分
+        # 文字在 knob 左侧空白区居中
+        text_area_l = x0 + text_pad
+        text_area_r = knob_cx - knob_r - text_pad
+    else:
+        bg = (130, 145, 165)
         knob_cx = x0 + knob_r + inset
-        label = "OFF"
-        label_x = x - 4
+        # 文字在 knob 右侧空白区居中
+        text_area_l = knob_cx + knob_r + text_pad
+        text_area_r = x1 - text_pad
+
+    label_x = (text_area_l + text_area_r - label_w) // 2
 
     draw.rounded_rectangle([x0, y0, x1, y1], radius=pill_h // 2, fill=bg)
     draw.ellipse(
         [knob_cx - knob_r, y - knob_r, knob_cx + knob_r, y + knob_r],
         fill=(248, 248, 250),
     )
-    f_pill = _font(MONO_FONT, 12)
     draw.text((label_x, y - 7), label, fill=(255, 255, 255), font=f_pill)
 
 
