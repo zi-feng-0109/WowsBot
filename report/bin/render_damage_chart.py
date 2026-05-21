@@ -298,7 +298,7 @@ def render(json_path: str, out_path: str):
     skip_header = os.environ.get("WOWS_SKIP_HEADER") == "1"
     skip_footer = os.environ.get("WOWS_SKIP_FOOTER") == "1"
     header_h = 0 if skip_header else 110
-    footer_h = 0 if skip_footer else 32
+    footer_h = 0 if skip_footer else 48
     pie_h = 580
     pad = 20
 
@@ -440,24 +440,30 @@ def render(json_path: str, out_path: str):
             draw.text((ax + 4, ay + bh + 4), label, GAME_TEXT, f_ribbon_label)
 
     if not skip_footer:
-        _draw_footer(draw, pad, H - footer_h + 10)
+        _draw_footer(draw, 0, H - footer_h, W, footer_h)
 
     img.save(out_path)
     print(f"saved: {out_path}", file=sys.stderr)
 
 
-def _draw_footer(draw, x, y):
-    """底部一行作者+版本+时间。"""
+def _draw_footer(draw, x, y, w, h):
+    """底部 footer 条:panel 背景 + 金色顶边 + 居中文本。"""
     import datetime
+    draw.rectangle([x, y, x + w, y + h], fill=GAME_PANEL)
+    draw.line([x, y, x + w, y], fill=GAME_GOLD, width=2)
+
     bot_ver = os.environ.get("WOWS_BOT_VERSION", "")
     parts = ["本图由 EssexBot 渲染"]
     if bot_ver:
         parts.append(bot_ver)
     parts.append("作者 [NUIST]___Ciallo___")
     parts.append(datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
-    text = "  ·  ".join(parts)
-    f_foot = ImageFont.truetype(CJK_FONT, 13)
-    draw.text((x, y), text, fill=GAME_DIM, font=f_foot)
+    text = "    ·    ".join(parts)
+    f_foot = ImageFont.truetype(CJK_FONT, 18)
+    tw = int(f_foot.getlength(text))
+    tx = x + (w - tw) // 2
+    ty = y + (h - 22) // 2
+    draw.text((tx, ty), text, fill=GAME_TEXT, font=f_foot)
 
 
 def main():
