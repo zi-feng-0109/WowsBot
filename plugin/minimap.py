@@ -62,36 +62,38 @@ async def _init_permissions():
         raise
 
 
-# ====== /分析 指令 =============================================================
+# ====== 4-feature toggle 命令 (视频/战报/复盘/分析) =====================
+# 全部走 permissions 模块;命令处理器同构,一次注册。
 
-analyze_cmd = on_command("分析", priority=5, block=True)
+def _make_toggle_handler(feature: str):
+    """工厂:为某个 feature 生成一个处理器闭包。
+    捕获 feature 进闭包,避免 for-loop late binding。"""
+    cmd = on_command(feature, priority=5, block=True)
 
+    @cmd.handle()
+    async def handler(event: Event, args: Message = CommandArg()):
+        action = args.extract_plain_text().strip()
+        scope, ident = permissions.scope_of(event)
 
-@analyze_cmd.handle()
-async def handle_analyze_cmd(bot: Bot, event: Event, args: Message = CommandArg()):
-    arg = args.extract_plain_text().strip()
-    scope, ident = permissions.scope_of(event)
-
-    if arg in ("开", "on", "enable", "开启"):
+        if action in ("", "状态", "status"):
+            on = permissions.feature_enabled(scope, ident, feature)
+            await cmd.finish(f"{feature}: {'开' if on else '关'}\n"
+                             f"用法: /{feature} 开|关|状态")
+        if action not in ("开", "关", "on", "off", "开启", "关闭"):
+            await cmd.finish(f"用法: /{feature} 开|关|状态")
         if not permissions.can_toggle(event, ident):
-            await analyze_cmd.finish("仅群主 / 管理员 / 超管可以改本群开关")
-        if "分析" in permissions.global_blacklist():
-            await analyze_cmd.finish("分析 已被超管全局禁用,无法本群启用")
-        permissions.set_feature(scope, ident, "分析", True)
-        await analyze_cmd.finish("✅ 战报分析已开启,后续每份 replay 都会附带 LLM 复盘文本。")
-    elif arg in ("关", "off", "disable", "关闭"):
-        if not permissions.can_toggle(event, ident):
-            await analyze_cmd.finish("仅群主 / 管理员 / 超管可以改本群开关")
-        permissions.set_feature(scope, ident, "分析", False)
-        await analyze_cmd.finish("已关闭战报分析。MP4 + 战报图正常发,不再调 LLM。")
-    elif arg in ("", "状态", "status"):
-        on = permissions.feature_enabled(scope, ident, "分析")
-        await analyze_cmd.finish(
-            f"当前分析: {'开启' if on else '关闭'}\n"
-            f"用法: /分析 开 | /分析 关 | /分析 状态"
-        )
-    else:
-        await analyze_cmd.finish("用法: /分析 开 | /分析 关 | /分析 状态")
+            await cmd.finish("仅群主 / 管理员 / 超管可以改本群开关")
+        want_on = action in ("开", "on", "开启")
+        if want_on and feature in permissions.global_blacklist():
+            await cmd.finish(f"{feature} 已被超管全局禁用,无法本群启用")
+        permissions.set_feature(scope, ident, feature, want_on)
+        await cmd.finish(f"{feature}: {'开' if want_on else '关'}")
+
+    return cmd
+
+
+for _feat in permissions.FEATURES:
+    _make_toggle_handler(_feat)
 
 
 @replay_handler.handle()
