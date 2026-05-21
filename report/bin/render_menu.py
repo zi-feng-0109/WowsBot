@@ -121,12 +121,35 @@ def _draw_status_dot(draw: ImageDraw.ImageDraw, x: int, y: int,
 
 
 def _feature_status(state: dict, scope: str, ident: str, feature: str) -> str:
-    if feature in state.get("global_blacklist", []):
-        return "banned"
+    """本群/本会话的实际开关 (开/关),不考虑超管黑名单。
+    黑名单状态由 _super_status 单独显示。"""
     bucket = state["groups" if scope == "group" else "private"]
     default = DEFAULT_ENABLED.get(feature, True)
     val = bucket.get(str(ident), {}).get(feature, default)
     return "on" if val else "off"
+
+
+def _super_status(state: dict, feature: str) -> str:
+    """超管全局状态: enabled / banned。"""
+    return "banned" if feature in state.get("global_blacklist", []) else "enabled"
+
+
+def _draw_super_indicator(draw, x, y, status, f_label):
+    """画"全局: 启用 / 禁用"小标记。位置 x = 文本起始。"""
+    if status == "banned":
+        # 红色 ✕ + 全局禁用
+        d = 6
+        cy = y + 8
+        draw.line([(x, cy - d), (x + d * 2, cy + d)], fill=GAME_RED, width=2)
+        draw.line([(x, cy + d), (x + d * 2, cy - d)], fill=GAME_RED, width=2)
+        draw.text((x + d * 2 + 6, y), "全局禁用", GAME_RED, f_label)
+    else:
+        # 绿色 ✓ + 全局启用
+        d = 6
+        cy = y + 8
+        draw.line([(x, cy + 2), (x + d, cy + d + 2)], fill=GAME_GREEN, width=2)
+        draw.line([(x + d, cy + d + 2), (x + d * 2 + 2, cy - d)], fill=GAME_GREEN, width=2)
+        draw.text((x + d * 2 + 8, y), "全局启用", GAME_DIM, f_label)
 
 
 def render_menu_png(out_path: str, *, scope: str, ident: str,
@@ -149,7 +172,7 @@ def render_menu_png(out_path: str, *, scope: str, ident: str,
 
     height = (
         HEADER_H + PAD
-        + 30 + n_features * ROW_H + SECTION_GAP                  # 当前功能
+        + 30 + 22 + n_features * ROW_H + SECTION_GAP             # 当前功能 (含列头 22px)
         + 30 + 2 * ROW_H + SECTION_GAP                           # 使用方法
         + 30 + 22 + (4 if sa_visible else 3) * 28 + SECTION_GAP  # 全部指令 (含表头 22px)
         + 30 + max(1, n_planned) * 24 + SECTION_GAP              # 规划中
@@ -168,18 +191,34 @@ def render_menu_png(out_path: str, *, scope: str, ident: str,
 
     # ----- 当前功能 -----
     draw.text((PAD, y), "【当前功能】", GAME_TEXT, f_section); y += 30
-    name_x, desc_x, cmd_x, dot_x = PAD + 12, PAD + 110, PAD + 360, W - PAD - 80
+    name_x  = PAD + 12
+    desc_x  = PAD + 110
+    cmd_x   = PAD + 360
+    super_x = PAD + 700   # 超管全局状态列
+    dot_x   = W - PAD - 80
+    # 列头
+    draw.text((name_x,  y + 4), "功能", GAME_DIM, f_desc)
+    draw.text((desc_x,  y + 4), "说明", GAME_DIM, f_desc)
+    draw.text((cmd_x,   y + 4), "指令", GAME_DIM, f_desc)
+    draw.text((super_x, y + 4), "超管", GAME_DIM, f_desc)
+    draw.text((dot_x - 4, y + 4), "本群", GAME_DIM, f_desc)
+    y += 22
     for feat in FEATURES:
-        status = _feature_status(state_snapshot, scope, ident, feat)
+        super_st = _super_status(state_snapshot, feat)
+        toggle_st = _feature_status(state_snapshot, scope, ident, feat)
         draw.rectangle([PAD, y, W - PAD, y + ROW_H - 2], fill=GAME_PANEL_ALT)
         draw.text((name_x, y + 10), feat, GAME_TEXT, f_row)
         draw.text((desc_x, y + 12), FEATURE_DESC[feat], GAME_DIM, f_desc)
-        if status == "banned":
+        if super_st == "banned":
+            # 全局禁用时命令列改红字提示, 跟"全局禁用"标记呼应
             draw.text((cmd_x, y + 12), "本功能暂时关闭", GAME_RED, f_desc)
         else:
             _draw_mixed(draw, (cmd_x, y + 10), f"/{feat} 开|关|状态",
                         GAME_TEXT, f_mono, f_desc)
-        _draw_status_dot(draw, dot_x, y + ROW_H // 2, status)
+        # 中间: 超管全局状态 (✓ 启用 / ✕ 禁用)
+        _draw_super_indicator(draw, super_x, y + 12, super_st, f_desc)
+        # 右边: 本群/本会话 toggle (开/关)
+        _draw_status_dot(draw, dot_x, y + ROW_H // 2, toggle_st)
         y += ROW_H
     y += SECTION_GAP
 
