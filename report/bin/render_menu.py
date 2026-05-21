@@ -53,6 +53,44 @@ def _font(path, size):
     return ImageFont.truetype(path, size)
 
 
+def _is_cjk(ch: str) -> bool:
+    cp = ord(ch)
+    return (
+        0x3000 <= cp <= 0x303F or       # CJK Symbols and Punctuation
+        0x3040 <= cp <= 0x30FF or       # Hiragana + Katakana
+        0x3400 <= cp <= 0x4DBF or       # CJK Extension A
+        0x4E00 <= cp <= 0x9FFF or       # CJK Unified Ideographs
+        0xF900 <= cp <= 0xFAFF or       # CJK Compatibility Ideographs
+        0xFF00 <= cp <= 0xFFEF          # Halfwidth & Fullwidth Forms
+    )
+
+
+def _draw_mixed(draw, xy, text, fill, mono_font, cjk_font):
+    """ASCII 段用 mono_font, CJK 段用 cjk_font, 水平依次画。
+    解决 Menlo / DejaVuSansMono 缺 CJK 字形导致的方框 (tofu) 问题。
+    若 mono_font 与 cjk_font 相同 (MONO_FONT fallback 到 CJK_FONT),
+    行为等价于一次性 draw.text(),没有任何视觉差。"""
+    if not text:
+        return
+    x, y = xy
+    runs: list[tuple[str, bool]] = []
+    buf = [text[0]]
+    cur = _is_cjk(text[0])
+    for ch in text[1:]:
+        new = _is_cjk(ch)
+        if new == cur:
+            buf.append(ch)
+        else:
+            runs.append(("".join(buf), cur))
+            buf = [ch]
+            cur = new
+    runs.append(("".join(buf), cur))
+    for s, is_cjk in runs:
+        f = cjk_font if is_cjk else mono_font
+        draw.text((x, y), s, fill=fill, font=f)
+        x += int(f.getlength(s))
+
+
 def _draw_status_dot(draw: ImageDraw.ImageDraw, x: int, y: int,
                      status: str) -> None:
     """status ∈ {'on', 'off', 'banned'} — 画 ●开 / ○关 / ✕禁。"""
@@ -123,7 +161,8 @@ def render_menu_png(out_path: str, *, scope: str, ident: str,
         draw.rectangle([PAD, y, W - PAD, y + ROW_H - 2], fill=GAME_PANEL_ALT)
         draw.text((name_x, y + 10), feat, GAME_TEXT, f_row)
         draw.text((desc_x, y + 12), FEATURE_DESC[feat], GAME_DIM, f_desc)
-        draw.text((cmd_x,  y + 10), f"/{feat} 开|关|状态", GAME_TEXT, f_mono)
+        _draw_mixed(draw, (cmd_x, y + 10), f"/{feat} 开|关|状态",
+                    GAME_TEXT, f_mono, f_desc)
         status = _feature_status(state_snapshot, scope, ident, feat)
         _draw_status_dot(draw, dot_x, y + ROW_H // 2, status)
         y += ROW_H
@@ -145,7 +184,7 @@ def render_menu_png(out_path: str, *, scope: str, ident: str,
     if sa_visible:
         cmds.append(("/sa ban|unban <功能>", "超管:全局禁/解禁"))
     for cmd, desc in cmds:
-        draw.text((PAD + 12, y), cmd, GAME_TEXT, f_mono)
+        _draw_mixed(draw, (PAD + 12, y), cmd, GAME_TEXT, f_mono, f_desc)
         draw.text((PAD + 320, y), desc, GAME_DIM, f_row)
         y += 28
     y += SECTION_GAP
