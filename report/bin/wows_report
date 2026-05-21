@@ -32,6 +32,8 @@ BOT_HOME = Path(__file__).resolve().parent.parent
 
 REPLAYSHARK = os.environ.get("WOWS_REPLAYSHARK", str(BOT_HOME / "replayshark"))
 SPECS_DIR   = os.environ.get("WOWS_SPECS_DIR",   str(BOT_HOME / "specs"))
+CONSTANTS_JSON = os.environ.get("WOWS_CONSTANTS_JSON",
+                                 str(BOT_HOME / "data" / "constants.json"))
 RENDER_PY   = os.environ.get("WOWS_RENDER_PY",   str(BOT_HOME / "bin" / "render_battle_report.py"))
 DEFAULT_OUT_DIR = os.environ.get("WOWS_OUT_DIR", "/tmp/wows_report")
 
@@ -144,11 +146,11 @@ def main():
 
     try:
         log(f"[1/2] parsing replay with replayshark (specs: {specs_dir}) ...")
-        subprocess.run(
-            [REPLAYSHARK, "-e", str(specs_dir), "battle-report",
-             str(replay), "-o", str(json_path)],
-            check=True, stdout=sys.stderr,
-        )
+        cmd = [REPLAYSHARK, "-e", str(specs_dir)]
+        if Path(CONSTANTS_JSON).is_file():
+            cmd += ["-c", CONSTANTS_JSON]
+        cmd += ["battle-report", str(replay), "-o", str(json_path)]
+        subprocess.run(cmd, check=True, stdout=sys.stderr)
 
         log("[2/2] rendering PNG ...")
         py = find_python()

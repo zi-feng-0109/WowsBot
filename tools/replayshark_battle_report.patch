@@ -1,5 +1,5 @@
 diff --git a/crates/replayshark/src/main.rs b/crates/replayshark/src/main.rs
-index bd80d52..d9070a7 100644
+index bd80d52..97bb8af 100644
 --- a/crates/replayshark/src/main.rs
 +++ b/crates/replayshark/src/main.rs
 @@ -62,6 +62,22 @@ enum Commands {
@@ -38,7 +38,7 @@ index bd80d52..d9070a7 100644
          Commands::Chat { replay } => {
              parse_replay(&replay, game_dir, extracted, |meta| {
                  wows_replays::analyzer::chat::ChatLoggerBuilder::new().build(meta)
-@@ -736,3 +758,370 @@ fn main() {
+@@ -736,3 +758,388 @@ fn main() {
          }
      }
  }
@@ -376,6 +376,23 @@ index bd80d52..d9070a7 100644
 +        })
 +        .collect();
 +
++    // Per-event CV plane consumable activation log. Only the recording player's
++    // CV produces entries (Avatar single-cast); downstream tools should treat
++    // absence-of-data as "unknown" for non-self CVs, not as "0 uses".
++    let squadron_consumable_uses_json: Vec<_> = report
++        .squadron_consumable_uses()
++        .iter()
++        .map(|u| {
++            serde_json::json!({
++                "time_secs": u.time_secs,
++                "avatar_entity_id": format!("EntityId({})", u.avatar_entity_id),
++                "owner_entity_id": format!("EntityId({})", u.owner_entity_id),
++                "squadron_id": u.squadron_id,
++                "consumable_name": u.consumable_name,
++            })
++        })
++        .collect();
++
 +    let out_json = serde_json::json!({
 +        "match": {
 +            "map_name": report.map_name(),
@@ -396,6 +413,7 @@ index bd80d52..d9070a7 100644
 +        "deaths": deaths_json,
 +        "damage_events": damage_events_json,
 +        "consumable_uses": consumable_uses_json,
++        "squadron_consumable_uses": squadron_consumable_uses_json,
 +        "chat": chat_log,
 +    });
 +
@@ -410,10 +428,10 @@ index bd80d52..d9070a7 100644
 +    Ok(())
 +}
 diff --git a/crates/wows-replays/src/analyzer/battle_controller/controller.rs b/crates/wows-replays/src/analyzer/battle_controller/controller.rs
-index 98a527d..35c4f6e 100644
+index 98a527d..12c9f68 100644
 --- a/crates/wows-replays/src/analyzer/battle_controller/controller.rs
 +++ b/crates/wows-replays/src/analyzer/battle_controller/controller.rs
-@@ -447,6 +447,12 @@ pub struct BattleReport {
+@@ -447,6 +447,15 @@ pub struct BattleReport {
      played_duration: Option<f32>,
      /// Time between battle end and last recorded packet, in seconds.
      extra_duration: Option<f32>,
@@ -423,10 +441,13 @@ index 98a527d..35c4f6e 100644
 +    /// Every consumable activation observed in the replay (cumulative, not just active).
 +    /// Lets downstream tooling count "how many times did player X use radar".
 +    consumable_uses: Vec<ConsumableUseOut>,
++    /// Squadron (plane-level) consumable activations. Only contains the recording
++    /// player's own CV usage — Avatar ClientMethods don't broadcast.
++    squadron_consumable_uses: Vec<SquadronConsumableUseOut>,
  }
  
  impl BattleReport {
-@@ -454,6 +460,18 @@ impl BattleReport {
+@@ -454,6 +463,24 @@ impl BattleReport {
          &self.self_player
      }
  
@@ -442,10 +463,16 @@ index 98a527d..35c4f6e 100644
 +        &self.consumable_uses
 +    }
 +
++    /// Per-event CV-plane consumable activations. Only the recording player's
++    /// CV will produce entries — Avatar ClientMethods are not broadcast.
++    pub fn squadron_consumable_uses(&self) -> &[SquadronConsumableUseOut] {
++        &self.squadron_consumable_uses
++    }
++
      pub fn game_chat(&self) -> &[GameMessage] {
          self.game_chat.as_ref()
      }
-@@ -568,6 +586,37 @@ struct DamageEvent {
+@@ -568,6 +595,55 @@ struct DamageEvent {
      clock: GameClock,
  }
  
@@ -480,28 +507,50 @@ index 98a527d..35c4f6e 100644
 +    pub time_secs: f32,
 +}
 +
++/// Plane-level (CV squadron) consumable activation record. Only emitted for the
++/// recording player's avatar — Avatar ClientMethods are single-cast.
++#[derive(Serialize, Clone, Debug)]
++pub struct SquadronConsumableUseOut {
++    /// Avatar EntityId that fired the method (= recording player; .raw() u32 form).
++    pub avatar_entity_id: u32,
++    /// Squadron id (raw u64).
++    pub squadron_id: u64,
++    /// CV ship Vehicle EntityId, extracted from squadron_id low 32 bits.
++    /// (PlaneId encoding: high 32 = squadron handle, low 32 = owner vehicle EID.)
++    /// Always == self CV's vehicle id in practice; included for downstream convenience.
++    pub owner_entity_id: u32,
++    /// Consumable variant name (Debug form of Known enum, or raw string for Unknown).
++    pub consumable_name: String,
++    /// Seconds elapsed since battle start.
++    pub time_secs: f32,
++}
++
  pub struct BattleController<'res, 'replay, G> {
      game_meta: &'replay ReplayMeta,
      game_resources: &'res G,
-@@ -575,6 +624,9 @@ pub struct BattleController<'res, 'replay, G> {
+@@ -575,6 +651,12 @@ pub struct BattleController<'res, 'replay, G> {
      player_entities: HashMap<EntityId, Rc<Player>>,
      entities_by_id: HashMap<EntityId, Entity>,
      damage_dealt: HashMap<EntityId, Vec<DamageEvent>>,
 +    /// Cumulative consumable activations (every Consumable packet pushes one).
 +    /// Independent of active_consumables which only tracks currently-active ones.
 +    consumable_uses: Vec<ConsumableUseOut>,
++    /// Cumulative plane-level (CV squadron) consumable activations. Only the
++    /// recording player's own avatar fires these (Avatar ClientMethod single-cast).
++    squadron_consumable_uses: Vec<SquadronConsumableUseOut>,
      frags: HashMap<EntityId, Vec<Death>>,
      game_chat: Vec<GameMessage>,
      version: Version,
-@@ -693,6 +745,7 @@ where
+@@ -693,6 +775,8 @@ where
              game_chat: Default::default(),
              version: Version::from_client_exe(&game_meta.clientVersionFromExe),
              damage_dealt: Default::default(),
 +            consumable_uses: Vec::new(),
++            squadron_consumable_uses: Vec::new(),
              frags: Default::default(),
              battle_results: Default::default(),
              match_finished: false,
-@@ -1012,6 +1065,22 @@ where
+@@ -1012,6 +1096,22 @@ where
              _ => None,
          };
  
@@ -524,16 +573,17 @@ index 98a527d..35c4f6e 100644
          BattleReport {
              arena_id: self.arena_id,
              match_result: if self.match_finished {
-@@ -1049,6 +1118,8 @@ where
+@@ -1049,6 +1149,9 @@ where
              max_duration: self.game_meta.duration,
              played_duration,
              extra_duration,
 +            damage_events: damage_events_out,
 +            consumable_uses: std::mem::take(&mut self.consumable_uses),
++            squadron_consumable_uses: std::mem::take(&mut self.squadron_consumable_uses),
          }
      }
  
-@@ -3040,6 +3111,18 @@ where
+@@ -3040,6 +3143,18 @@ where
                  duration,
                  usage_params,
              } => {
@@ -552,6 +602,115 @@ index 98a527d..35c4f6e 100644
                  self.active_consumables.entry(entity).or_default().push(ActiveConsumable {
                      consumable,
                      activated_at: packet.clock,
+@@ -3047,6 +3162,27 @@ where
+                     usage_params,
+                 });
+             }
++            crate::analyzer::decoder::DecodedPacketPayload::SquadronConsumable {
++                entity,
++                squadron_id,
++                consumable,
++                usage_params: _,
++            } => {
++                // Avatar single-cast — only the recording player's CV produces these.
++                // Stored for 战犯分析: "did this CV deploy plane consumables at all".
++                let name = match &consumable {
++                    wowsunpack::recognized::Recognized::Known(c) => format!("{:?}", c),
++                    wowsunpack::recognized::Recognized::Unknown(s) => s.to_string(),
++                };
++                let start_secs = self.battle_start_clock.map(|c| c.seconds()).unwrap_or(0.0);
++                self.squadron_consumable_uses.push(SquadronConsumableUseOut {
++                    avatar_entity_id: entity.raw(),
++                    squadron_id: squadron_id.raw(),
++                    owner_entity_id: squadron_id.owner_id().raw(),
++                    consumable_name: name,
++                    time_secs: packet.clock.seconds() - start_secs,
++                });
++            }
+             crate::analyzer::decoder::DecodedPacketPayload::ArtilleryShots { avatar_id, salvos } => {
+                 if self.track_shots {
+                     for salvo in salvos {
+diff --git a/crates/wows-replays/src/analyzer/decoder/decode.rs b/crates/wows-replays/src/analyzer/decoder/decode.rs
+index 95f4292..1b9d52d 100644
+--- a/crates/wows-replays/src/analyzer/decoder/decode.rs
++++ b/crates/wows-replays/src/analyzer/decoder/decode.rs
+@@ -1040,6 +1040,20 @@ pub enum DecodedPacketPayload<'replay, 'argtype, 'rawpacket> {
+         /// `None` for pre-15.2 replays.
+         usage_params: Option<ConsumableUsageParams>,
+     },
++    /// Sent when a CV's airborne squadron activates a plane-level consumable
++    /// (planeTacticalFighters, planeSmokeGenerator, forsageBooster, activeManeuvering).
++    /// This is an Avatar ClientMethod — only fires on the recording player's avatar,
++    /// so non-self CVs cannot be tracked this way.
++    SquadronConsumable {
++        /// The Avatar EntityId on which the method fired (= recording player).
++        entity: EntityId,
++        /// Squadron (PlaneId) that activated it.
++        squadron_id: PlaneId,
++        /// The consumable
++        consumable: Recognized<Consumable>,
++        /// Usage parameters (15.2+ blob). `None` if blob malformed.
++        usage_params: Option<ConsumableUsageParams>,
++    },
+     /// Indicates a change to the "cruise state," which is the fixed settings for various controls
+     /// such as steering (using the Q & E keys), throttle, and dive planes.
+     CruiseState {
+@@ -1987,6 +2001,55 @@ where
+             };
+ 
+             DecodedPacketPayload::Consumable { entity: *entity_id, consumable, duration, usage_params }
++        } else if *method == "squadronConsumableUsed" {
++            // Avatar ClientMethod. args: [squadronID (u64), consumableUsageParams (Blob)].
++            // No duration field. Always uses the 15.2+ blob format.
++            let squadron_id: PlaneId = match &args[0] {
++                ArgValue::Uint64(v) => PlaneId::from(*v),
++                ArgValue::Int64(v) => PlaneId::from(*v),
++                ArgValue::Uint32(v) => PlaneId::from(*v as u64),
++                ArgValue::Int32(v) => PlaneId::from(*v as i64),
++                _ => return DecodedPacketPayload::EntityMethod(packet),
++            };
++            let (raw_consumable, usage_params): (i32, Option<ConsumableUsageParams>) = match &args[1] {
++                ArgValue::Blob(b) => match b.first().copied() {
++                    Some(0) => (0, Some(ConsumableUsageParams::None)),
++                    Some(1) if b.len() >= 2 => (b[1] as i32, Some(ConsumableUsageParams::Default)),
++                    Some(2) if b.len() >= 10 => {
++                        let x = f32::from_le_bytes([b[2], b[3], b[4], b[5]]);
++                        let z = f32::from_le_bytes([b[6], b[7], b[8], b[9]]);
++                        (b[1] as i32, Some(ConsumableUsageParams::Position(WorldPos2D { x, z })))
++                    }
++                    Some(3) if b.len() >= 11 => {
++                        let target_type = b[2] as i8;
++                        let target_id = u64::from_le_bytes([b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10]]);
++                        (b[1] as i32, Some(ConsumableUsageParams::Entity { target_type, target_id }))
++                    }
++                    other => {
++                        error!("squadronConsumableUsed: unexpected blob: {:?}", other);
++                        return DecodedPacketPayload::EntityMethod(packet);
++                    }
++                },
++                other => {
++                    error!("squadronConsumableUsed: expected Blob arg, got: {:?}", other);
++                    return DecodedPacketPayload::EntityMethod(packet);
++                }
++            };
++            let consumable = if let Some(c) = Consumable::from_id(raw_consumable, common_constants, *version) {
++                c
++            } else if audit {
++                return DecodedPacketPayload::Audit(format!(
++                    "squadronConsumableUsed({},{})", entity_id, raw_consumable
++                ));
++            } else {
++                Recognized::Unknown(format!("{}", raw_consumable))
++            };
++            DecodedPacketPayload::SquadronConsumable {
++                entity: *entity_id,
++                squadron_id,
++                consumable,
++                usage_params,
++            }
+         } else if *method == "receiveArtilleryShots" {
+             let salvos_array = match &args[0] {
+                 ArgValue::Array(a) => a,
 diff --git a/crates/wowsunpack/src/game_params/provider.rs b/crates/wowsunpack/src/game_params/provider.rs
 index f612b04..363c3ce 100644
 --- a/crates/wowsunpack/src/game_params/provider.rs

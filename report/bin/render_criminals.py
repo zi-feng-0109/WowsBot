@@ -92,19 +92,25 @@ CONSUMABLE_LOW_USES_THRESHOLD = 1   # 全场使用 <=1 次 = 严重不开消耗�
 # 拿到的是 WG 官方游戏内名(比如带 I/II/III 罗马数字, 或"短程对海搜索"等变体)。
 STRONG_CONSUMABLES = [
     # (ability_name 关键字, consumable_uses enum 名)
+    # 只列 Vehicle.onConsumableUsed 广播的舰船消耗品 (所有玩家都能可靠捕获)。
     ("RLSSearch",             "Radar"),
     ("SonarSearch",           "HydroacousticSearch"),
     ("Hydrophone",            "Hydrophone"),
-    ("Fighter",               "CatapultFighter"),
-    # --- CV 飞机级消耗品(从 Vehicle.plane_refs 链路下游) ---
-    ("PlaneTacticalFighters", "CatapultFighter"),       # 飞机自带的战斗机覆盖
-    ("ForsageBooster",        "SpeedBoost"),            # 飞机引擎散热(避免过热)
-    ("ActiveManeuvering",     "EnhancedRudders"),       # 跳炸/鱼雷机的机动调整
-    ("PlaneSmokeGenerator",   "PlaneSmokeGenerator"),   # 飞机喷烟自掩护
-    ("Spotter",               "SpottingAircraft"),
+    ("Fighter",               "CatapultFighter"),       # 弹射巡逻战斗机 (航战/航巡/航驱)
+    ("Spotter",               "SpottingAircraft"),       # 弹射侦察机
     ("AirDefenseDisp",        "DefensiveAntiAircraft"),
-    ("SmokeGenerator",        "Smoke"),
+    ("SmokeGenerator",        "Smoke"),                  # 船舰烟雾 (DD)
     ("SubmarineLocator",      "SubmarineSurveillance"),
+]
+
+# CV 飞机级消耗品 — 走 Avatar.squadronConsumableUsed 单播,
+# 只有当被评判的 CV 就是录制者本人时才能拿到使用次数。
+# (ability_name 关键字, squadron_consumable_uses 里 consumable_name)
+PLANE_CONSUMABLES = [
+    ("PlaneTacticalFighters", "planeTacticalFighters"),   # 飞机自带巡逻战斗机
+    ("PlaneSmokeGenerator",   "PlaneSmokeGenerator"),     # 飞机喷烟自掩护
+    # ForsageBooster / ActiveManeuvering 排除:虽然也能拿到,但属于手感按钮,
+    # 没按不必然=战犯;只评"战略级"的两项: 拉烟 + 放战斗机。
 ]
 
 
@@ -206,8 +212,30 @@ def strong_consumable_slots(consumable_slots):
     return out
 
 
-def analyze_player(p, damage_events, match_duration_secs, all_players=None, consumable_uses=None):
-    """对一个玩家算所有触发条件,返回 (score, reasons[], is_ringleader_bool)。"""
+def _ship_plane_consumables(p):
+    """从 ship.plane_refs 链路读出此船带的飞机消耗品集合。
+    返回 [(display_name, enum_name)],去重。
+    要求 ship 数据里有 'plane_consumables' 字段 (replayshark 输出)。"""
+    sp = p.get("ship") or {}
+    pc = sp.get("plane_consumables") or []
+    out = []
+    seen = set()
+    for ab_name in pc:
+        for keyword, enum_name in PLANE_CONSUMABLES:
+            if keyword in ab_name and enum_name not in seen:
+                out.append((consumable_display(ab_name), enum_name))
+                seen.add(enum_name)
+                break
+    return out
+
+
+def analyze_player(p, damage_events, match_duration_secs, all_players=None,
+                   consumable_uses=None, squadron_consumable_uses=None,
+                   self_avatar_eid=None):
+    """对一个玩家算所有触发条件,返回 (score, reasons[], is_ringleader_bool)。
+
+    self_avatar_eid: 录制者 avatar EID,只有 p 对应的 CV 是 self 时,才能用
+    squadron_consumable_uses 评判飞机消耗品 (Avatar 单播限制)。"""
     st = p.get("stats") or {}
     ri = p.get("results_info") or []
     species_raw = strip_known((p.get("ship") or {}).get("species") or "")
@@ -317,6 +345,27 @@ def analyze_player(p, damage_events, match_duration_secs, all_players=None, cons
             )
             score += 1
 
+    # --- CV 飞机消耗品 (仅录制者本人为该 CV 时可评) ---
+    # Avatar.squadronConsumableUsed 是单播,只对 self 玩家有数据。
+    # 关系判断: p['relation'] == 'Relation(0)' 即 self。
+    if (species_raw == "AirCarrier"
+            and effective_lived >= CONSUMABLE_MIN_LIVED_SECS
+            and squadron_consumable_uses is not None
+            and str(p.get("relation", "")) == "Relation(0)"):
+        # 对所有定义的飞机消耗品类型查 0 次使用 → 战犯加分。
+        # 此处不依赖 ship.plane_consumables (字段可能不存在),
+        # 直接按 enum_name 在 squadron_consumable_uses 里查计数。
+        for ab_keyword, enum_name in PLANE_CONSUMABLES:
+            uses = sum(1 for u in squadron_consumable_uses
+                       if u.get("consumable_name") == enum_name)
+            if uses == 0:
+                zh = {
+                    "planeTacticalFighters": "飞机巡逻战斗机",
+                    "PlaneSmokeGenerator":   "飞机烟雾",
+                }.get(enum_name, enum_name)
+                reasons.append(f"{zh}全程 0 次使用")
+                score += 1
+
     return score, reasons, is_ringleader
 
 
@@ -342,10 +391,12 @@ def find_criminals(raw):
 
     all_players = raw.get("players", [])
     consumable_uses = raw.get("consumable_uses") or []
+    squadron_consumable_uses = raw.get("squadron_consumable_uses") or []
     scored = []
     for p in losers:
         score, reasons, is_ring = analyze_player(
-            p, damage_events, match_dur, all_players, consumable_uses
+            p, damage_events, match_dur, all_players, consumable_uses,
+            squadron_consumable_uses=squadron_consumable_uses,
         )
         if score >= 2 and reasons:
             scored.append((p, score, reasons, is_ring))
@@ -486,10 +537,17 @@ def render(json_path: str, out_path: str, max_cards: int = 4):
         if n_rest > 0 else 0
     )
 
+    # 是否有 CV 上榜 → 决定要不要画"飞机消耗品仅对录制者评判"的脚注
+    has_cv = any(
+        strip_known((c[0].get("ship") or {}).get("species") or "") == "AirCarrier"
+        for c in criminals
+    )
+    footer_h = 38 if has_cv else 0
+
     H = title_h + pad + head_card_h
     if n_rest > 0:
         H += pad + rest_card_h
-    H += pad
+    H += footer_h + pad
 
     img = Image.new("RGB", (W, H), GAME_BG)
     draw = ImageDraw.Draw(img)
@@ -508,13 +566,22 @@ def render(json_path: str, out_path: str, max_cards: int = 4):
     _draw_head_card(draw, pad, head_y0, W - 2 * pad, head_card_h, head, head_fonts)
 
     # 行 2: 乙/丙/丁 并排
+    last_y1 = head_y0 + head_card_h
     if n_rest > 0:
-        row2_y0 = head_y0 + head_card_h + pad
+        row2_y0 = last_y1 + pad
         rest_card_w = (W - pad * (n_rest + 1)) // n_rest
         for i, item in enumerate(rest):
             x0 = pad + i * (rest_card_w + pad)
             _draw_rest_card(draw, x0, row2_y0, rest_card_w, rest_card_h,
                             item, grade_idx=i + 1, fonts=rest_fonts)
+        last_y1 = row2_y0 + rest_card_h
+
+    # 脚注: 解释 CV 飞机消耗品评判的协议限制
+    if has_cv:
+        footer_y = last_y1 + 14
+        note = ("ℹ️ CV 飞机消耗品(飞机巡逻战斗机/飞机烟雾)仅当被评 CV 是本次回放的录制者本人时才能检测; "
+                "其他 CV 由于 WoWs 协议限制无数据,本项不参与评分。")
+        draw.text((24, footer_y), note, GAME_DIM, font(CJK_FONT, 16))
 
     img.save(out_path)
     print(f"saved: {out_path}", file=sys.stderr)
