@@ -35,7 +35,11 @@ from nonebot.adapters.onebot.v11.event import GroupIncreaseNoticeEvent, MessageE
 from .version import version_str
 
 RENDER_SH        = os.environ.get("WOWS_RENDER_SH",   "/opt/wows-bot/minimap/render.sh")
-REPORT_CMD       = os.environ.get("WOWS_REPORT_CMD",  "/opt/wows-bot/report/bin/wows_full_report")
+REPORT_FULL_CMD  = os.environ.get("WOWS_REPORT_FULL_CMD",  "/opt/wows-bot/report/bin/wows_full_report")
+REPORT_BATTLE_CMD = os.environ.get("WOWS_REPORT_BATTLE_CMD", "/opt/wows-bot/report/bin/wows_report")
+REPORT_DAMAGE_CMD = os.environ.get("WOWS_REPORT_DAMAGE_CMD", "/opt/wows-bot/report/bin/wows_damage_report")
+# 旧 alias 暂留兼容(.env 里可能还有);后续清理
+REPORT_CMD       = os.environ.get("WOWS_REPORT_CMD", REPORT_FULL_CMD)
 ANALYZE_CMD      = os.environ.get("WOWS_ANALYZE_CMD", "/opt/wows-bot/report/bin/wows_analyze")
 BASE_DIR         = os.path.expanduser(os.environ.get("WOWS_REPLAY_BASEDIR", "~/wows-bot-replay"))
 MP4_TIMEOUT      = int(os.environ.get("WOWS_MP4_TIMEOUT", "600"))
@@ -166,7 +170,7 @@ def _render_menu_sync(out_path, scope, ident, state, is_super, version):
     """sync wrapper 给 to_thread 用 — render_menu 没有 async 接口。"""
     # 在 thread 里 import,避免插件加载阶段就拉 render_menu 的依赖链
     import sys as _sys
-    bin_path = Path(REPORT_CMD).parent  # /opt/wows-bot/report/bin
+    bin_path = Path(REPORT_FULL_CMD).parent  # /opt/wows-bot/report/bin
     if str(bin_path) not in _sys.path:
         _sys.path.insert(0, str(bin_path))
     from render_menu import render_menu_png
@@ -320,54 +324,92 @@ async def download_file(url: str, save_path: str):
 
 
 async def process_queue(bot: Bot):
-    """串行处理队列(并行只在单任务内部:MP4 + PNG 同时跑)。"""
+    """串行处理队列;每个 replay 按本群 4 个 feature 开关决定跑哪几个输出。"""
     global processing
     processing = True
 
     while not task_queue.empty():
         user_id, message_id, group_id, user_dir, replay_path = await task_queue.get()
+        scope = "group" if group_id else "private"
+        ident = str(group_id) if group_id else user_id
 
         try:
+            on = {f: permissions.feature_enabled(scope, ident, f)
+                  for f in permissions.FEATURES}
+
+            if not any(on.values()):
+                await send_message(bot, user_id, group_id, message_id,
+                                   "本聊天 4 个开关全关,跳过本份 replay。"
+                                   "管理员可 /菜单 查看,/<功能> 开 启用。")
+                task_queue.task_done()
+                continue
+
             await send_message(
                 bot, user_id, group_id, message_id,
-                f"🎬 开始渲染... (剩余队列：{task_queue.qsize()})"
+                f"🎬 开始渲染 ({', '.join(f for f, v in on.items() if v)})... "
+                f"(剩余队列:{task_queue.qsize()})"
             )
 
             if not os.path.exists(replay_path):
                 raise RuntimeError("replay 文件不存在")
 
-            # 并行: MP4 + 战报 PNG
-            mp4_result, png_result = await asyncio.gather(
-                render_mp4(replay_path, user_dir),
-                render_report(replay_path, user_dir),
-                return_exceptions=True,
-            )
-
-            # MP4 失败致命;PNG 失败降级
-            if isinstance(mp4_result, Exception):
-                raise mp4_result
-
-            png_path = None
-            png_error = None
-            if isinstance(png_result, Exception):
-                png_error = str(png_result)
-                logger.warning(f"战报 PNG 失败 (不影响 MP4): {png_error}")
+            # 决定走哪条报告路径(产 JSON 的子进程只跑一次)
+            if on["战报"] and on["复盘"]:
+                report_kind = "full"
+            elif on["战报"]:
+                report_kind = "battle"
+            elif on["复盘"]:
+                report_kind = "damage"
+            elif on["分析"]:
+                report_kind = "battle"   # 只为产 JSON;PNG 不发
             else:
-                png_path = png_result
+                report_kind = None
 
-            mp4_files = [f for f in os.listdir(user_dir) if f.endswith(".mp4")]
-            if not mp4_files:
-                raise RuntimeError("渲染完成但未生成 MP4")
-            mp4_path = os.path.join(user_dir, mp4_files[0])
+            # 并行: MP4 (可选) + 报告 (可选)
+            tasks: dict[str, asyncio.Future] = {}
+            if on["视频"]:
+                tasks["mp4"] = asyncio.create_task(render_mp4(replay_path, user_dir))
+            if report_kind == "full":
+                tasks["report"] = asyncio.create_task(run_full_report(replay_path, user_dir))
+            elif report_kind == "battle":
+                tasks["report"] = asyncio.create_task(run_battle_report(replay_path, user_dir))
+            elif report_kind == "damage":
+                tasks["report"] = asyncio.create_task(run_damage_report(replay_path, user_dir))
 
-            await upload_and_notify(bot, user_id, group_id, message_id,
-                                    mp4_path, png_path, png_error)
+            results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+            result_map = dict(zip(tasks.keys(), results))
 
-            # 开了分析就追发一条 LLM 复盘文本
-            # 用 permissions 替代旧的 analyze_enabled
-            scope = "group" if group_id else "private"
-            ident = str(group_id) if group_id else user_id
-            if permissions.feature_enabled(scope, ident, "分析"):
+            # MP4 处理 —— 视频开了就发,失败致命
+            mp4_path = None
+            if on["视频"]:
+                r = result_map.get("mp4")
+                if isinstance(r, Exception):
+                    raise r
+                # render_mp4 不返回路径,而是把文件放到 user_dir
+                mp4_files = [f for f in os.listdir(user_dir) if f.endswith(".mp4")]
+                if not mp4_files:
+                    raise RuntimeError("视频渲染完成但未生成 MP4")
+                mp4_path = os.path.join(user_dir, mp4_files[0])
+
+            # 报告 PNG 处理 —— 战报/复盘开了才发对应那张
+            report_png = None
+            report_error = None
+            r = result_map.get("report")
+            if isinstance(r, Exception):
+                report_error = str(r)
+                logger.warning(f"报告渲染失败 (kind={report_kind}): {r}")
+            elif isinstance(r, str):
+                # report_kind=="battle" 且只为分析时不送图
+                if report_kind in ("full", "damage") or (report_kind == "battle" and on["战报"]):
+                    report_png = r
+
+            # 发 MP4 + 报告(沿用原 upload_and_notify 接口)
+            if mp4_path or report_png or report_error:
+                await upload_and_notify(bot, user_id, group_id, message_id,
+                                        mp4_path, report_png, report_error)
+
+            # 分析:从 user_dir 里找 .json
+            if on["分析"]:
                 json_path = os.path.join(user_dir, f"{Path(replay_path).stem}.json")
                 if os.path.isfile(json_path):
                     try:
@@ -375,13 +417,13 @@ async def process_queue(bot: Bot):
                         await send_message(bot, user_id, group_id, message_id,
                                            f"🧠 战后复盘:\n{analysis}")
                     except Exception as e:
-                        logger.warning(f"LLM 分析失败 (不影响 MP4/PNG): {e}")
+                        logger.warning(f"LLM 分析失败: {e}")
                         await send_message(bot, user_id, group_id, message_id,
                                            f"⚠️ LLM 分析失败: {e}")
                 else:
                     logger.warning(f"未找到战报 JSON,跳过分析: {json_path}")
 
-            logger.info(f"用户 {user_id} 任务完成")
+            logger.info(f"用户 {user_id} 任务完成 (开: {[k for k,v in on.items() if v]})")
 
         except Exception as e:
             logger.error(f"处理任务出错: {e}")
@@ -450,11 +492,26 @@ async def run_analyze(json_path: str) -> str:
         raise RuntimeError(f"找不到分析命令: {ANALYZE_CMD}")
 
 
-async def render_report(replay_path: str, work_dir: str) -> str:
-    """调用 WOWS_REPORT_CMD 生成战报+复盘合并 PNG,返回 PNG 路径。"""
+async def run_battle_report(replay_path: str, work_dir: str) -> str:
+    """跑 wows_report,返回战报 PNG 路径。同时会在 work_dir 留下同名 .json。"""
+    return await _run_report_like(REPORT_BATTLE_CMD, replay_path, work_dir, "战报")
+
+
+async def run_damage_report(replay_path: str, work_dir: str) -> str:
+    """跑 wows_damage_report,返回复盘 PNG 路径。会复用缓存的 .json。"""
+    return await _run_report_like(REPORT_DAMAGE_CMD, replay_path, work_dir, "复盘")
+
+
+async def run_full_report(replay_path: str, work_dir: str) -> str:
+    """跑 wows_full_report,返回拼接 PNG 路径 (战报+复盘 竖向拼一张)。"""
+    return await _run_report_like(REPORT_FULL_CMD, replay_path, work_dir, "全报告")
+
+
+async def _run_report_like(cmd: str, replay_path: str, work_dir: str, label: str) -> str:
+    """三个 wows_*_report 子进程同构,抽 helper。"""
     try:
         proc = await asyncio.create_subprocess_exec(
-            REPORT_CMD, replay_path, work_dir,
+            cmd, replay_path, work_dir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -463,48 +520,57 @@ async def render_report(replay_path: str, work_dir: str) -> str:
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
-            raise RuntimeError(f"战报渲染超时({PNG_TIMEOUT}s)")
+            raise RuntimeError(f"{label}渲染超时({PNG_TIMEOUT}s)")
         if proc.returncode != 0:
             tail = stderr.decode('utf-8', errors='ignore')[-500:] if stderr else "未知错误"
-            raise RuntimeError(f"战报渲染失败: {tail}")
+            raise RuntimeError(f"{label}渲染失败: {tail}")
         lines = stdout.decode('utf-8', errors='ignore').strip().splitlines()
         if not lines:
-            raise RuntimeError("战报脚本没有输出 PNG 路径")
+            raise RuntimeError(f"{label}脚本无 PNG 输出")
         png_path = lines[-1].strip()
         if not os.path.exists(png_path):
-            raise RuntimeError(f"战报 PNG 不存在: {png_path}")
-        logger.info(f"战报 PNG 完成: {png_path}")
+            raise RuntimeError(f"{label} PNG 不存在: {png_path}")
+        logger.info(f"{label} PNG 完成: {png_path}")
         return png_path
     except FileNotFoundError:
-        raise RuntimeError(f"找不到战报命令: {REPORT_CMD}")
+        raise RuntimeError(f"找不到{label}命令: {cmd}")
 
 
 async def upload_and_notify(bot: Bot, user_id: str, group_id: Optional[int],
-                            message_id: int, mp4_path: str,
+                            message_id: int, mp4_path: Optional[str],
                             png_path: Optional[str] = None,
                             png_error: Optional[str] = None):
-    """上传 MP4 文件,并把 PNG (或失败说明) 一起回到原消息上。"""
-    file_name = os.path.basename(mp4_path)
+    """上传 MP4(如果有),并把 PNG (或失败说明) 一起回到原消息上。
+    mp4_path / png_path / png_error 三者均可为 None — 全 None 时本函数静默 no-op。"""
+    if not (mp4_path or png_path or png_error):
+        return
 
-    try:
-        if group_id:
-            await bot.call_api("upload_group_file", group_id=group_id, file=mp4_path, name=file_name)
-        else:
-            await bot.call_api("upload_private_file", user_id=int(user_id), file=mp4_path, name=file_name)
-        logger.info(f"MP4 已上传 ({user_id}): {file_name}")
-    except Exception as e:
-        logger.error(f"MP4 上传失败: {e}")
-        raise RuntimeError(f"视频上传失败: {str(e)}")
+    file_name = None
+    if mp4_path:
+        file_name = os.path.basename(mp4_path)
+        try:
+            if group_id:
+                await bot.call_api("upload_group_file", group_id=group_id, file=mp4_path, name=file_name)
+            else:
+                await bot.call_api("upload_private_file", user_id=int(user_id), file=mp4_path, name=file_name)
+            logger.info(f"MP4 已上传 ({user_id}): {file_name}")
+        except Exception as e:
+            logger.error(f"MP4 上传失败: {e}")
+            raise RuntimeError(f"视频上传失败: {str(e)}")
 
+    # 拼回复消息
+    parts = []
+    if file_name:
+        parts.append(f"✅ 视频已上传:{file_name}")
     if png_path and os.path.exists(png_path):
-        text = f"✅ 渲染完成！视频已上传：{file_name}\n战报如下："
-        message = MessageSegment.reply(message_id) + text + MessageSegment.image(f"file://{png_path}")
+        parts.append("战报如下:")
     elif png_error:
-        text = f"✅ 视频已上传：{file_name}\n⚠️ 战报生成失败：{png_error}"
-        message = MessageSegment.reply(message_id) + text
-    else:
-        text = f"✅ 渲染完成！视频已上传：{file_name}"
-        message = MessageSegment.reply(message_id) + text
+        parts.append(f"⚠️ 战报生成失败:{png_error}")
+
+    text = "\n".join(parts) if parts else ""
+    message = MessageSegment.reply(message_id) + text
+    if png_path and os.path.exists(png_path):
+        message = message + MessageSegment.image(f"file://{png_path}")
 
     try:
         if group_id:
