@@ -11,10 +11,17 @@
 ### 0. Linux: 拉最新 bot 代码 (顺手做,新版本期间 bot 仓库经常也有适配 commit)
 
 ```bash
+# 0.1 拉源仓库
 cd /opt/wows-bot
 sudo git pull
 
-# 若 tools/replayshark_battle_report.patch 跟着更新了 (commit 里会写),
+# 0.2 同步 plugin/*.py 到 NoneBot 项目 (DEPLOY.md §5.2 强调不能用软链)
+# 把下面路径改成你的 NoneBot 项目实际位置, e.g. ~zifeng/桌面/bot/EssexBot/src/plugin
+NB_PLUGIN_DIR=~zifeng/桌面/bot/EssexBot/src/plugin
+sudo cp /opt/wows-bot/plugin/*.py "$NB_PLUGIN_DIR/"
+# (现在有 minimap.py / permissions.py / version.py 三个文件,*.py 一把全 cp)
+
+# 0.3 若 tools/replayshark_battle_report.patch 跟着更新了 (commit 里会写),
 # 用预编译二进制最简单 (前提:作者推前已重编 prebuilt):
 sudo cp /opt/wows-bot/report/prebuilt/replayshark-linux-x86_64 /opt/wows-bot/replayshark
 sudo chmod +x /opt/wows-bot/replayshark
@@ -24,7 +31,7 @@ sudo chmod +x /opt/wows-bot/replayshark
 #   sudo cargo build --release -p replayshark
 #   sudo cp target/release/replayshark /opt/wows-bot/replayshark
 
-# plugin/* 改了要重启 bot;只改了 report/bin/* 或 specs 软链不用重启 (subprocess 现拉)。
+# 0.4 plugin/* 改了要重启 bot;只改了 report/bin/* 或 specs 软链不用重启 (subprocess 现拉)。
 sudo systemctl restart wows-bot   # 改成你的 service 名,或者 kill+nb run
 ```
 
