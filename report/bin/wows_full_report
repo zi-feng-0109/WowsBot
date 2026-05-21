@@ -85,8 +85,9 @@ def main():
         # 3) 战犯卡 — 渲到 tmp,稍后插在战报和复盘之间。
         # 飞机消耗品已通过 Avatar.squadronConsumableUsed 接入 (仅 self CV,
         # 见 render_criminals.py footer 提示),不再系统性误判 CV。
+        # WOWS_SKIP_CRIMINALS=1 跳过 (bot 用,因为 bot 走独立 PNG 发送避免重复)。
         criminals_path = None
-        if json_in_outdir.is_file():
+        if os.environ.get("WOWS_SKIP_CRIMINALS") != "1" and json_in_outdir.is_file():
             print("[3/4] 战犯检测 ...", file=sys.stderr)
             crim_tmp = tmp_dir / f"{base}.criminals.png"
             try:

@@ -29,19 +29,26 @@ from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 # bot 元信息 (跟 plugin/version.py 的内容保持口径一致 — CLI 模式下读不到 plugin,所以 hardcode)
 AUTHOR = "[NUIST]___Ciallo___"
 
-# 4 个 feature 必须跟 plugin/permissions.FEATURES 顺序一致
-FEATURES = ["视频", "战报", "复盘", "分析"]
+# Feature 列表必须跟 plugin/permissions.FEATURES 顺序一致
+FEATURES = ["视频", "战报", "复盘", "分析", "战犯"]
 FEATURE_DESC = {
     "视频":  "MP4 战斗回放",
     "战报":  "全队成绩单",
     "复盘":  "主角伤害分布",
     "分析":  "埃酱复盘文本",
+    "战犯":  "败方战犯榜 (默认关)",
+}
+# 跟 plugin/permissions.DEFAULT_ENABLED 同步;CLI 模式下读不到 plugin,本地硬编码。
+DEFAULT_ENABLED = {
+    "视频": True,
+    "战报": True,
+    "复盘": True,
+    "分析": True,
+    "战犯": False,
 }
 
 # 规划中功能;在这里追加: ("名字", "一句话简介")
-PLANNED_FEATURES: list[tuple[str, str]] = [
-    ("战犯系统", "自动选出败方四名战犯,按严重程度分甲/乙/丙/丁"),
-]
+PLANNED_FEATURES: list[tuple[str, str]] = []
 
 W = 1100
 PAD = 24
@@ -117,7 +124,8 @@ def _feature_status(state: dict, scope: str, ident: str, feature: str) -> str:
     if feature in state.get("global_blacklist", []):
         return "banned"
     bucket = state["groups" if scope == "group" else "private"]
-    val = bucket.get(str(ident), {}).get(feature, True)  # DEFAULT_ON
+    default = DEFAULT_ENABLED.get(feature, True)
+    val = bucket.get(str(ident), {}).get(feature, default)
     return "on" if val else "off"
 
 

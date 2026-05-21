@@ -20,8 +20,16 @@ from typing import Tuple
 from nonebot import get_driver
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, MessageEvent
 
-FEATURES = ["视频", "战报", "复盘", "分析"]
-DEFAULT_ON = True
+FEATURES = ["视频", "战报", "复盘", "分析", "战犯"]
+# 每个 feature 的默认开启状态(用户没主动设过的话采用这里的值)。
+# 战犯 默认关:噪声大、对录制者非 CV 时数据受限,需要群主手动开启。
+DEFAULT_ENABLED = {
+    "视频": True,
+    "战报": True,
+    "复盘": True,
+    "分析": True,
+    "战犯": False,
+}
 _STATE_VERSION = 1
 _LEGACY_FILE_NAME = "analyze_toggle.json"
 _STATE_FILE_NAME = "toggle_state.json"
@@ -125,13 +133,14 @@ def _bucket_name(scope: str) -> str:
 
 
 def feature_enabled(scope: str, ident: str, feature: str) -> bool:
-    """权威开关查询:超管黑名单优先,然后查作用域开关,缺失走 DEFAULT_ON。"""
+    """权威开关查询:超管黑名单优先,然后查作用域开关,缺失走 DEFAULT_ENABLED。"""
     assert feature in FEATURES, f"unknown feature: {feature}"
     with _lock:
         if feature in _state["global_blacklist"]:
             return False
         bucket = _state[_bucket_name(scope)]
-        return bucket.get(str(ident), {}).get(feature, DEFAULT_ON)
+        default = DEFAULT_ENABLED.get(feature, True)
+        return bucket.get(str(ident), {}).get(feature, default)
 
 
 def set_feature(scope: str, ident: str, feature: str, value: bool) -> None:

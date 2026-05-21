@@ -32,9 +32,15 @@ def test_default_state():
     perms = _reset_module()
     with tempfile.TemporaryDirectory() as d:
         perms.init(d)
-        # 没设过的 group + feature 应该按 DEFAULT_ON
+        # 没设过的 group + feature 应该按 DEFAULT_ENABLED
         assert perms.feature_enabled("group", "999", "战报") is True
         assert perms.feature_enabled("private", "888", "分析") is True
+        # 战犯 默认 OFF
+        assert perms.feature_enabled("group", "999", "战犯") is False
+        assert perms.feature_enabled("private", "888", "战犯") is False
+        # 主动开启之后变 True
+        perms.set_feature("group", "999", "战犯", True)
+        assert perms.feature_enabled("group", "999", "战犯") is True
     print("  default_state PASS")
 
 

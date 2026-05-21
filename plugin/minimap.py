@@ -14,6 +14,7 @@ NoneBot 插件: 接收 .wowsreplay 文件,并行渲染 MP4 (小地图) + PNG (�
 DeepSeek API key 在 wows_analyze 那边读 WOWS_DEEPSEEK_KEY,不在本插件。
 """
 import os
+import sys
 import json
 import shutil
 import asyncio
@@ -38,6 +39,8 @@ RENDER_SH        = os.environ.get("WOWS_RENDER_SH",   "/opt/wows-bot/minimap/ren
 REPORT_FULL_CMD  = os.environ.get("WOWS_REPORT_FULL_CMD",  "/opt/wows-bot/report/bin/wows_full_report")
 REPORT_BATTLE_CMD = os.environ.get("WOWS_REPORT_BATTLE_CMD", "/opt/wows-bot/report/bin/wows_report")
 REPORT_DAMAGE_CMD = os.environ.get("WOWS_REPORT_DAMAGE_CMD", "/opt/wows-bot/report/bin/wows_damage_report")
+RENDER_CRIMINALS_PY = os.environ.get("WOWS_RENDER_CRIMINALS",
+                                      "/opt/wows-bot/report/bin/render_criminals.py")
 # 旧 alias 暂留兼容(.env 里可能还有);后续清理
 REPORT_CMD       = os.environ.get("WOWS_REPORT_CMD", REPORT_FULL_CMD)
 ANALYZE_CMD      = os.environ.get("WOWS_ANALYZE_CMD", "/opt/wows-bot/report/bin/wows_analyze")
@@ -354,13 +357,14 @@ async def process_queue(bot: Bot):
                 raise RuntimeError("replay 文件不存在")
 
             # 决定走哪条报告路径(产 JSON 的子进程只跑一次)
+            needs_json = on["分析"] or on["战犯"]
             if on["战报"] and on["复盘"]:
                 report_kind = "full"
             elif on["战报"]:
                 report_kind = "battle"
             elif on["复盘"]:
                 report_kind = "damage"
-            elif on["分析"]:
+            elif needs_json:
                 report_kind = "battle"   # 只为产 JSON;PNG 不发
             else:
                 report_kind = None
@@ -409,8 +413,8 @@ async def process_queue(bot: Bot):
                                         mp4_path, report_png, report_error)
 
             # 分析:从 user_dir 里找 .json
+            json_path = os.path.join(user_dir, f"{Path(replay_path).stem}.json")
             if on["分析"]:
-                json_path = os.path.join(user_dir, f"{Path(replay_path).stem}.json")
                 if os.path.isfile(json_path):
                     try:
                         analysis = await run_analyze(json_path)
@@ -422,6 +426,27 @@ async def process_queue(bot: Bot):
                                            f"⚠️ LLM 分析失败: {e}")
                 else:
                     logger.warning(f"未找到战报 JSON,跳过分析: {json_path}")
+
+            # 战犯卡 (独立 PNG,跟战报/复盘合并版互不重复)
+            if on["战犯"]:
+                if os.path.isfile(json_path):
+                    try:
+                        crim_png = await run_criminals(json_path, user_dir)
+                        if crim_png:  # 空串 = 没战犯
+                            msg = (MessageSegment.reply(message_id)
+                                   + MessageSegment.image(f"file://{crim_png}"))
+                            if group_id:
+                                await bot.call_api("send_group_msg",
+                                                    group_id=group_id, message=msg)
+                            else:
+                                await bot.call_api("send_private_msg",
+                                                    user_id=int(user_id), message=msg)
+                    except Exception as e:
+                        logger.warning(f"战犯渲染失败: {e}")
+                        await send_message(bot, user_id, group_id, message_id,
+                                           f"⚠️ 战犯渲染失败: {e}")
+                else:
+                    logger.warning(f"未找到 JSON,跳过战犯: {json_path}")
 
             logger.info(f"用户 {user_id} 任务完成 (开: {[k for k,v in on.items() if v]})")
 
@@ -503,17 +528,53 @@ async def run_damage_report(replay_path: str, work_dir: str) -> str:
 
 
 async def run_full_report(replay_path: str, work_dir: str) -> str:
-    """跑 wows_full_report,返回拼接 PNG 路径 (战报+复盘 竖向拼一张)。"""
-    return await _run_report_like(REPORT_FULL_CMD, replay_path, work_dir, "全报告")
+    """跑 wows_full_report,返回拼接 PNG 路径 (战报+复盘 竖向拼一张)。
+    bot 调用恒带 WOWS_SKIP_CRIMINALS=1 — 战犯走独立 PNG 路径,避免重复。"""
+    return await _run_report_like(REPORT_FULL_CMD, replay_path, work_dir, "全报告",
+                                   extra_env={"WOWS_SKIP_CRIMINALS": "1"})
 
 
-async def _run_report_like(cmd: str, replay_path: str, work_dir: str, label: str) -> str:
-    """三个 wows_*_report 子进程同构,抽 helper。"""
+async def run_criminals(json_path: str, work_dir: str) -> str:
+    """对已有 JSON 跑 render_criminals.py,返回 PNG 路径。
+    返回码 3 = 没战犯(平局/全员合格),用 FileNotFoundError 风格 raise 给上层降级。"""
+    out_png = os.path.join(work_dir, f"{Path(json_path).stem}.criminals.png")
+    py = os.environ.get("WOWS_PYTHON") or sys.executable
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            py, RENDER_CRIMINALS_PY, json_path, out_png,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=PNG_TIMEOUT)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError(f"战犯渲染超时({PNG_TIMEOUT}s)")
+        if proc.returncode == 3:
+            return ""   # 没战犯, 静默
+        if proc.returncode != 0:
+            tail = stderr.decode('utf-8', errors='ignore')[-500:] if stderr else "?"
+            raise RuntimeError(f"战犯渲染失败: {tail}")
+        if not os.path.exists(out_png):
+            raise RuntimeError(f"战犯 PNG 未生成: {out_png}")
+        return out_png
+    except FileNotFoundError:
+        raise RuntimeError(f"找不到战犯渲染脚本: {RENDER_CRIMINALS_PY}")
+
+
+async def _run_report_like(cmd: str, replay_path: str, work_dir: str, label: str,
+                            extra_env: dict | None = None) -> str:
+    """三个 wows_*_report 子进程同构,抽 helper。extra_env 合并到当前环境。"""
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
     try:
         proc = await asyncio.create_subprocess_exec(
             cmd, replay_path, work_dir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=PNG_TIMEOUT)
