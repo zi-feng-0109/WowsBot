@@ -38,8 +38,10 @@ FEATURE_DESC = {
     "分析":  "埃酱复盘文本",
 }
 
-# 起步空;未来要展示规划中功能在这里追加: ("名字", "一句话简介")
-PLANNED_FEATURES: list[tuple[str, str]] = []
+# 规划中功能;在这里追加: ("名字", "一句话简介")
+PLANNED_FEATURES: list[tuple[str, str]] = [
+    ("战犯系统", "自动选出败方四名战犯,按严重程度分甲/乙/丙/丁"),
+]
 
 W = 1100
 PAD = 24
