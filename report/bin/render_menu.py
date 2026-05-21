@@ -35,15 +35,15 @@ FEATURE_DESC = {
     "视频":  "MP4 战斗回放",
     "战报":  "全队成绩单",
     "复盘":  "主角伤害分布",
-    "分析":  "埃酱复盘文本",
-    "战犯":  "败方战犯榜 (默认关)",
+    "分析":  "埃酱复盘文本 [测试中...]",
+    "战犯":  "败方战犯榜 [测试中...]",
 }
 # 跟 plugin/permissions.DEFAULT_ENABLED 同步;CLI 模式下读不到 plugin,本地硬编码。
 DEFAULT_ENABLED = {
     "视频": True,
     "战报": True,
     "复盘": True,
-    "分析": True,
+    "分析": False,
     "战犯": False,
 }
 

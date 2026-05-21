@@ -34,13 +34,17 @@ def test_default_state():
         perms.init(d)
         # 没设过的 group + feature 应该按 DEFAULT_ENABLED
         assert perms.feature_enabled("group", "999", "战报") is True
-        assert perms.feature_enabled("private", "888", "分析") is True
-        # 战犯 默认 OFF
+        assert perms.feature_enabled("group", "999", "视频") is True
+        assert perms.feature_enabled("group", "999", "复盘") is True
+        # 分析 + 战犯 默认 OFF
+        assert perms.feature_enabled("private", "888", "分析") is False
         assert perms.feature_enabled("group", "999", "战犯") is False
         assert perms.feature_enabled("private", "888", "战犯") is False
-        # 主动开启之后变 True
+        # 主动开启之后变 True 并跨实例保留
         perms.set_feature("group", "999", "战犯", True)
+        perms.set_feature("group", "999", "分析", True)
         assert perms.feature_enabled("group", "999", "战犯") is True
+        assert perms.feature_enabled("group", "999", "分析") is True
     print("  default_state PASS")
 
 
@@ -158,8 +162,9 @@ def test_init_auto_migrates():
         )
         perms.init(d)
         assert perms.feature_enabled("group", "777", "分析") is True
-        # 其他 feature 走 DEFAULT_ON
+        # 其他 feature 走 DEFAULT_ENABLED
         assert perms.feature_enabled("group", "777", "视频") is True
+        assert perms.feature_enabled("group", "777", "战犯") is False
     print("  init_auto_migrates PASS")
 
 

@@ -22,12 +22,13 @@ from nonebot.adapters.onebot.v11 import GroupMessageEvent, MessageEvent
 
 FEATURES = ["视频", "战报", "复盘", "分析", "战犯"]
 # 每个 feature 的默认开启状态(用户没主动设过的话采用这里的值)。
+# 分析 默认关:DeepSeek 调用要 API key + 算钱,群主自己评估再开。
 # 战犯 默认关:噪声大、对录制者非 CV 时数据受限,需要群主手动开启。
 DEFAULT_ENABLED = {
     "视频": True,
     "战报": True,
     "复盘": True,
-    "分析": True,
+    "分析": False,
     "战犯": False,
 }
 _STATE_VERSION = 1
