@@ -21,10 +21,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from render_battle_report import (  # noqa: E402
     CJK_FONT, MONO_FONT,
-    GAME_BG, GAME_PANEL, GAME_PANEL_ALT,
-    GAME_TEXT, GAME_DIM, GAME_GREEN, GAME_RED, GAME_BORDER,
+    GAME_GREEN, GAME_RED,
 )
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
+
+# 菜单专属调色板 — 比战报亮一档,适合"信息面板"风;不影响战报渲染。
+GAME_BG        = (38, 52, 78)
+GAME_PANEL     = (58, 74, 106)
+GAME_PANEL_ALT = (50, 64, 92)
+GAME_TEXT      = (245, 248, 255)
+GAME_DIM       = (190, 205, 225)
+GAME_BORDER    = (105, 125, 155)
 
 # bot 元信息 (跟 plugin/version.py 的内容保持口径一致 — CLI 模式下读不到 plugin,所以 hardcode)
 AUTHOR = "[NUIST]___Ciallo___"
