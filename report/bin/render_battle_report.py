@@ -485,7 +485,7 @@ def render(report: MatchReport, out_path: str):
             return t(f"IDS_{p.ship_index}", p.ship_name)
         return p.ship_name
 
-    def draw_team_panel(team: int, y_top: int) -> int:
+    def draw_team_panel(team: int, y_top: int, start_idx: int = 1) -> int:
         x = pad
         is_self_team = team == report.self_team
         color = GAME_GREEN if is_self_team else GAME_RED
@@ -503,8 +503,10 @@ def render(report: MatchReport, out_path: str):
                   count_str, (10, 16, 28), f_h2)
 
         # column layout (panel_w = ~2168)
+        # # 列固定 16-46 (2 位数索引,够 24 人战),玩家从 50 开始
         cols = [
-            (16,   "玩家",     None),
+            (16,   "#",        None),
+            (50,   "玩家",     None),
             (340,  "战舰",     None),
             (540,  "类型",     None),
             (600,  "击杀",     None),
@@ -537,9 +539,11 @@ def render(report: MatchReport, out_path: str):
             marker = "★ " if is_self_player else "  "
             clan = f"[{p.clan}] " if p.clan else ""
             name_str = f"{marker}{clan}{p.name}"
-            while f_row.getbbox(name_str)[2] > 310:
+            while f_row.getbbox(name_str)[2] > 280:
                 name_str = name_str[:-2] + "…"
-            draw.text((x + 16, ty), name_str, name_color, f_row)
+            # # 列: 全局连续编号 (己方 1-N, 敌方 N+1-总人数)
+            draw.text((x + 16, ty), f"{start_idx + i:>2}", GAME_DIM, f_num)
+            draw.text((x + 50, ty), name_str, name_color, f_row)
             ship_zh = ship_zh_panel(p)
             draw.text((x + 340, ty),
                       f"L{p.ship_level}  {ship_zh}", GAME_TEXT, f_row)
@@ -661,15 +665,16 @@ def render(report: MatchReport, out_path: str):
         return y_top + 56 + len(members) * row_h + 14
 
     # Draw self team first (so user sees it immediately)
+    # 全局编号: 先画的队 1..N, 后画的队 N+1..总人数 (6v6/9v9/12v12 不固定,动态算)
     if report.self_team == 0:
-        end_y = draw_team_panel(0, y)
+        end_y = draw_team_panel(0, y, start_idx=1)
         y = end_y + pad
-        end_y = draw_team_panel(1, y)
+        end_y = draw_team_panel(1, y, start_idx=team0_n + 1)
         y = end_y + pad
     else:
-        end_y = draw_team_panel(1, y)
+        end_y = draw_team_panel(1, y, start_idx=1)
         y = end_y + pad
-        end_y = draw_team_panel(0, y)
+        end_y = draw_team_panel(0, y, start_idx=team1_n + 1)
         y = end_y + pad
 
     # ---- DEATH TIMELINE (with names + times) ----

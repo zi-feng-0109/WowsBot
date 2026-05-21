@@ -55,7 +55,9 @@ DEFAULT_ENABLED = {
 }
 
 # 规划中功能;在这里追加: ("名字", "一句话简介")
-PLANNED_FEATURES: list[tuple[str, str]] = []
+PLANNED_FEATURES: list[tuple[str, str]] = [
+    ("/查询 <编号>", "引用战报回复,按战报最左 # 列编号查该玩家这条船的 WG 生涯水平"),
+]
 
 W = 1100
 PAD = 24
