@@ -296,7 +296,9 @@ def render(json_path: str, out_path: str):
     # Layout
     W = 1700
     skip_header = os.environ.get("WOWS_SKIP_HEADER") == "1"
+    skip_footer = os.environ.get("WOWS_SKIP_FOOTER") == "1"
     header_h = 0 if skip_header else 110
+    footer_h = 0 if skip_footer else 32
     pie_h = 580
     pad = 20
 
@@ -309,7 +311,7 @@ def render(json_path: str, out_path: str):
     ribbon_rows = max(1, -(-len(ribbons) // RIBBON_ITEMS_PER_ROW))  # ceil div
     ribbon_h = RIBBON_TITLE_BAND + ribbon_rows * RIBBON_ROW_HEIGHT + 16
 
-    H = header_h + pad + pie_h + pad + ribbon_h + pad
+    H = header_h + pad + pie_h + pad + ribbon_h + pad + footer_h
 
     img = Image.new("RGB", (W, H), GAME_BG)
     draw = ImageDraw.Draw(img)
@@ -437,8 +439,25 @@ def render(json_path: str, out_path: str):
             # label 在 banner 下方(banner 左对齐)
             draw.text((ax + 4, ay + bh + 4), label, GAME_TEXT, f_ribbon_label)
 
+    if not skip_footer:
+        _draw_footer(draw, pad, H - footer_h + 10)
+
     img.save(out_path)
     print(f"saved: {out_path}", file=sys.stderr)
+
+
+def _draw_footer(draw, x, y):
+    """底部一行作者+版本+时间。"""
+    import datetime
+    bot_ver = os.environ.get("WOWS_BOT_VERSION", "")
+    parts = ["本图由 EssexBot 渲染"]
+    if bot_ver:
+        parts.append(bot_ver)
+    parts.append("作者 [NUIST]___Ciallo___")
+    parts.append(datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
+    text = "  ·  ".join(parts)
+    f_foot = ImageFont.truetype(CJK_FONT, 13)
+    draw.text((x, y), text, fill=GAME_DIM, font=f_foot)
 
 
 def main():

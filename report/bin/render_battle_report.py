@@ -407,10 +407,13 @@ def render(report: MatchReport, out_path: str):
     owner_box_h = 110
     pad = 16
     skip_personal = _os.environ.get("WOWS_SKIP_PERSONAL") == "1"
+    skip_footer = _os.environ.get("WOWS_SKIP_FOOTER") == "1"
+    footer_h = 0 if skip_footer else 32
     H = (header_h + pad + team_panel_h_0 + pad + team_panel_h_1 + pad
          + timeline_h + pad)
     if not skip_personal:
         H += owner_box_h + pad
+    H += footer_h
 
     img = Image.new("RGB", (W, H), GAME_BG)
     draw = ImageDraw.Draw(img)
@@ -827,8 +830,25 @@ def render(report: MatchReport, out_path: str):
             draw.text((bx, by + 22), value, col, f_big_cjk if is_cjk else f_big_num)
             bx += box_w
 
+    if not skip_footer:
+        _draw_footer(draw, pad, H - footer_h + 10, W - 2 * pad)
+
     img.save(out_path)
     print(f"saved: {out_path}")
+
+
+def _draw_footer(draw, x, y, w):
+    """底部一行作者+版本+时间。GAME_DIM 灰字。"""
+    import datetime
+    bot_ver = _os.environ.get("WOWS_BOT_VERSION", "")
+    parts = ["本图由 EssexBot 渲染"]
+    if bot_ver:
+        parts.append(bot_ver)
+    parts.append("作者 [NUIST]___Ciallo___")
+    parts.append(datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
+    text = "  ·  ".join(parts)
+    f_foot = font(CJK_FONT, 13)
+    draw.text((x, y), text, fill=GAME_DIM, font=f_foot)
 
 
 def main(json_path: str, out_png: str):

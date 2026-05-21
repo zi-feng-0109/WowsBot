@@ -67,7 +67,8 @@ def main():
         print("[1/4] 全队战报（紧凑版）...", file=sys.stderr)
         battle_path = run(
             [str(WOWS_REPORT), str(replay), str(tmp_dir)],
-            extra_env={"WOWS_SKIP_PERSONAL": "1"},
+            # 拼图时让 battle 跳过 footer,只在最末尾的 damage 块保留 footer
+            extra_env={"WOWS_SKIP_PERSONAL": "1", "WOWS_SKIP_FOOTER": "1"},
         )
 
         # JSON 是中间产物但 wows_analyze 和 render_criminals 都会复用,拷一份到 out_dir
