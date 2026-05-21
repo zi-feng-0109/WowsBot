@@ -264,18 +264,16 @@ export WOWS_DEEPSEEK_KEY=sk-xxxxxxxx   # https://platform.deepseek.com 申请
 
 没设 key 也不会崩,只是用户开了 `/分析 开` 之后那条尾消息会显示 `⚠️ LLM 分析失败: 缺 WOWS_DEEPSEEK_KEY 环境变量`,正常发 MP4+PNG 不受影响。
 
-用户侧指令:
+用户侧指令在 §7 统一介绍 (`/分析 开|关|状态` 是其中一个,跟 `/视频 /战报 /复盘` 同构)。
+状态默认存到 `~/wows-bot-replay/toggle_state.json`,可用 `WOWS_TOGGLE_FILE` env 覆盖;
+启动时会自动迁移老的 `analyze_toggle.json`(见 §7.4)。
 
-- `/分析 开` — 开启
-- `/分析 关` — 关闭
-- `/分析 状态` — 看当前是开是关
+**自定义人格 / 风格** — `wows_analyze` 不再用单一 prompt,改成从 `report/data/personas/*.txt`
+随机抽。仓库自带 3 个: `aichan / michelle / shion`,每次调用前都重新读文件,**不需要重启 bot**。
 
-状态默认存到 `~/wows-bot-replay/analyze_toggle.json`,可用 `WOWS_TOGGLE_FILE` env 覆盖。
-
-**自定义人格 / 风格** — system prompt 放在 `/opt/wows-bot/report/data/analyze_prompt.txt`,
-直接编辑就能改 LLM 的称呼、口吻、分析侧重点,**不需要重启 bot** (每次调用都重新读)。
-默认是"埃酱"人设 (傲娇雌小鬼参谋 + 称呼指挥官,但战术分析专业)。
-想换路径用 `WOWS_ANALYZE_PROMPT=/your/prompt.txt`。
+- 固定某个人格: `export WOWS_PERSONA=aichan`
+- 不设环境变量 = 每次随机
+- 加新人格: 在 `report/data/personas/` 下放 `<名字>.txt`,文件内容就是 system prompt 全文
 
 ### 5.4 (可选) 覆盖默认路径
 
@@ -283,12 +281,17 @@ export WOWS_DEEPSEEK_KEY=sk-xxxxxxxx   # https://platform.deepseek.com 申请
 
 ```bash
 export WOWS_RENDER_SH=/your/path/minimap/render.sh
-export WOWS_REPORT_CMD=/your/path/report/bin/wows_full_report
+export WOWS_REPORT_FULL_CMD=/your/path/report/bin/wows_full_report     # 战报+复盘合并 PNG
+export WOWS_REPORT_BATTLE_CMD=/your/path/report/bin/wows_report        # 仅战报 PNG
+export WOWS_REPORT_DAMAGE_CMD=/your/path/report/bin/wows_damage_report # 仅复盘 PNG
 export WOWS_ANALYZE_CMD=/your/path/report/bin/wows_analyze
 export WOWS_REPLAY_BASEDIR=~/wows-bot-replay   # 中转目录,bot 自动建/删
+export WOWS_TOGGLE_FILE=                       # toggle_state.json 路径,默认 $WOWS_REPLAY_BASEDIR/
 export WOWS_MP4_TIMEOUT=600                    # MP4 超时秒数
 export WOWS_PNG_TIMEOUT=300                    # PNG 超时秒数
 export WOWS_ANALYZE_TIMEOUT=120                # LLM 分析超时秒数
+
+# 旧 alias 仍认 WOWS_REPORT_CMD (= WOWS_REPORT_FULL_CMD), 兼容老 .env
 ```
 
 ## 6. 启动
@@ -304,6 +307,58 @@ OneBot v11 客户端 (napcat 等) 连上后,在 QQ 发个 `.wowsreplay` 文件�
 1. 立刻回 `✅ 已接收 replay 文件,当前队列位置:1`
 2. 接着 `🎬 开始渲染...`
 3. 几分钟后:MP4 作为群文件/私聊文件上传,同条消息附上战报 PNG
+
+## 7. 超管 & 群级开关
+
+### 7.1 配置超管
+
+在 NoneBot 应用 (`EssexBot/.env` 之类) 里:
+
+```
+SUPERUSERS=["你的QQ号"]
+```
+
+多个超管: `SUPERUSERS=["111", "222"]`。超管能在任意群 toggle 任意 feature,也能用 `/sa` 命令操作全局黑名单。
+
+### 7.2 4 个 feature 开关
+
+每个聊天 (群 / 私聊) 默认 4 个 feature 都开:
+
+- `视频` —— MP4 战斗回放
+- `战报` —— 全队成绩单 PNG
+- `复盘` —— 主角伤害分布 PNG
+- `分析` —— DeepSeek 文字复盘 (需 §5.3 配 key)
+
+群管 / 群主 / 超管可用 `/视频 开|关|状态`、`/战报 开|关|状态` 等命令切换本群。
+丢一份 `.wowsreplay` 进群时,bot 只跑当前**开着的**输出 —— 4 个全关就静默跳过。
+
+### 7.3 超管命令 `/sa`
+
+```
+/sa list                          # 看全局黑名单
+/sa ban <视频|战报|复盘|分析>      # 全局禁用某 feature (所有群都开不了)
+/sa unban <feature>               # 解禁
+/sa stats                         # 各 feature 在所有群里的开关分布
+```
+
+### 7.4 状态文件
+
+位置: `<WOWS_REPLAY_BASEDIR>/toggle_state.json` (默认 `~/wows-bot-replay/toggle_state.json`)。
+可用 `WOWS_TOGGLE_FILE` env 完全自定义路径。
+
+格式见 `plugin/permissions.py` 顶部 docstring。Bot 启动时如果发现同目录有老的 `analyze_toggle.json`,会自动迁移:
+
+- 读出来,把每条 `g:xxx → true|false` 翻译成 `groups["xxx"].分析 = true|false`
+- 写新的 `toggle_state.json`
+- 把旧文件改名 `analyze_toggle.json.bak`
+
+迁移是幂等的(目标文件存在就跳过),多次重启不会反复折腾。
+
+### 7.5 菜单触发
+
+- 用户发 `/菜单`、`/menu` 或 `/help` —— 任意群/私聊都回一张菜单 PNG (显示本群 4 个开关当前状态)
+- Bot 被拉进新群 —— 自动延迟 1 秒发一次菜单当自我介绍
+- 用户在群里 **只 @bot** 且没附别的内容 —— 同样回菜单
 
 ## 常见问题
 
