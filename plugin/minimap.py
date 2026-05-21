@@ -110,7 +110,7 @@ for _feat in permissions.FEATURES:
 # ====== 菜单触发 ===============================================================
 
 # /菜单 /menu /help  —— 三个 alias 共用一个处理器
-menu_cmd = on_command(("菜单", "menu", "help"), priority=5, block=True)
+menu_cmd = on_command("菜单", aliases={"menu", "help"}, priority=5, block=True)
 
 @menu_cmd.handle()
 async def _menu_cmd(bot: Bot, event: MessageEvent):
