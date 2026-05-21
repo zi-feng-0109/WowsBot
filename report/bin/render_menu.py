@@ -103,8 +103,10 @@ def _draw_status_dot(draw: ImageDraw.ImageDraw, x: int, y: int,
         draw.ellipse(box, outline=GAME_RED, width=2)
         label, color = "关", GAME_RED
     else:  # banned
-        draw.text((x - r - 2, y - r - 3), "✕", fill=GAME_DIM,
-                  font=_font(CJK_FONT, 18))
+        # 用两条对角线画 ✕,避免字体缺 U+2715 字形被渲成方框
+        d = r - 2
+        draw.line([(x - d, y - d), (x + d, y + d)], fill=GAME_DIM, width=2)
+        draw.line([(x - d, y + d), (x + d, y - d)], fill=GAME_DIM, width=2)
         label, color = "禁", GAME_DIM
     draw.text((x + r + 6, y - 10), label, fill=color, font=_font(CJK_FONT, 16))
 
