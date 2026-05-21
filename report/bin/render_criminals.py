@@ -376,6 +376,71 @@ def _ship_label(p):
     return f"{zh}  L{sp.get('level', '?')} {species_cn}"
 
 
+CRIMINAL_GRADES = [
+    ("甲级战犯", GAME_RED),
+    ("乙级战犯", GAME_GOLD),
+    ("丙级战犯", (220, 160, 60)),
+    ("丁级战犯", GAME_DIM),
+]
+
+
+def _draw_rest_card(draw, x0, y0, w, h, item, grade_idx, fonts):
+    """乙/丙/丁 卡 (普通大小)。"""
+    p, score, reasons, _ = item
+    f_badge, f_name, f_ship, f_reason, f_score = fonts
+    g_label, g_color = CRIMINAL_GRADES[min(grade_idx, len(CRIMINAL_GRADES) - 1)]
+    x1, y1 = x0 + w, y0 + h
+    bg = GAME_PANEL if (grade_idx % 2 == 1) else GAME_PANEL_ALT
+    draw.rounded_rectangle([x0, y0, x1, y1], radius=10, fill=bg, outline=g_color, width=2)
+
+    bw = f_badge.getbbox(g_label)[2] + 16
+    draw.rounded_rectangle([x0 + 14, y0 + 12, x0 + 14 + bw, y0 + 12 + 28],
+                           radius=6, fill=g_color)
+    draw.text((x0 + 22, y0 + 16), g_label, (12, 16, 26), f_badge)
+
+    s_txt = f"score {score}"
+    draw.text((x1 - f_score.getbbox(s_txt)[2] - 14, y0 + 18),
+              s_txt, GAME_DIM, f_score)
+    draw.text((x0 + 14, y0 + 52), p.get("name", "?"), GAME_TEXT, f_name)
+    draw.text((x0 + 14, y0 + 82), _ship_label(p), GAME_DIM, f_ship)
+    draw.line([x0 + 14, y0 + 112, x1 - 14, y0 + 112], fill=GAME_BORDER, width=1)
+
+    ry = y0 + 124
+    for reason in reasons:
+        draw.text((x0 + 14, ry), f"• {reason}", GAME_TEXT, f_reason)
+        ry += 26
+
+
+def _draw_head_card(draw, x0, y0, w, h, head, fonts):
+    """甲级战犯 卡 (放大, 全宽)。"""
+    p, score, reasons, _ = head
+    f_badge, f_name, f_ship, f_reason, f_score = fonts
+    g_label, g_color = CRIMINAL_GRADES[0]
+    x1, y1 = x0 + w, y0 + h
+    draw.rounded_rectangle([x0, y0, x1, y1],
+                           radius=14, fill=GAME_PANEL, outline=g_color, width=3)
+
+    bw = f_badge.getbbox(g_label)[2] + 24
+    draw.rounded_rectangle([x0 + 20, y0 + 16, x0 + 20 + bw, y0 + 16 + 44],
+                           radius=8, fill=g_color)
+    draw.text((x0 + 32, y0 + 24), g_label, (12, 16, 26), f_badge)
+
+    s_txt = f"score {score}"
+    draw.text((x1 - f_score.getbbox(s_txt)[2] - 24, y0 + 28),
+              s_txt, GAME_DIM, f_score)
+
+    draw.text((x0 + 24, y0 + 78), p.get("name", "?"), GAME_TEXT, f_name)
+    draw.text((x0 + 24, y0 + 124), _ship_label(p), GAME_DIM, f_ship)
+
+    sep_y = y0 + 160
+    draw.line([x0 + 24, sep_y, x1 - 24, sep_y], fill=GAME_BORDER, width=1)
+
+    ry = sep_y + 18
+    for reason in reasons:
+        draw.text((x0 + 24, ry), f"• {reason}", GAME_TEXT, f_reason)
+        ry += 36
+
+
 def render(json_path: str, out_path: str, max_cards: int = 4):
     load_translations()
     load_result_indices()
@@ -383,86 +448,73 @@ def render(json_path: str, out_path: str, max_cards: int = 4):
     raw = json.load(open(json_path, encoding="utf-8"))
     criminals = find_criminals(raw)
 
-    # 没战犯就不出图(让上层决定怎么处理)
     if not criminals:
         print("no criminals detected, skipping render", file=sys.stderr)
-        # 仍然写一张占位图? 不,直接退出非 0 让 wows_full_report 判断
         sys.exit(3)
 
     criminals = criminals[:max_cards]
-    n = len(criminals)
+    head = criminals[0]
+    rest = criminals[1:]
+    n_rest = len(rest)
 
     W = 2200
     pad = 16
     title_h = 60
-    card_w = (W - pad * (n + 1)) // n
-    card_h = 230 + max(0, max(len(r[2]) for r in criminals) - 4) * 28
-    H = title_h + pad + card_h + pad
+
+    f_title  = font(CJK_FONT, 32)
+    # head (甲级放大版)
+    head_fonts = (
+        font(CJK_FONT, 28),   # badge
+        font(CJK_FONT, 34),   # name
+        font(CJK_FONT, 24),   # ship
+        font(CJK_FONT, 22),   # reason
+        font(MONO_FONT, 22),  # score
+    )
+    # rest (普通)
+    rest_fonts = (
+        font(CJK_FONT, 18),   # badge
+        font(CJK_FONT, 22),   # name
+        font(CJK_FONT, 18),   # ship
+        font(CJK_FONT, 15),   # reason
+        font(MONO_FONT, 16),  # score
+    )
+
+    # 高度
+    head_card_h = 178 + max(len(head[2]), 1) * 36 + 20
+    rest_card_h = (
+        230 + max(0, max(len(r[2]) for r in rest) - 4) * 28
+        if n_rest > 0 else 0
+    )
+
+    H = title_h + pad + head_card_h
+    if n_rest > 0:
+        H += pad + rest_card_h
+    H += pad
 
     img = Image.new("RGB", (W, H), GAME_BG)
     draw = ImageDraw.Draw(img)
 
-    f_title = font(CJK_FONT, 32)
-    f_card_name = font(CJK_FONT, 22)
-    f_card_ship = font(CJK_FONT, 18)
-    f_reason = font(CJK_FONT, 15)
-    f_badge = font(CJK_FONT, 18)
-    f_score = font(MONO_FONT, 16)
-
     # 标题
     draw.rectangle([0, 0, W, title_h], fill=(14, 19, 30))
     draw.line([0, title_h, W, title_h], fill=GAME_RED, width=2)
-    title = f"战犯榜  (败方 {n} 名上榜)"
+    title = f"战犯榜  (败方 {len(criminals)} 名上榜)"
     draw.text((24, 14), title, GAME_RED, f_title)
     sub = "按规则评分 + 事件级时间轴(集火/装甲区)综合判定"
-    draw.text((24 + f_title.getbbox(title)[2] + 32, 22), sub, GAME_DIM, f_card_ship)
+    draw.text((24 + f_title.getbbox(title)[2] + 32, 22),
+              sub, GAME_DIM, font(CJK_FONT, 18))
 
-    # 级别: rank 0=甲, 1=乙, 2=丙, 3=丁。颜色深→浅。
-    CRIMINAL_GRADES = [
-        ("甲级战犯", GAME_RED),
-        ("乙级战犯", GAME_GOLD),
-        ("丙级战犯", (220, 160, 60)),
-        ("丁级战犯", GAME_DIM),
-    ]
+    # 行 1: 甲级 (全宽)
+    head_y0 = title_h + pad
+    _draw_head_card(draw, pad, head_y0, W - 2 * pad, head_card_h, head, head_fonts)
 
-    # 卡片
-    y0 = title_h + pad
-    for i, (p, score, reasons, is_ring) in enumerate(criminals):
-        x0 = pad + i * (card_w + pad)
-        x1 = x0 + card_w
-        y1 = y0 + card_h
-        grade_label, grade_color = CRIMINAL_GRADES[min(i, len(CRIMINAL_GRADES) - 1)]
-        # 卡片背景
-        bg = GAME_PANEL if (i % 2 == 0) else GAME_PANEL_ALT
-        draw.rounded_rectangle([x0, y0, x1, y1], radius=10, fill=bg, outline=grade_color, width=2)
-
-        # 级别角标
-        bw = f_badge.getbbox(grade_label)[2] + 16
-        draw.rounded_rectangle([x0 + 14, y0 + 12, x0 + 14 + bw, y0 + 12 + 28],
-                               radius=6, fill=grade_color)
-        draw.text((x0 + 22, y0 + 16), grade_label, (12, 16, 26), f_badge)
-
-        # 分数
-        score_txt = f"score {score}"
-        draw.text((x1 - f_score.getbbox(score_txt)[2] - 14, y0 + 18),
-                  score_txt, GAME_DIM, f_score)
-
-        # 玩家名
-        name = p.get("name", "?")
-        draw.text((x0 + 14, y0 + 52), name, GAME_TEXT, f_card_name)
-
-        # 船 + 船种
-        ship_txt = _ship_label(p)
-        draw.text((x0 + 14, y0 + 82), ship_txt, GAME_DIM, f_card_ship)
-
-        # 分割线
-        draw.line([x0 + 14, y0 + 112, x1 - 14, y0 + 112], fill=GAME_BORDER, width=1)
-
-        # 原因列表
-        ry = y0 + 124
-        for reason in reasons:
-            draw.text((x0 + 14, ry), f"• {reason}", GAME_TEXT, f_reason)
-            ry += 26
+    # 行 2: 乙/丙/丁 并排
+    if n_rest > 0:
+        row2_y0 = head_y0 + head_card_h + pad
+        rest_card_w = (W - pad * (n_rest + 1)) // n_rest
+        for i, item in enumerate(rest):
+            x0 = pad + i * (rest_card_w + pad)
+            _draw_rest_card(draw, x0, row2_y0, rest_card_w, rest_card_h,
+                            item, grade_idx=i + 1, fonts=rest_fonts)
 
     img.save(out_path)
     print(f"saved: {out_path}", file=sys.stderr)
