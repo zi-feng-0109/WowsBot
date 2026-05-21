@@ -176,6 +176,67 @@ def _render_menu_sync(out_path, scope, ident, state, is_super, version):
     )
 
 
+# ====== /sa 超管命令 ============================================================
+
+sa_cmd = on_command("sa", priority=5, block=True)
+
+_SA_HELP = (
+    "用法: /sa <子命令>\n"
+    "  /sa list                   看全局黑名单\n"
+    "  /sa ban <视频|战报|复盘|分析>   全局禁用某功能\n"
+    "  /sa unban <feature>         解禁\n"
+    "  /sa stats                   各功能开关统计"
+)
+
+
+@sa_cmd.handle()
+async def _sa(event: Event, args: Message = CommandArg()):
+    if not permissions.is_super_admin(event.get_user_id()):
+        await sa_cmd.finish("权限不足:本命令只允许超管使用")
+    parts = args.extract_plain_text().strip().split()
+    if not parts:
+        await sa_cmd.finish(_SA_HELP)
+    sub = parts[0]
+
+    if sub == "list":
+        bl = permissions.global_blacklist()
+        if bl:
+            await sa_cmd.finish("全局黑名单: " + ", ".join(bl))
+        await sa_cmd.finish("全局黑名单为空 — 4 个功能默认全部可用")
+
+    if sub in ("ban", "unban"):
+        if len(parts) != 2:
+            await sa_cmd.finish(f"用法: /sa {sub} <{'|'.join(permissions.FEATURES)}>")
+        feat = parts[1]
+        if feat not in permissions.FEATURES:
+            await sa_cmd.finish(f"未知功能 '{feat}',合法: {permissions.FEATURES}")
+        if sub == "ban":
+            permissions.super_admin_ban(feat)
+            await sa_cmd.finish(f"已全局禁用: {feat}")
+        else:
+            permissions.super_admin_unban(feat)
+            await sa_cmd.finish(f"已解禁: {feat}")
+
+    if sub == "stats":
+        snap = permissions.snapshot()
+        lines = [f"全局黑名单: {snap['global_blacklist'] or '空'}"]
+        lines.append(f"已配群: {len(snap['groups'])} 个")
+        lines.append(f"已配私聊用户: {len(snap['private'])} 个")
+        for feat in permissions.FEATURES:
+            on_count = sum(
+                1 for g in snap["groups"].values()
+                if g.get(feat, True)
+            )
+            off_count = sum(
+                1 for g in snap["groups"].values()
+                if g.get(feat, True) is False
+            )
+            lines.append(f"  {feat}: 群里开 {on_count} / 关 {off_count}")
+        await sa_cmd.finish("\n".join(lines))
+
+    await sa_cmd.finish(f"未知子命令 '{sub}'\n\n{_SA_HELP}")
+
+
 @replay_handler.handle()
 async def handle_replay_file(bot: Bot, event: Event, state: T_State):
     """接收 .wowsreplay 文件,下载到本地后入队。"""
