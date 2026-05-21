@@ -109,22 +109,32 @@ def _draw_mixed(draw, xy, text, fill, mono_font, cjk_font):
 
 def _draw_status_dot(draw: ImageDraw.ImageDraw, x: int, y: int,
                      status: str) -> None:
-    """status ∈ {'on', 'off', 'banned'} — 画 ●开 / ○关 / ✕禁。"""
-    r = 9
-    box = [x - r, y - r, x + r, y + r]
+    """iOS 风格 toggle switch — pill + 白圆 knob。x,y 是 pill 中心。"""
+    pill_w = 62
+    pill_h = 28
+    knob_r = 11
+    inset = 3
+    x0, x1 = x - pill_w // 2, x + pill_w // 2
+    y0, y1 = y - pill_h // 2, y + pill_h // 2
+
     if status == "on":
-        draw.ellipse(box, fill=GAME_GREEN, outline=GAME_GREEN)
-        label, color = "开", GAME_GREEN
-    elif status == "off":
-        draw.ellipse(box, outline=GAME_RED, width=2)
-        label, color = "关", GAME_RED
-    else:  # banned
-        # 用两条对角线画 ✕,避免字体缺 U+2715 字形被渲成方框
-        d = r - 2
-        draw.line([(x - d, y - d), (x + d, y + d)], fill=GAME_DIM, width=2)
-        draw.line([(x - d, y + d), (x + d, y - d)], fill=GAME_DIM, width=2)
-        label, color = "禁", GAME_DIM
-    draw.text((x + r + 6, y - 10), label, fill=color, font=_font(CJK_FONT, 16))
+        bg = GAME_GREEN
+        knob_cx = x1 - knob_r - inset
+        label = "ON"
+        label_x = x0 + 10
+    else:  # off
+        bg = (130, 145, 165)   # iOS 风灰色 off,在亮蓝底上仍易区分
+        knob_cx = x0 + knob_r + inset
+        label = "OFF"
+        label_x = x - 4
+
+    draw.rounded_rectangle([x0, y0, x1, y1], radius=pill_h // 2, fill=bg)
+    draw.ellipse(
+        [knob_cx - knob_r, y - knob_r, knob_cx + knob_r, y + knob_r],
+        fill=(248, 248, 250),
+    )
+    f_pill = _font(MONO_FONT, 12)
+    draw.text((label_x, y - 7), label, fill=(255, 255, 255), font=f_pill)
 
 
 def _feature_status(state: dict, scope: str, ident: str, feature: str) -> str:
