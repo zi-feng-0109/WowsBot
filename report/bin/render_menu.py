@@ -143,7 +143,7 @@ def render_menu_png(out_path: str, *, scope: str, ident: str,
         HEADER_H + PAD
         + 30 + n_features * ROW_H + SECTION_GAP                  # 当前功能
         + 30 + 2 * ROW_H + SECTION_GAP                           # 使用方法
-        + 30 + (4 if sa_visible else 3) * 28 + SECTION_GAP       # 全部指令
+        + 30 + 22 + (4 if sa_visible else 3) * 28 + SECTION_GAP  # 全部指令 (含表头 22px)
         + 30 + max(1, n_planned) * 24 + SECTION_GAP              # 规划中
         + FOOTER_H + PAD
     )
@@ -162,12 +162,15 @@ def render_menu_png(out_path: str, *, scope: str, ident: str,
     draw.text((PAD, y), "【当前功能】", GAME_TEXT, f_section); y += 30
     name_x, desc_x, cmd_x, dot_x = PAD + 12, PAD + 110, PAD + 360, W - PAD - 80
     for feat in FEATURES:
+        status = _feature_status(state_snapshot, scope, ident, feat)
         draw.rectangle([PAD, y, W - PAD, y + ROW_H - 2], fill=GAME_PANEL_ALT)
         draw.text((name_x, y + 10), feat, GAME_TEXT, f_row)
         draw.text((desc_x, y + 12), FEATURE_DESC[feat], GAME_DIM, f_desc)
-        _draw_mixed(draw, (cmd_x, y + 10), f"/{feat} 开|关|状态",
-                    GAME_TEXT, f_mono, f_desc)
-        status = _feature_status(state_snapshot, scope, ident, feat)
+        if status == "banned":
+            draw.text((cmd_x, y + 12), "本功能暂时关闭", GAME_RED, f_desc)
+        else:
+            _draw_mixed(draw, (cmd_x, y + 10), f"/{feat} 开|关|状态",
+                        GAME_TEXT, f_mono, f_desc)
         _draw_status_dot(draw, dot_x, y + ROW_H // 2, status)
         y += ROW_H
     y += SECTION_GAP
@@ -180,16 +183,22 @@ def render_menu_png(out_path: str, *, scope: str, ident: str,
 
     # ----- 全部指令 -----
     draw.text((PAD, y), "【全部指令】", GAME_TEXT, f_section); y += 30
+    # 表头
+    draw.text((PAD + 12, y),  "指令",   GAME_DIM, f_desc)
+    draw.text((PAD + 320, y), "作用",   GAME_DIM, f_desc)
+    draw.text((PAD + 640, y), "谁可用", GAME_DIM, f_desc)
+    y += 22
     cmds = [
-        ("/菜单  /menu  /help", "打开本面板"),
-        ("/<功能> 开|关|状态",   "切换或查看本群开关"),
-        ("/<功能> 状态",         "看自己当前生效状态"),
+        ("/菜单  /menu  /help", "打开本面板",      "任何人"),
+        ("/<功能> 开|关",        "切换本群开关",    "群主/群管/超管"),
+        ("/<功能> 状态",         "查看本群当前开关", "任何人"),
     ]
     if sa_visible:
-        cmds.append(("/sa ban|unban <功能>", "超管:全局禁/解禁"))
-    for cmd, desc in cmds:
+        cmds.append(("/sa ban|unban <功能>", "全局禁用/解禁", "仅超管"))
+    for cmd, desc, perm in cmds:
         _draw_mixed(draw, (PAD + 12, y), cmd, GAME_TEXT, f_mono, f_desc)
         draw.text((PAD + 320, y), desc, GAME_DIM, f_row)
+        draw.text((PAD + 640, y), perm, GAME_DIM, f_row)
         y += 28
     y += SECTION_GAP
 
