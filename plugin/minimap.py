@@ -29,6 +29,10 @@ from nonebot.typing import T_State
 from nonebot.log import logger
 
 from . import permissions
+from nonebot import on_notice
+from nonebot.rule import to_me
+from nonebot.adapters.onebot.v11.event import GroupIncreaseNoticeEvent, MessageEvent
+from .version import version_str
 
 RENDER_SH        = os.environ.get("WOWS_RENDER_SH",   "/opt/wows-bot/minimap/render.sh")
 REPORT_CMD       = os.environ.get("WOWS_REPORT_CMD",  "/opt/wows-bot/report/bin/wows_full_report")
@@ -94,6 +98,82 @@ def _make_toggle_handler(feature: str):
 
 for _feat in permissions.FEATURES:
     _make_toggle_handler(_feat)
+
+
+# ====== 菜单触发 ===============================================================
+
+# /菜单 /menu /help  —— 三个 alias 共用一个处理器
+menu_cmd = on_command(("菜单", "menu", "help"), priority=5, block=True)
+
+@menu_cmd.handle()
+async def _menu_cmd(bot: Bot, event: MessageEvent):
+    await _reply_menu(bot, event)
+
+
+# bot 自己刚被拉进群 —— 主动发一次菜单
+group_join = on_notice(priority=5)
+
+@group_join.handle()
+async def _group_join(bot: Bot, event: GroupIncreaseNoticeEvent):
+    if event.user_id == int(bot.self_id):
+        # 给群里一个稍稍延迟,让"欢迎新成员"消息先飘过去
+        await asyncio.sleep(1)
+        await _reply_menu(bot, event)
+
+
+# @bot 且没附别的内容 —— plaintext 为空就发菜单
+def _is_pure_at(event: MessageEvent) -> bool:
+    return not event.get_plaintext().strip()
+
+at_only = on_message(rule=to_me() & _is_pure_at, priority=20, block=False)
+
+@at_only.handle()
+async def _at_only(bot: Bot, event: MessageEvent):
+    await _reply_menu(bot, event)
+
+
+async def _reply_menu(bot: Bot, event):
+    """渲染当前作用域的菜单 PNG,回复到群/私聊。"""
+    scope, ident = permissions.scope_of(event)
+    is_super = permissions.is_super_admin(getattr(event, "user_id", 0))
+    state = permissions.snapshot()
+    version = version_str()
+
+    # 写到一个临时文件再读;避免 PIL → bytes 转换的复杂性
+    out_dir = Path(BASE_DIR) / "_menu_cache"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"menu_{scope}_{ident}.png"
+
+    try:
+        await asyncio.to_thread(
+            _render_menu_sync,
+            str(out_path), scope, ident, state, is_super, version,
+        )
+    except Exception as e:
+        logger.error(f"渲染菜单失败: {e}")
+        await bot.send(event, f"菜单渲染失败: {e}")
+        return
+
+    # group_increase 不能 reply;message event 可以
+    msg_id = getattr(event, "message_id", None)
+    msg = MessageSegment.image(f"file://{out_path}")
+    if msg_id:
+        msg = MessageSegment.reply(msg_id) + msg
+    await bot.send(event, msg)
+
+
+def _render_menu_sync(out_path, scope, ident, state, is_super, version):
+    """sync wrapper 给 to_thread 用 — render_menu 没有 async 接口。"""
+    # 在 thread 里 import,避免插件加载阶段就拉 render_menu 的依赖链
+    import sys as _sys
+    bin_path = Path(REPORT_CMD).parent  # /opt/wows-bot/report/bin
+    if str(bin_path) not in _sys.path:
+        _sys.path.insert(0, str(bin_path))
+    from render_menu import render_menu_png
+    render_menu_png(
+        out_path, scope=scope, ident=ident,
+        state_snapshot=state, is_super=is_super, version=version,
+    )
 
 
 @replay_handler.handle()
