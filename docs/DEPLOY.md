@@ -360,6 +360,28 @@ SUPERUSERS=["你的QQ号"]
 - Bot 被拉进新群 —— 自动延迟 1 秒发一次菜单当自我介绍
 - 用户在群里 **只 @bot** 且没附别的内容 —— 同样回菜单
 
+## 8. 已知限制
+
+### 8.1 不支持 RU 服 (Lesta «Мир кораблей»)
+
+WG 2022 年退出俄罗斯,把俄区业务卖给 Lesta Games,后者独立开发 «Мир кораблей»
+(原 World of Warships RU 客户端),从此 RU 服跟 WG 国际服 (CN/Asia/EU/NA)
+**协议、GameParams、消耗品 ID、Ribbon ID 全部分叉**。
+
+我们用的 `wows-toolkit` 上游 (landaire/wows-toolkit) 没有针对 Lesta 的适配,
+源码零 region 分支、零 Lesta 相关 commit、零 Lesta replay 测试,
+解析 RU replay 大概率挂或者输出乱码。
+
+支持 WG 国际服:
+- ✓ CN (Lesta CN 之外的 360 / WeGame / NetEase 等渠道)
+- ✓ Asia
+- ✓ EU
+- ✓ NA (未实测,但跟 CN/Asia 同协议)
+
+短期不计划支持 RU。如果你是 Lesta 用户想自己适配:需要 dump 一份 Lesta
+客户端的 `extracted/`,自己造 `constants.json`,然后 fork wows-toolkit 跟
+Lesta 协议演进 — 工作量中等偏大,不建议作为本仓库的目标。
+
 ## 常见问题
 
 - **PNG 里船名/地图全是英文** — polib 没装在 NoneBot 用的 Python 里。
