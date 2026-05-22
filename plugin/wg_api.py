@@ -20,11 +20,16 @@ from typing import Optional
 from nonebot.log import logger
 
 # realm → vortex host
+# RU 走 Lesta «Мир кораблей»,跟 WG 国际服 (CN/Asia/EU/NA) 数据库独立。
+# 注意: 我们的战报 PNG 渲染不支持 Lesta replay (协议分叉),但 /查询 只需
+# account_id + ship_id 打 API,所以 RU 这块可以 work,前提是 player list
+# 已经拿到 (目前的 bot 流程拿不到,留备用)。
 _VORTEX_HOSTS = {
     "cn":   "vortex.wowsgame.cn",
     "asia": "vortex.worldofwarships.asia",
     "eu":   "vortex.worldofwarships.eu",
     "na":   "vortex.worldofwarships.com",
+    "ru":   "vortex.korabli.su",
 }
 
 # CN 服 account_id 通常 ≥ 5B (民间经验);WG 国际服在 1-4B 之间。
@@ -43,9 +48,9 @@ def _realm_priority(account_id: int) -> list[str]:
     if env_order:
         order = [r.strip().lower() for r in env_order.split(",") if r.strip()]
     elif account_id >= _CN_ID_THRESHOLD:
-        order = ["cn", "asia", "eu", "na"]
+        order = ["cn", "asia", "eu", "na", "ru"]
     else:
-        order = ["asia", "cn", "eu", "na"]
+        order = ["asia", "cn", "eu", "na", "ru"]
     # 过滤掉未知 realm,保持顺序去重
     seen = set()
     out = []
@@ -150,7 +155,7 @@ def format_stats_summary(player: dict, pvp: Optional[dict],
             .replace(",", " "))
 
     if not pvp:
-        return head + ("\n生涯: CN/Asia/EU/NA 均无该船 pvp 数据"
+        return head + ("\n生涯: CN/Asia/EU/NA/RU 均无该船 pvp 数据"
                        " (可能:玩家隐藏隐私 / 未玩过 / vortex 暂不可用)")
 
     n = int(pvp.get("battles_count") or 0)
