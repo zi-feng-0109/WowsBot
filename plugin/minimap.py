@@ -30,6 +30,8 @@ from nonebot.typing import T_State
 from nonebot.log import logger
 
 from . import permissions
+from . import query_index
+from . import wg_api
 from nonebot import on_notice
 from nonebot.rule import to_me
 from nonebot.adapters.onebot.v11.event import GroupIncreaseNoticeEvent, MessageEvent
@@ -71,6 +73,11 @@ async def _init_permissions():
     except Exception as e:
         logger.error(f"permissions 初始化失败: {e}")
         raise
+    try:
+        query_index.init(BASE_DIR)
+        logger.info(f"query_index inited at {BASE_DIR}")
+    except Exception as e:
+        logger.error(f"query_index 初始化失败: {e}")
 
 
 # ====== 4-feature toggle 命令 (视频/战报/复盘/分析) =====================
@@ -244,6 +251,57 @@ async def _sa(event: Event, args: Message = CommandArg()):
     await sa_cmd.finish(f"未知子命令 '{sub}'\n\n{_SA_HELP}")
 
 
+# ====== /查询 <编号> ===========================================================
+# 要求用户引用回复战报消息;按 # 列编号查该玩家这条船的 WG 生涯数据。
+
+query_cmd = on_command("查询", priority=5, block=True)
+
+
+@query_cmd.handle()
+async def _query(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
+    text = args.extract_plain_text().strip()
+    if not text or not text.split()[0].isdigit():
+        await query_cmd.finish(
+            "用法: 引用战报消息回复 + /查询 <编号>\n"
+            "示例 (引用战报): /查询 5"
+        )
+    idx = int(text.split()[0])
+
+    reply = getattr(event, "reply", None)
+    if reply is None or not getattr(reply, "message_id", None):
+        await query_cmd.finish("请引用 (回复) 战报图消息,再发 /查询 <编号>")
+
+    entry = query_index.lookup(int(reply.message_id))
+    if entry is None:
+        await query_cmd.finish(
+            "该战报不在查询窗口内 (战报发出 3 小时后失效),请重新发回放生成新战报"
+        )
+
+    players = entry.get("players") or []
+    player = next((p for p in players if p.get("idx") == idx), None)
+    if player is None:
+        await query_cmd.finish(f"编号 {idx} 在本局不存在 (本局共 {len(players)} 人)")
+
+    if not wg_api.is_configured():
+        await query_cmd.finish(
+            "未配置 WOWS_WG_APP_ID 环境变量,无法调 WG API。\n"
+            "申请 application_id: https://developers.wargaming.net"
+        )
+
+    await query_cmd.send(f"查询中… (#{idx} {player.get('name','?')})")
+    try:
+        pvp = await wg_api.fetch_ship_stats(
+            account_id=player["account_id"],
+            ship_id=player["ship_id"],
+        )
+    except Exception as e:
+        logger.error(f"WG API 调用异常: {e}")
+        await query_cmd.finish(f"⚠️ 查询失败: {e}")
+
+    summary = wg_api.format_stats_summary(player, pvp)
+    await query_cmd.finish(summary)
+
+
 @replay_handler.handle()
 async def handle_replay_file(bot: Bot, event: Event, state: T_State):
     """接收 .wowsreplay 文件,下载到本地后入队。"""
@@ -408,9 +466,26 @@ async def process_queue(bot: Bot):
                     report_png = r
 
             # 发 MP4 + 报告(沿用原 upload_and_notify 接口)
+            sent_report_msg_id = None
             if mp4_path or report_png or report_error:
-                await upload_and_notify(bot, user_id, group_id, message_id,
-                                        mp4_path, report_png, report_error)
+                sent_report_msg_id = await upload_and_notify(
+                    bot, user_id, group_id, message_id,
+                    mp4_path, report_png, report_error,
+                )
+
+            # 若发出去了战报 PNG (有 # 列那张),把索引清单 remember 进 query_index
+            # 供 /查询 反查。报告失败 / kind=damage(无 # 列) / kind=None 不记。
+            if (sent_report_msg_id is not None
+                    and report_png
+                    and report_kind in ("full", "battle")):
+                json_path_for_idx = os.path.join(user_dir, f"{Path(replay_path).stem}.json")
+                if os.path.isfile(json_path_for_idx):
+                    try:
+                        meta, indexed = _build_indexed_players(json_path_for_idx)
+                        query_index.remember(sent_report_msg_id, meta, indexed)
+                        logger.info(f"query_index 记 msg_id={sent_report_msg_id} ({len(indexed)} 玩家)")
+                    except Exception as e:
+                        logger.warning(f"query_index 入库失败 (不影响主流程): {e}")
 
             # 分析:从 user_dir 里找 .json
             json_path = os.path.join(user_dir, f"{Path(replay_path).stem}.json")
@@ -527,6 +602,91 @@ async def run_damage_report(replay_path: str, work_dir: str) -> str:
     return await _run_report_like(REPORT_DAMAGE_CMD, replay_path, work_dir, "复盘")
 
 
+def _strip_wrapped_id(s: str) -> int:
+    """'AccountId(123)' / 'GameParamId(456)' / 'EntityId(789)' → int。"""
+    if not s:
+        return 0
+    s = str(s)
+    if "(" in s and s.endswith(")"):
+        s = s[s.index("(") + 1:-1]
+    try:
+        return int(s)
+    except ValueError:
+        return 0
+
+
+_SPECIES_ZH = {
+    "Battleship": "战列", "Cruiser": "巡洋", "Destroyer": "驱逐",
+    "Submarine": "潜艇", "AirCarrier": "航母",
+}
+
+
+def _build_indexed_players(json_path: str) -> tuple[dict, list]:
+    """读 replay JSON,按战报 # 列同样的顺序 (己方 1..N,敌方 N+1..) 构建轻量索引清单。
+    返回 (match_meta, indexed_players)。"""
+    with open(json_path, "r", encoding="utf-8") as f:
+        d = json.load(f)
+    m = d.get("match", {}) or {}
+    self_name = m.get("self_player_name", "")
+    players = d.get("players", []) or []
+    self_p = next((p for p in players if p.get("name") == self_name), None)
+    self_team = self_p.get("team_id", 0) if self_p else 0
+
+    # 尝试翻译船名: report/data/zh_sg.mo;通过 render_battle_report 的 polib loader
+    try:
+        import sys as _sys
+        rb_path = str(Path(REPORT_FULL_CMD).parent)
+        if rb_path not in _sys.path:
+            _sys.path.insert(0, rb_path)
+        from render_battle_report import t as _t, load_translations as _load_translations, clean_ship_name as _clean
+        _load_translations()
+        def _ship_zh(sp): return _t(f"IDS_{sp.get('index','')}", _clean(sp.get('name', '')))
+    except Exception:
+        def _ship_zh(sp): return sp.get("name", "")
+
+    def _team_indexed(team_id: int, start_idx: int) -> list:
+        members = [p for p in players if p.get("team_id") == team_id]
+        members.sort(key=lambda p: -((p.get("stats") or {}).get("damage_dealt") or 0))
+        out = []
+        for i, p in enumerate(members):
+            sp = p.get("ship", {}) or {}
+            st = p.get("stats", {}) or {}
+            species_raw = sp.get("species", "")
+            if species_raw.startswith("Known(") and species_raw.endswith(")"):
+                species_raw = species_raw[6:-1]
+            out.append({
+                "idx": start_idx + i,
+                "name": p.get("name", "?"),
+                "account_id": _strip_wrapped_id(p.get("account_id")),
+                "ship_id":    _strip_wrapped_id(sp.get("id")),
+                "ship_name":  sp.get("name", ""),
+                "ship_index": sp.get("index", ""),
+                "ship_zh":    _ship_zh(sp),
+                "ship_level": sp.get("level", 0),
+                "species_zh": _SPECIES_ZH.get(species_raw, species_raw or "?"),
+                "team_id":    team_id,
+                "this_game": {
+                    "dmg":   int(st.get("damage_dealt") or 0),
+                    "frags": int(st.get("frags") or 0),
+                    "alive": bool(st.get("is_alive")),
+                    "time_lived_secs": st.get("time_lived_secs"),
+                },
+            })
+        return out
+
+    self_indexed  = _team_indexed(self_team, 1)
+    other_indexed = _team_indexed(1 - self_team, len(self_indexed) + 1)
+    indexed = self_indexed + other_indexed
+
+    match_meta = {
+        "map":  (m.get("map_name") or "").split("/")[-1],
+        "mode": f"{m.get('match_group','?')}·{m.get('game_mode','?')}",
+        "date": m.get("date_time", ""),
+        "self_team": self_team,
+    }
+    return match_meta, indexed
+
+
 async def run_full_report(replay_path: str, work_dir: str) -> str:
     """跑 wows_full_report,返回拼接 PNG 路径 (战报+复盘 竖向拼一张)。
     bot 调用恒带 WOWS_SKIP_CRIMINALS=1 — 战犯走独立 PNG 路径,避免重复。"""
@@ -600,11 +760,12 @@ async def _run_report_like(cmd: str, replay_path: str, work_dir: str, label: str
 async def upload_and_notify(bot: Bot, user_id: str, group_id: Optional[int],
                             message_id: int, mp4_path: Optional[str],
                             png_path: Optional[str] = None,
-                            png_error: Optional[str] = None):
+                            png_error: Optional[str] = None) -> Optional[int]:
     """上传 MP4(如果有),并把 PNG (或失败说明) 一起回到原消息上。
-    mp4_path / png_path / png_error 三者均可为 None — 全 None 时本函数静默 no-op。"""
+    mp4_path / png_path / png_error 三者均可为 None — 全 None 时本函数静默 no-op。
+    返回:发出去的 chat 消息 msg_id (供 /查询 反查),静默 no-op 时返 None。"""
     if not (mp4_path or png_path or png_error):
-        return
+        return None
 
     file_name = None
     if mp4_path:
@@ -635,9 +796,10 @@ async def upload_and_notify(bot: Bot, user_id: str, group_id: Optional[int],
 
     try:
         if group_id:
-            await bot.call_api("send_group_msg", group_id=group_id, message=message)
+            resp = await bot.call_api("send_group_msg", group_id=group_id, message=message)
         else:
-            await bot.call_api("send_private_msg", user_id=int(user_id), message=message)
+            resp = await bot.call_api("send_private_msg", user_id=int(user_id), message=message)
+        return int(resp.get("message_id")) if isinstance(resp, dict) and "message_id" in resp else None
     except Exception as e:
         logger.error(f"发送合并消息失败: {e}")
         raise RuntimeError(f"消息发送失败: {str(e)}")
