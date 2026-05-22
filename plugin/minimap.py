@@ -298,8 +298,29 @@ async def _query(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
         logger.error(f"WG API 调用异常: {e}")
         await query_cmd.finish(f"⚠️ 查询失败: {e}")
 
-    summary = wg_api.format_stats_summary(player, pvp)
-    await query_cmd.finish(summary)
+    # 渲 PNG 卡片
+    out_dir = Path(BASE_DIR) / "_query_cache"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_png = out_dir / f"query_{reply.message_id}_{idx}.png"
+    try:
+        await asyncio.to_thread(_render_query_sync, str(out_png), player, pvp)
+    except Exception as e:
+        logger.error(f"渲染 /查询 卡失败: {e}")
+        # 兜底回退文字
+        await query_cmd.finish(wg_api.format_stats_summary(player, pvp))
+
+    msg = MessageSegment.image(f"file://{out_png}")
+    await query_cmd.finish(msg)
+
+
+def _render_query_sync(out_path: str, player: dict, pvp):
+    """thread wrapper — render_query 没 async 接口。"""
+    import sys as _sys
+    bin_path = str(Path(REPORT_FULL_CMD).parent)
+    if bin_path not in _sys.path:
+        _sys.path.insert(0, bin_path)
+    from render_query import render_query_png
+    render_query_png(out_path, player=player, pvp=pvp)
 
 
 @replay_handler.handle()
