@@ -246,7 +246,12 @@ def analyze_player(p, damage_events, match_duration_secs, all_players=None,
     name = p.get("name", "?")
     eid = strip_id(p.get("vehicle_entity_id") or "")
 
-    damage = int(st.get("damage_dealt") or 0)
+    # 优先用 results_info.damage (WG 服务器结算的权威总伤,含撞击/火灾/洪水
+    # 等所有 DOT),没有再 fallback 到 stats.damage_dealt (replayshark 从
+    # damage_events 累加,不含 ramming)。跟 render_battle_report.py 同源,
+    # 避免战报 vs 战犯榜数字打架。
+    damage_ri = result_field(ri, "damage")
+    damage = int(damage_ri if damage_ri is not None else (st.get("damage_dealt") or 0))
     max_hp = int(st.get("max_health") or 0) or 1
     time_lived = st.get("time_lived_secs")
     is_alive = bool(st.get("is_alive"))
