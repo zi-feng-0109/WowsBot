@@ -54,14 +54,15 @@ def remember(msg_id: int, match_meta: dict, indexed_players: list) -> None:
 
 
 def lookup(msg_id: int) -> Optional[dict]:
-    """按 msg_id 找出该战报的索引清单;过期/不存在返回 None。"""
+    """按 msg_id 找出该战报的索引清单。不查 TTL,过期 entry 也会原样返回 —
+    需要 is_expired() 单独判,这样 handler 可以给出"不存在 vs 过期"两条不同文案。"""
     with _lock:
-        entry = _state.get(str(msg_id))
-        if entry is None:
-            return None
-        if time.time() - entry.get("ts", 0) >= _TTL_SECS:
-            return None
-        return entry
+        return _state.get(str(msg_id))
+
+
+def is_expired(entry: dict) -> bool:
+    """entry 是否已超 TTL。entry 必须是 lookup() 的返回值。"""
+    return time.time() - entry.get("ts", 0) >= _TTL_SECS
 
 
 def _prune_locked() -> None:

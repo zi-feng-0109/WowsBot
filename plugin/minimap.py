@@ -274,7 +274,12 @@ async def _query(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
     entry = query_index.lookup(int(reply.message_id))
     if entry is None:
         await query_cmd.finish(
-            "该战报不在查询窗口内 (战报发出 3 小时后失效),请重新发回放生成新战报"
+            "未找到对应战报。请确认你引用 (回复) 的是 bot 发出的战报图消息 (含 # 列那张),"
+            "而不是 MP4 / 复盘图 / 别人发的消息"
+        )
+    if query_index.is_expired(entry):
+        await query_cmd.finish(
+            "该战报已超过 3 小时查询窗口,请重新发回放让 bot 生成新战报后再查"
         )
 
     players = entry.get("players") or []
