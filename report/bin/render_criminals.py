@@ -375,7 +375,14 @@ def find_criminals(raw):
     br = m.get("battle_result") or {}
     win_team = br.get("team_id")
     if win_team is None:
-        return []  # 平局或未结束,不评战犯
+        # timeout 局 wows-toolkit 把 winning_team 留空 (replayshark 给 Draw),
+        # 跟 render_battle_report.py 同一兜底: 按 team_scores 推断胜方。
+        team_scores = m.get("team_scores") or []
+        scores = {ts["team_index"]: ts["score"] for ts in team_scores}
+        if 0 in scores and 1 in scores and scores[0] != scores[1]:
+            win_team = 0 if scores[0] > scores[1] else 1
+    if win_team is None:
+        return []  # 真同分平局或未结束,不评战犯
 
     # 全部玩家中胜方剔除,留败方
     loser_team = 1 - win_team if win_team in (0, 1) else None
