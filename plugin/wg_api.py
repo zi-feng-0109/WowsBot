@@ -150,7 +150,8 @@ def format_stats_summary(player: dict, pvp: Optional[dict],
             .replace(",", " "))
 
     if not pvp:
-        return head + "\n生涯: 无数据 (该账号可能不在 CN/Asia/EU/NA 任一服)"
+        return head + ("\n生涯: CN/Asia/EU/NA 均无该船 pvp 数据"
+                       " (可能:玩家隐藏隐私 / 未玩过 / vortex 暂不可用)")
 
     n = int(pvp.get("battles_count") or 0)
     if n == 0:

@@ -147,9 +147,10 @@ def render_query_png(out_path: str, *, player: dict, pvp: Optional[dict],
 
     if not pvp or int(pvp.get("battles_count") or 0) == 0:
         draw.text((right_x + 18, y + 12), "生涯", GAME_GOLD, f_section)
-        msg = ("该账号不在 CN/Asia/EU/NA 任一服\n或未玩过该船"
-               if not pvp else "该船 0 场")
-        draw.text((right_x + 18, y + 60), msg, GAME_DIM, f_value_cjk)
+        msg = ("CN/Asia/EU/NA 均无该船 pvp 数据\n"
+               "(可能:玩家隐藏隐私 / 未玩过 / vortex 暂不可用)"
+               if not pvp else "该船 0 场 pvp 记录")
+        draw.text((right_x + 18, y + 60), msg, GAME_DIM, f_label)
         avg_dmg = 0
     else:
         n         = int(pvp.get("battles_count") or 0)
