@@ -308,7 +308,7 @@ OneBot v11 客户端 (napcat 等) 连上后,在 QQ 发个 `.wowsreplay` 文件�
 2. 接着 `🎬 开始渲染...`
 3. 几分钟后:MP4 作为群文件/私聊文件上传,同条消息附上战报 PNG
 
-## 7. 超管 & 群级开关
+## 7. 超管 & 群级开关 & 版本号
 
 ### 7.1 配置超管
 
@@ -319,6 +319,23 @@ SUPERUSERS=["你的QQ号"]
 ```
 
 多个超管: `SUPERUSERS=["111", "222"]`。超管能在任意群 toggle 任意 feature,也能用 `/sa` 命令操作全局黑名单。
+
+### 7.1.1 配置 bot 版本号 (建议跟 CHANGELOG 同步)
+
+同样在 `EssexBot/.env` 里:
+
+```
+WOWS_BOT_VERSION=1.0.1
+```
+
+NoneBot 启动时 dotenv 会把 .env 里的键全部塞进 `os.environ`,所以这个变量
+同时被 **菜单 footer** (`plugin/version.py` → `version_str()`) 和
+**战报 / 复盘 PNG footer** (`report/bin/render_*.py` 读 `WOWS_BOT_VERSION`) 共用,
+不会出现菜单 v1.0.1、战报 v1.0.0 之类的不一致。
+
+没设这一行时,`plugin/version.py` 兜底用 `_DEFAULT_VERSION` (代码里最新发布号),
+战报 footer 直接不显示版本字段。日常发版只改这一行 + `sudo systemctl restart wows-bot` 即可,
+不必动代码。
 
 ### 7.2 4 个 feature 开关
 
