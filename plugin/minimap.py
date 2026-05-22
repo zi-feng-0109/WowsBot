@@ -287,45 +287,49 @@ async def _query(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
     if player is None:
         await query_cmd.finish(f"编号 {idx} 在本局不存在 (本局共 {len(players)} 人)")
 
-    if not wg_api.is_configured():
-        await query_cmd.finish(
-            "未配置 WOWS_WG_APP_ID 环境变量,无法调 WG API。\n"
-            "申请 application_id: https://developers.wargaming.net"
-        )
-
     await query_cmd.send(f"查询中… (#{idx} {player.get('name','?')})")
+    cached_realm = entry.get("_realms", {}).get(str(player["account_id"]))
     try:
-        pvp = await wg_api.fetch_ship_stats(
+        pvp, hit_realm = await wg_api.fetch_ship_stats(
             account_id=player["account_id"],
             ship_id=player["ship_id"],
+            preferred_realm=cached_realm,
         )
     except Exception as e:
-        logger.error(f"WG API 调用异常: {e}")
+        logger.error(f"vortex 调用异常: {e}")
         await query_cmd.finish(f"⚠️ 查询失败: {e}")
+
+    # 命中后把 realm 缓存进 query_index 那条 entry,下次同 account 直接命中
+    if hit_realm:
+        try:
+            query_index.cache_realm(int(reply.message_id),
+                                     player["account_id"], hit_realm)
+        except Exception as e:
+            logger.debug(f"realm 缓存失败 (无害): {e}")
 
     # 渲 PNG 卡片
     out_dir = Path(BASE_DIR) / "_query_cache"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_png = out_dir / f"query_{reply.message_id}_{idx}.png"
     try:
-        await asyncio.to_thread(_render_query_sync, str(out_png), player, pvp)
+        await asyncio.to_thread(_render_query_sync, str(out_png),
+                                 player, pvp, hit_realm)
     except Exception as e:
         logger.error(f"渲染 /查询 卡失败: {e}")
-        # 兜底回退文字
-        await query_cmd.finish(wg_api.format_stats_summary(player, pvp))
+        await query_cmd.finish(wg_api.format_stats_summary(player, pvp, hit_realm))
 
     msg = MessageSegment.image(f"file://{out_png}")
     await query_cmd.finish(msg)
 
 
-def _render_query_sync(out_path: str, player: dict, pvp):
+def _render_query_sync(out_path: str, player: dict, pvp, realm):
     """thread wrapper — render_query 没 async 接口。"""
     import sys as _sys
     bin_path = str(Path(REPORT_FULL_CMD).parent)
     if bin_path not in _sys.path:
         _sys.path.insert(0, bin_path)
     from render_query import render_query_png
-    render_query_png(out_path, player=player, pvp=pvp)
+    render_query_png(out_path, player=player, pvp=pvp, realm=realm)
 
 
 @replay_handler.handle()

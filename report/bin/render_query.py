@@ -67,10 +67,13 @@ def _fmt_time(secs) -> str:
     return f"{s // 60:02d}:{s % 60:02d}"
 
 
-def render_query_png(out_path: str, *, player: dict, pvp: Optional[dict]) -> str:
+def render_query_png(out_path: str, *, player: dict, pvp: Optional[dict],
+                      realm: Optional[str] = None) -> str:
     """渲一张 /查询 结果卡。
     player: query_index 里的 indexed player 一条 (含 idx/name/ship_zh/this_game…)
-    pvp:    wg_api.fetch_ship_stats 返回 (None 即无数据)
+    pvp:    wg_api.fetch_ship_stats 返回 (None 即无数据);字段名按 vortex 来
+            (battles_count / wins / survived / damage_dealt / frags ...)
+    realm:  命中 realm (asia/cn/eu/na) — header 角标显示
     """
     # ----- 字体 -----
     f_idx_big     = _font(CJK_FONT, 56)   # #编号
@@ -142,16 +145,16 @@ def render_query_png(out_path: str, *, player: dict, pvp: Optional[dict]) -> str
     draw.rounded_rectangle([right_x, y, right_x + col_w, y + body_h - 12],
                            radius=10, fill=GAME_PANEL_ALT, outline=GAME_BORDER)
 
-    if not pvp or int(pvp.get("battles") or 0) == 0:
+    if not pvp or int(pvp.get("battles_count") or 0) == 0:
         draw.text((right_x + 18, y + 12), "生涯", GAME_GOLD, f_section)
-        msg = ("玩家隐藏隐私 / 未玩过该船\n或 WG API 暂不可用"
+        msg = ("该账号不在 CN/Asia/EU/NA 任一服\n或未玩过该船"
                if not pvp else "该船 0 场")
         draw.text((right_x + 18, y + 60), msg, GAME_DIM, f_value_cjk)
         avg_dmg = 0
     else:
-        n         = int(pvp.get("battles") or 0)
+        n         = int(pvp.get("battles_count") or 0)
         wins      = int(pvp.get("wins") or 0)
-        surv      = int(pvp.get("survived_battles") or 0)
+        surv      = int(pvp.get("survived") or 0)
         dmg_total = int(pvp.get("damage_dealt") or 0)
         frags_total = int(pvp.get("frags") or 0)
         win_rate  = wins / n * 100
@@ -160,8 +163,9 @@ def render_query_png(out_path: str, *, player: dict, pvp: Optional[dict]) -> str
         avg_frags = frags_total / n
         kdr       = frags_total / max(1, n - surv)
 
+        realm_tag = f"  [{realm}服]" if realm else ""
         draw.text((right_x + 18, y + 12),
-                  f"生涯 ({n} 场)", GAME_GOLD, f_section)
+                  f"生涯 ({n} 场){realm_tag}", GAME_GOLD, f_section)
 
         # 一排排紧凑显示
         _draw_kv(draw, right_x + 18, y + 50,

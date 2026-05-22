@@ -65,6 +65,18 @@ def is_expired(entry: dict) -> bool:
     return time.time() - entry.get("ts", 0) >= _TTL_SECS
 
 
+def cache_realm(msg_id: int, account_id: int, realm: str) -> None:
+    """把成功查到的 realm 写回这条战报 entry,下次同 account 直接命中。
+    存到 entry._realms = {"<account_id>": "asia"}。"""
+    with _lock:
+        entry = _state.get(str(msg_id))
+        if entry is None:
+            return
+        realms = entry.setdefault("_realms", {})
+        realms[str(account_id)] = realm
+        _save_locked()
+
+
 def _prune_locked() -> None:
     cutoff = time.time() - _TTL_SECS
     old = [k for k, v in _state.items() if v.get("ts", 0) < cutoff]
