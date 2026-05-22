@@ -347,6 +347,12 @@ def load(json_path: str) -> MatchReport:
 
     scores = {ts["team_index"]: ts["score"] for ts in m["team_scores"]}
 
+    # Replayshark 在 timeout (winning_team < 0) 一律标 Draw,但 WoWs domination
+    # 规则下分数高的队就赢。这里按 team_scores 兜底推断,只在 type=="Draw" 时纠正。
+    if win_type == "Draw" and 0 in scores and 1 in scores and scores[0] != scores[1]:
+        win_team = 0 if scores[0] > scores[1] else 1
+        win_type = "Win" if win_team == self_team else "Loss"
+
     # map name pretty
     map_name = m["map_name"].split("/")[-1]
 
