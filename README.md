@@ -59,6 +59,16 @@ QQ 用户发 .wowsreplay
 
 游戏每出大版本后,刷新数据见 [docs/UPDATE.md](docs/UPDATE.md)。
 
+## 上游依赖与二次开发
+
+- **MP4 渲染** — 直接用 [landaire/wows-toolkit](https://github.com/landaire/wows-toolkit) 的 `minimap_renderer` 二进制,本仓库未改动其源码,只写了个 wrapper (`minimap/render.sh`) 调用它
+- **数据解包** — 用 wows-toolkit 的 `wows-data-mgr` CLI 从 WoWs 客户端 dump 出 `extracted/<ver>_<build>/`,MP4 渲染器和战报渲染器共用这一份
+- **战报 PNG 用的 `replayshark` 是基于 wows-toolkit 二次开发的**,补丁文件 `tools/replayshark_battle_report.patch` 在上游 commit 之上做了以下改动:
+  - 新增 `battle-report` 子命令,把 replay 解析成本项目要的结构化 JSON (玩家清单、伤害、击杀、消耗品、成就、结算等)
+  - 新增 `Avatar.squadronConsumableUsed` 事件解析,支撑战犯系统识别航母系飞机消耗品的使用情况
+  - 预编译产物在 `report/prebuilt/`,Linux x86_64 直接用,其他架构按 [DEPLOY.md §3](docs/DEPLOY.md) 自建
+- **Lesta 服 (.korablireplay)** — 上游 wows-toolkit 不支持,本项目也不打算适配 (协议分叉)
+
 ## License
 
 MIT — 见 [LICENSE](LICENSE)。
