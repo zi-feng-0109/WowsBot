@@ -31,6 +31,7 @@ from nonebot.log import logger
 
 from . import permissions
 from . import query_index
+from . import render_mode
 from . import wg_api
 from nonebot import on_notice
 from nonebot.rule import to_me
@@ -78,6 +79,12 @@ async def _init_permissions():
         logger.info(f"query_index inited at {BASE_DIR}")
     except Exception as e:
         logger.error(f"query_index 初始化失败: {e}")
+    try:
+        render_mode.init(BASE_DIR)
+        logger.info(f"render_mode inited at {BASE_DIR} "
+                    f"(parallel={render_mode.is_parallel()})")
+    except Exception as e:
+        logger.error(f"render_mode 初始化失败: {e}")
 
 
 # ====== 4-feature toggle 命令 (视频/战报/复盘/分析) =====================
@@ -199,7 +206,8 @@ _SA_HELP = (
     "  /sa list                   看全局黑名单\n"
     "  /sa ban <视频|战报|复盘|分析>   全局禁用某功能\n"
     "  /sa unban <feature>         解禁\n"
-    "  /sa stats                   各功能开关统计"
+    "  /sa stats                   各功能开关统计\n"
+    "  /sa 并行 开|关|status        切渲染模式 (并行省时间, 串行省内存)"
 )
 
 
@@ -234,6 +242,7 @@ async def _sa(event: Event, args: Message = CommandArg()):
     if sub == "stats":
         snap = permissions.snapshot()
         lines = [f"全局黑名单: {snap['global_blacklist'] or '空'}"]
+        lines.append(f"渲染模式: {'并行' if render_mode.is_parallel() else '串行'}")
         lines.append(f"已配群: {len(snap['groups'])} 个")
         lines.append(f"已配私聊用户: {len(snap['private'])} 个")
         for feat in permissions.FEATURES:
@@ -247,6 +256,23 @@ async def _sa(event: Event, args: Message = CommandArg()):
             )
             lines.append(f"  {feat}: 群里开 {on_count} / 关 {off_count}")
         await sa_cmd.finish("\n".join(lines))
+
+    if sub == "并行":
+        if len(parts) != 2:
+            await sa_cmd.finish("用法: /sa 并行 开|关|status")
+        op = parts[1]
+        if op == "status":
+            mode = "并行" if render_mode.is_parallel() else "串行"
+            await sa_cmd.finish(f"当前渲染模式: {mode}")
+        if op in ("开", "on"):
+            render_mode.set_parallel(True)
+            await sa_cmd.finish(
+                "已切到 并行 (MP4 + 战报 同时跑, 快但峰值内存 ~8 GB)")
+        if op in ("关", "off"):
+            render_mode.set_parallel(False)
+            await sa_cmd.finish(
+                "已切到 串行 (MP4 + 战报 顺序跑, 慢 5-15s 但峰值内存腰斩)")
+        await sa_cmd.finish(f"未知操作 '{op}',合法: 开|关|status")
 
     await sa_cmd.finish(f"未知子命令 '{sub}'\n\n{_SA_HELP}")
 
@@ -457,19 +483,41 @@ async def process_queue(bot: Bot):
             else:
                 report_kind = None
 
-            # 并行: MP4 (可选) + 报告 (可选)
-            tasks: dict[str, asyncio.Future] = {}
-            if on["视频"]:
-                tasks["mp4"] = asyncio.create_task(render_mp4(replay_path, user_dir))
-            if report_kind == "full":
-                tasks["report"] = asyncio.create_task(run_full_report(replay_path, user_dir))
-            elif report_kind == "battle":
-                tasks["report"] = asyncio.create_task(run_battle_report(replay_path, user_dir))
-            elif report_kind == "damage":
-                tasks["report"] = asyncio.create_task(run_damage_report(replay_path, user_dir))
+            # MP4 (可选) + 报告 (可选);并行 vs 串行 看 render_mode (超管 /sa 并行 切)
+            # 并行: MP4 + 报告 同时跑,快但峰值 ~8 GB
+            # 串行: 先跑报告 (5-15s) 再跑 MP4,峰值腰斩,4 核 8G VM 友好
+            def _mk_report_coro():
+                if report_kind == "full":
+                    return run_full_report(replay_path, user_dir)
+                if report_kind == "battle":
+                    return run_battle_report(replay_path, user_dir)
+                if report_kind == "damage":
+                    return run_damage_report(replay_path, user_dir)
+                return None
 
-            results = await asyncio.gather(*tasks.values(), return_exceptions=True)
-            result_map = dict(zip(tasks.keys(), results))
+            result_map: dict = {}
+            if render_mode.is_parallel():
+                tasks: dict[str, asyncio.Future] = {}
+                if on["视频"]:
+                    tasks["mp4"] = asyncio.create_task(render_mp4(replay_path, user_dir))
+                report_coro = _mk_report_coro()
+                if report_coro is not None:
+                    tasks["report"] = asyncio.create_task(report_coro)
+                results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+                result_map = dict(zip(tasks.keys(), results))
+            else:
+                # 报告先跑 (短) — 给用户先发文字进度感更好;再跑 MP4 (长)
+                report_coro = _mk_report_coro()
+                if report_coro is not None:
+                    try:
+                        result_map["report"] = await report_coro
+                    except Exception as e:
+                        result_map["report"] = e
+                if on["视频"]:
+                    try:
+                        result_map["mp4"] = await render_mp4(replay_path, user_dir)
+                    except Exception as e:
+                        result_map["mp4"] = e
 
             # MP4 处理 —— 视频开了就发,失败致命
             mp4_path = None
