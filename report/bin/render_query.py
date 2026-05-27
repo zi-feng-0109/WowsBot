@@ -20,7 +20,7 @@ from render_battle_report import (  # noqa: E402
     CJK_FONT, MONO_FONT,
     GAME_GREEN, GAME_RED, GAME_GOLD,
 )
-from PIL import Image, ImageDraw, ImageFont  # noqa: E402
+from PIL import Image, ImageDraw, ImageFont, ImageOps  # noqa: E402
 
 # builds.json (ID→中文名 映射) 模块级缓存,首次调用时加载一次
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -28,7 +28,34 @@ _BUILDS_PATH = _DATA_DIR / "builds.json"
 _UPGRADE_ICON_DIR = _DATA_DIR / "upgrade_icons"
 _SKILL_ICON_DIR   = _DATA_DIR / "skill_icons"
 _BUILDS_CACHE: Optional[dict] = None
-_ICON_CACHE: dict = {}  # path → Image (40x40 RGBA)
+_ICON_CACHE: dict = {}  # (path, size, gray) → Image (RGBA)
+
+# 每个 species 的舰长技能 grid (按游戏内 4 行 × N 列顺序排,左→右、上→下)。
+# 值是 skill_type 列表 (跟 builds.json/replay learned_skills 一致)。
+# 用户在 2026-05 用 iwarship 中文译名抓取后反查得到,需要随 WoWs 大版本更新校对。
+# WG GameParams 没暴露 per-species mask,只能手工维护。
+_SKILL_GRID = {
+    "Battleship": ([21, 8, 79, 5, 19, 18,
+                    3, 33, 61, 7, 28, 35,
+                    37, 40, 82, 2, 44, 27,
+                    81, 26, 62, 42, 12, 14], 6),
+    "Cruiser":    ([3, 24, 79, 21, 19, 20,
+                    8, 4, 80, 43, 28, 27,
+                    47, 30, 82, 38, 17, 56,
+                    63, 66, 34, 33, 12, 35], 6),
+    "Destroyer":  ([3, 60, 79, 21, 19, 18,
+                    8, 24, 80, 39, 28, 20,
+                    1, 4, 82, 33, 17, 56,
+                    9, 65, 34, 64, 12, 67], 6),
+    "AirCarrier": ([55, 11, 32, 29, 31, 51,
+                    57, 58, 16, 83, 36, 49,
+                    15, 48, 46, 10, 56, 22,
+                    54, 59, 41, 53, 45, 50], 6),
+    "Submarine":  ([68, 60, 74, 28, 19,
+                    75, 72, 80, 18, 20,
+                    69, 70, 79, 76, 17,
+                    82, 73, 71, 77, 78], 5),
+}
 
 
 def _builds() -> Optional[dict]:
@@ -41,9 +68,9 @@ def _builds() -> Optional[dict]:
     return _BUILDS_CACHE or None
 
 
-def _load_icon(path: Path, size: int) -> Optional["Image.Image"]:
-    """加载图标 RGBA, resize 到 size×size。缺失返回 None。"""
-    key = (str(path), size)
+def _load_icon(path: Path, size: int, gray: bool = False) -> Optional["Image.Image"]:
+    """加载图标 RGBA, resize 到 size×size。gray=True 转灰度 + 降透明 (未学技能)。"""
+    key = (str(path), size, gray)
     if key in _ICON_CACHE:
         return _ICON_CACHE[key]
     if not path.is_file():
@@ -53,6 +80,12 @@ def _load_icon(path: Path, size: int) -> Optional["Image.Image"]:
         im = Image.open(path).convert("RGBA")
         if im.size != (size, size):
             im = im.resize((size, size), Image.LANCZOS)
+        if gray:
+            # 转灰度,保留原 alpha 形状,降透明度让"未学"视觉上更暗
+            r, g, b, a = im.split()
+            gs = ImageOps.grayscale(im)
+            new_a = a.point(lambda v: int(v * 0.4))
+            im = Image.merge("RGBA", (gs, gs, gs, new_a))
         _ICON_CACHE[key] = im
         return im
     except Exception:
@@ -146,7 +179,8 @@ def render_query_png(out_path: str, *, player: dict, pvp: Optional[dict],
     header_h = 110
     body_h   = 280
     compare_h = 80
-    build_h  = 230 if build_names else 0
+    # 30 title + 36 crew + 56 升级行 + 4*42 skill grid + 30 padding ≈ 320
+    build_h  = 320 if build_names else 0
     H = header_h + body_h + compare_h + build_h + FOOTER_H
 
     img = Image.new("RGB", (W, H), GAME_BG)
@@ -272,9 +306,13 @@ def _draw_kv(draw, x, y, label, value, f_label, f_value,
 
 def _lookup_build_names(build: dict, builds_data: Optional[dict],
                          species_raw: str) -> Optional[dict]:
-    """把 build 翻成 {crew, mods, skills} 三块。
-    mods/skills 是 [(zh_name, icon_path | None)] 列表,缺图标时 path=None。
-    builds.json 不可用时返回 None,render 端跳过 panel。"""
+    """把 build 翻成渲染端用的结构。
+    - crew: str
+    - mods: [(zh, icon_path | None) | None]  (None = 空槽 → 虚线占位)
+    - skills_grid: {"rows": [[item, ...], ...], "cols": int}
+      item = {"zh": str, "icon": Path|None, "learned": bool, "st": int}
+      没匹配 species (例如 Auxiliary) 时退化成单行只画学过的技能。
+    """
     if not builds_data:
         return None
 
@@ -297,15 +335,33 @@ def _lookup_build_names(build: dict, builds_data: Optional[dict],
         icon = _UPGRADE_ICON_DIR / f"{raw}.png" if raw else None
         mods.append((zh, icon if icon and icon.is_file() else None))
 
-    skills = []
-    for st in build.get("crew_skills") or []:
-        s = skl_map.get(str(st)) or {}
-        zh = s.get("name") or f"{st}?"
-        internal = s.get("internal")
-        icon = _SKILL_ICON_DIR / f"{internal}.png" if internal else None
-        skills.append((zh, icon if icon and icon.is_file() else None))
+    learned = set(build.get("crew_skills") or [])
 
-    return {"crew": crew_zh, "mods": mods, "skills": skills}
+    def _skill_item(st: int, learned_flag: bool) -> dict:
+        info = skl_map.get(str(st)) or {}
+        internal = info.get("internal")
+        icon = _SKILL_ICON_DIR / f"{internal}.png" if internal else None
+        return {
+            "zh": info.get("name") or f"{st}?",
+            "icon": icon if icon and icon.is_file() else None,
+            "learned": learned_flag,
+            "st": st,
+        }
+
+    grid_spec = _SKILL_GRID.get(species_raw)
+    if grid_spec:
+        ids, cols = grid_spec
+        rows = [[_skill_item(st, st in learned) for st in ids[i:i + cols]]
+                for i in range(0, len(ids), cols)]
+        skills_grid = {"rows": rows, "cols": cols}
+    elif learned:
+        # 未知 species — 单行平铺学过的,保留旧行为
+        flat = [_skill_item(st, True) for st in sorted(learned)]
+        skills_grid = {"rows": [flat], "cols": len(flat)}
+    else:
+        skills_grid = {"rows": [], "cols": 0}
+
+    return {"crew": crew_zh, "mods": mods, "skills_grid": skills_grid}
 
 
 def _wrap_tokens(tokens: list, sep: str, font, max_w: int) -> list:
@@ -349,7 +405,7 @@ def _draw_dashed_rect(draw, x0, y0, x1, y1, color, dash=4, gap=3, width=1):
 
 def _draw_build_panel(img, draw, x, y, w, h, names: dict,
                        f_title, f_label, f_value, f_dim):
-    """本局配装 panel:3 行 (舰长/升级/技能)。升级/技能用图标 grid,缺图标 fallback 文字。"""
+    """本局配装 panel:舰长 + 升级 grid + 技能 grid (4 行 N 列,已学高亮,未学灰度)。"""
     draw.rounded_rectangle([x, y, x + w, y + h],
                            radius=10, fill=GAME_PANEL_ALT, outline=GAME_BORDER)
     draw.text((x + 18, y + 12), "本局配装", GAME_GOLD, f_title)
@@ -364,52 +420,93 @@ def _draw_build_panel(img, draw, x, y, w, h, names: dict,
     draw.text((value_x, row_y), names["crew"], GAME_TEXT, f_value)
     row_y += 36
 
-    # 升级 / 技能行 (图标 grid)
-    icon_size = 42
-    icon_gap  = 8
-    icons_per_row = max(1, (value_max_w + icon_gap) // (icon_size + icon_gap))
-
-    for label, items in [("升级", names["mods"]), ("技能", names["skills"])]:
-        draw.text((label_x, row_y + (icon_size - 18) // 2),
-                  label, GAME_DIM, f_label)
-        # 升级行 items 里 None = 空槽。末尾连续空槽截掉 (省地方),
-        # 中间/前面的空槽保留并画占位符 (反映玩家位置选择)
-        trimmed = list(items or [])
-        while trimmed and trimmed[-1] is None:
-            trimmed.pop()
-        if not trimmed:
-            draw.text((value_x, row_y + (icon_size - 22) // 2),
-                      "-", GAME_DIM, f_value)
-        else:
-            shown = trimmed[:icons_per_row]
-            overflow = len(trimmed) - len(shown)
-            for i, slot in enumerate(shown):
-                ix = value_x + i * (icon_size + icon_gap)
-                if slot is None:
-                    # 空槽:虚线空心方块 (区别于灰块兜底)
-                    _draw_dashed_rect(draw, ix, row_y,
-                                      ix + icon_size, row_y + icon_size,
-                                      GAME_BORDER, dash=4, gap=3)
+    # 升级行 (单行 icon grid,跟之前一样)
+    up_size = 42
+    up_gap  = 8
+    up_per_row = max(1, (value_max_w + up_gap) // (up_size + up_gap))
+    draw.text((label_x, row_y + (up_size - 18) // 2), "升级", GAME_DIM, f_label)
+    trimmed = list(names["mods"] or [])
+    while trimmed and trimmed[-1] is None:
+        trimmed.pop()
+    if not trimmed:
+        draw.text((value_x, row_y + (up_size - 22) // 2), "-", GAME_DIM, f_value)
+    else:
+        shown = trimmed[:up_per_row]
+        overflow = len(trimmed) - len(shown)
+        for i, slot in enumerate(shown):
+            ix = value_x + i * (up_size + up_gap)
+            if slot is None:
+                _draw_dashed_rect(draw, ix, row_y, ix + up_size, row_y + up_size,
+                                  GAME_BORDER, dash=4, gap=3)
+                continue
+            zh, icon_path = slot
+            if icon_path:
+                ic = _load_icon(icon_path, up_size)
+                if ic is not None:
+                    img.paste(ic, (ix, row_y), ic)
                     continue
-                zh, icon_path = slot
-                if icon_path:
-                    ic = _load_icon(icon_path, icon_size)
-                    if ic is not None:
-                        img.paste(ic, (ix, row_y), ic)
-                        continue
-                # 兜底:画灰色方块 + 中文截前 2 字 (ID 在 builds.json 里查不到)
-                draw.rounded_rectangle(
-                    [ix, row_y, ix + icon_size, row_y + icon_size],
-                    radius=4, fill=GAME_PANEL, outline=GAME_BORDER)
-                tag = (zh or "?")[:2]
-                tw = int(f_label.getlength(tag))
-                draw.text((ix + (icon_size - tw) // 2, row_y + icon_size // 2 - 9),
-                          tag, GAME_TEXT, f_label)
-            if overflow > 0:
-                ix = value_x + len(shown) * (icon_size + icon_gap)
-                draw.text((ix, row_y + (icon_size - 22) // 2),
-                          f"+{overflow}", GAME_DIM, f_value)
-        row_y += icon_size + 10
+            draw.rounded_rectangle([ix, row_y, ix + up_size, row_y + up_size],
+                                   radius=4, fill=GAME_PANEL, outline=GAME_BORDER)
+            tag = (zh or "?")[:2]
+            tw = int(f_label.getlength(tag))
+            draw.text((ix + (up_size - tw) // 2, row_y + up_size // 2 - 9),
+                      tag, GAME_TEXT, f_label)
+        if overflow > 0:
+            ix = value_x + len(shown) * (up_size + up_gap)
+            draw.text((ix, row_y + (up_size - 22) // 2),
+                      f"+{overflow}", GAME_DIM, f_value)
+    row_y += up_size + 14
+
+    # 技能 grid (4 行 × 5 或 6 列,已学全色 + 蓝边框,未学灰度)
+    sg = names.get("skills_grid") or {"rows": [], "cols": 0}
+    rows = sg["rows"]
+    cols = sg["cols"]
+    if not rows:
+        draw.text((label_x, row_y + 2), "技能", GAME_DIM, f_label)
+        draw.text((value_x, row_y), "-", GAME_DIM, f_value)
+        return
+
+    sk_size = 36
+    sk_gap  = 6
+    grid_w = cols * sk_size + (cols - 1) * sk_gap
+    # tier 数字标签留一列 (左侧) 模拟 game UI
+    tier_lbl_w = 18
+    grid_x = value_x + tier_lbl_w
+    # 居中放(避免 SS 5 列时太靠左)
+    avail = value_max_w - tier_lbl_w
+    if grid_w < avail:
+        grid_x += (avail - grid_w) // 2
+
+    draw.text((label_x, row_y + 2), "技能", GAME_DIM, f_label)
+
+    for r, row in enumerate(rows):
+        gy = row_y + r * (sk_size + sk_gap)
+        # 左侧 tier 数字
+        tier_no = str(r + 1)
+        draw.text((grid_x - tier_lbl_w + 2, gy + (sk_size - 18) // 2),
+                  tier_no, GAME_DIM, f_label)
+        for c, item in enumerate(row):
+            gx = grid_x + c * (sk_size + sk_gap)
+            learned = item["learned"]
+            icon_path = item["icon"]
+            # 选中的:蓝色高亮背景框
+            if learned:
+                draw.rounded_rectangle([gx - 2, gy - 2, gx + sk_size + 2, gy + sk_size + 2],
+                                       radius=5, fill=(60, 130, 220), outline=GAME_GOLD)
+            if icon_path:
+                ic = _load_icon(icon_path, sk_size, gray=not learned)
+                if ic is not None:
+                    img.paste(ic, (gx, gy), ic)
+                    continue
+            # 兜底
+            bg_fill = (245, 248, 255) if learned else (80, 95, 120)
+            draw.rounded_rectangle([gx, gy, gx + sk_size, gy + sk_size],
+                                   radius=3, fill=bg_fill, outline=GAME_BORDER)
+            tag = (item["zh"] or "?")[:2]
+            tw = int(f_label.getlength(tag))
+            tcol = (10, 16, 28) if learned else GAME_DIM
+            draw.text((gx + (sk_size - tw) // 2, gy + sk_size // 2 - 9),
+                      tag, tcol, f_label)
 
 
 def _win_color(pct: float):
