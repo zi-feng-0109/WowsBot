@@ -59,6 +59,16 @@ PLANNED_FEATURES: list[tuple[str, str]] = [
     ("/查询 <编号>", "引用战报回复,按战报最左 # 列编号查该玩家这条船的 WG 生涯水平"),
 ]
 
+# 【游戏】section — 命令驱动的游戏类指令,跟 replay-toggle 不同源,单独一栏。
+# (指令, 作用, 谁可用) — 复用 【全部指令】 的三列格式
+GAME_COMMANDS: list[tuple[str, str, str]] = [
+    ("/开始猜船 [最低级 最高级 舰种]", "按条件随机一艘船开猜", "任何人"),
+    ("/排位猜船",                    "6-11 级全舰种排位赛",   "任何人"),
+    ("/查看答案",                    "投降并显示答案",        "任何人"),
+    ("/排名  /我的排名",              "查看排位榜",            "任何人"),
+    ("/玩法 [普通|排位]",             "猜船详细规则",          "任何人"),
+]
+
 W = 1100
 PAD = 24
 HEADER_H = 90
@@ -195,12 +205,14 @@ def render_menu_png(out_path: str, *, scope: str, ident: str,
     # 先估高度
     n_features = len(FEATURES)
     n_planned = len(PLANNED_FEATURES)
+    n_games = len(GAME_COMMANDS)
     sa_visible = is_super
 
     height = (
         HEADER_H + PAD
         + 30 + 22 + n_features * ROW_H + SECTION_GAP             # 当前功能 (含列头 22px)
         + 30 + 2 * ROW_H + SECTION_GAP                           # 使用方法
+        + 30 + 22 + n_games * 28 + SECTION_GAP                   # 游戏 (含表头 22px)
         + 30 + 22 + (4 if sa_visible else 3) * 28 + SECTION_GAP  # 全部指令 (含表头 22px)
         + 30 + max(1, n_planned) * 24 + SECTION_GAP              # 规划中
         + FOOTER_H + PAD
@@ -253,6 +265,19 @@ def render_menu_png(out_path: str, *, scope: str, ident: str,
     draw.text((PAD, y), "【使用方法】", GAME_TEXT, f_section); y += 30
     draw.text((PAD + 12, y), "把 .wowsreplay 拖进群里 / 私聊我", GAME_TEXT, f_row); y += ROW_H
     draw.text((PAD + 12, y), "开着的输出会自动产生并发回", GAME_DIM, f_row); y += ROW_H
+    y += SECTION_GAP
+
+    # ----- 游戏 -----
+    draw.text((PAD, y), "【游戏】", GAME_TEXT, f_section); y += 30
+    draw.text((PAD + 12, y),  "指令",   GAME_DIM, f_desc)
+    draw.text((PAD + 360, y), "作用",   GAME_DIM, f_desc)
+    draw.text((PAD + 640, y), "谁可用", GAME_DIM, f_desc)
+    y += 22
+    for cmd, desc, perm in GAME_COMMANDS:
+        _draw_mixed(draw, (PAD + 12, y), cmd, GAME_TEXT, f_mono, f_desc)
+        draw.text((PAD + 360, y), desc, GAME_DIM, f_row)
+        draw.text((PAD + 640, y), perm, GAME_DIM, f_row)
+        y += 28
     y += SECTION_GAP
 
     # ----- 全部指令 -----
