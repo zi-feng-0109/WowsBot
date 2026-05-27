@@ -468,14 +468,9 @@ def _draw_build_panel(img, draw, x, y, w, h, names: dict,
 
     sk_size = 36
     sk_gap  = 6
-    grid_w = cols * sk_size + (cols - 1) * sk_gap
-    # tier 数字标签留一列 (左侧) 模拟 game UI
+    # tier 数字标签留一列 (左侧) 模拟 game UI;整体左对齐,跟上面"升级"那行齐
     tier_lbl_w = 18
     grid_x = value_x + tier_lbl_w
-    # 居中放(避免 SS 5 列时太靠左)
-    avail = value_max_w - tier_lbl_w
-    if grid_w < avail:
-        grid_x += (avail - grid_w) // 2
 
     draw.text((label_x, row_y + 2), "技能", GAME_DIM, f_label)
 
