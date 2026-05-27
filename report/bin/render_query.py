@@ -288,6 +288,10 @@ def _lookup_build_names(build: dict, builds_data: Optional[dict],
 
     mods = []
     for mid in (build.get("modernizations") or []):
+        # 空槽 (玩家没装升级) WG 编码为 ID 0 — 用 None sentinel,渲染端画虚线占位
+        if not mid:
+            mods.append(None)
+            continue
         zh = mod_map.get(str(mid), f"{mid}?")
         raw = mod_raw.get(str(mid))
         icon = _UPGRADE_ICON_DIR / f"{raw}.png" if raw else None
@@ -326,6 +330,23 @@ def _wrap_tokens(tokens: list, sep: str, font, max_w: int) -> list:
     return lines
 
 
+def _draw_dashed_rect(draw, x0, y0, x1, y1, color, dash=4, gap=3, width=1):
+    """画虚线矩形 (PIL 没自带)。用于空升级槽占位。"""
+    step = dash + gap
+    # 上下边
+    px = x0
+    while px < x1:
+        draw.line([(px, y0), (min(px + dash, x1), y0)], fill=color, width=width)
+        draw.line([(px, y1), (min(px + dash, x1), y1)], fill=color, width=width)
+        px += step
+    # 左右边
+    py = y0
+    while py < y1:
+        draw.line([(x0, py), (x0, min(py + dash, y1))], fill=color, width=width)
+        draw.line([(x1, py), (x1, min(py + dash, y1))], fill=color, width=width)
+        py += step
+
+
 def _draw_build_panel(img, draw, x, y, w, h, names: dict,
                        f_title, f_label, f_value, f_dim):
     """本局配装 panel:3 行 (舰长/升级/技能)。升级/技能用图标 grid,缺图标 fallback 文字。"""
@@ -351,20 +372,32 @@ def _draw_build_panel(img, draw, x, y, w, h, names: dict,
     for label, items in [("升级", names["mods"]), ("技能", names["skills"])]:
         draw.text((label_x, row_y + (icon_size - 18) // 2),
                   label, GAME_DIM, f_label)
-        if not items:
+        # 升级行 items 里 None = 空槽。末尾连续空槽截掉 (省地方),
+        # 中间/前面的空槽保留并画占位符 (反映玩家位置选择)
+        trimmed = list(items or [])
+        while trimmed and trimmed[-1] is None:
+            trimmed.pop()
+        if not trimmed:
             draw.text((value_x, row_y + (icon_size - 22) // 2),
                       "-", GAME_DIM, f_value)
         else:
-            shown = items[:icons_per_row]
-            overflow = len(items) - len(shown)
-            for i, (zh, icon_path) in enumerate(shown):
+            shown = trimmed[:icons_per_row]
+            overflow = len(trimmed) - len(shown)
+            for i, slot in enumerate(shown):
                 ix = value_x + i * (icon_size + icon_gap)
+                if slot is None:
+                    # 空槽:虚线空心方块 (区别于灰块兜底)
+                    _draw_dashed_rect(draw, ix, row_y,
+                                      ix + icon_size, row_y + icon_size,
+                                      GAME_BORDER, dash=4, gap=3)
+                    continue
+                zh, icon_path = slot
                 if icon_path:
                     ic = _load_icon(icon_path, icon_size)
                     if ic is not None:
                         img.paste(ic, (ix, row_y), ic)
                         continue
-                # 兜底:画灰色方块 + 中文截前 2 字
+                # 兜底:画灰色方块 + 中文截前 2 字 (ID 在 builds.json 里查不到)
                 draw.rounded_rectangle(
                     [ix, row_y, ix + icon_size, row_y + icon_size],
                     radius=4, fill=GAME_PANEL, outline=GAME_BORDER)
