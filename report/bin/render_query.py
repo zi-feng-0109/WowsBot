@@ -179,8 +179,8 @@ def render_query_png(out_path: str, *, player: dict, pvp: Optional[dict],
     header_h = 110
     body_h   = 280
     compare_h = 80
-    # 30 title + 36 crew + 56 升级行 + 4*42 skill grid + 30 padding ≈ 320
-    build_h  = 320 if build_names else 0
+    # panel 内: 50 top + 36 crew + 56 升级 + 4*42 skill grid + outline + bottom pad
+    build_h  = 360 if build_names else 0
     H = header_h + body_h + compare_h + build_h + FOOTER_H
 
     img = Image.new("RGB", (W, H), GAME_BG)
