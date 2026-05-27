@@ -741,6 +741,7 @@ def _build_indexed_players(json_path: str) -> tuple[dict, list]:
                 "ship_index": sp.get("index", ""),
                 "ship_zh":    _ship_zh(sp),
                 "ship_level": sp.get("level", 0),
+                "species_raw": species_raw,
                 "species_zh": _SPECIES_ZH.get(species_raw, species_raw or "?"),
                 "team_id":    team_id,
                 "this_game": {
@@ -749,6 +750,8 @@ def _build_indexed_players(json_path: str) -> tuple[dict, list]:
                     "alive": bool(st.get("is_alive")),
                     "time_lived_secs": st.get("time_lived_secs"),
                 },
+                # 本局配装(舰长/技能/升级/旗帜),老 replay 或异常 entity 时为 None,render_query 会跳过 panel
+                "build": sp.get("build"),
             })
         return out
 

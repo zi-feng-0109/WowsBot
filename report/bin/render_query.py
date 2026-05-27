@@ -22,6 +22,20 @@ from render_battle_report import (  # noqa: E402
 )
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 
+# builds.json (ID→中文名 映射) 模块级缓存,首次调用时加载一次
+_BUILDS_PATH = Path(__file__).resolve().parent.parent / "data" / "builds.json"
+_BUILDS_CACHE: Optional[dict] = None
+
+
+def _builds() -> Optional[dict]:
+    global _BUILDS_CACHE
+    if _BUILDS_CACHE is None:
+        try:
+            _BUILDS_CACHE = json.loads(_BUILDS_PATH.read_text("utf-8"))
+        except Exception:
+            _BUILDS_CACHE = {}
+    return _BUILDS_CACHE or None
+
 # 跟 render_menu 同步的亮色板 (信息面板风)
 GAME_BG        = (38, 52, 78)
 GAME_PANEL     = (58, 74, 106)
@@ -100,11 +114,17 @@ def render_query_png(out_path: str, *, player: dict, pvp: Optional[dict],
     alive = bool(tg.get("alive"))
     tl = tg.get("time_lived_secs")
 
+    # ----- 本局配装数据 (build 缺失则不画 panel) -----
+    build = player.get("build") or None
+    species_raw = player.get("species_raw", "")
+    build_names = _lookup_build_names(build, _builds(), species_raw) if build else None
+
     # ----- 高度 -----
     header_h = 110
     body_h   = 280
     compare_h = 80
-    H = header_h + body_h + compare_h + FOOTER_H
+    build_h  = 290 if build_names else 0
+    H = header_h + body_h + compare_h + build_h + FOOTER_H
 
     img = Image.new("RGB", (W, H), GAME_BG)
     draw = ImageDraw.Draw(img)
@@ -207,6 +227,12 @@ def render_query_png(out_path: str, *, player: dict, pvp: Optional[dict],
         mw = int(f_compare_cjk.getlength(msg))
         draw.text(((W - mw) // 2, cy + 32), msg, GAME_DIM, f_compare_cjk)
 
+    # ----- 本局配装 panel -----
+    if build_names:
+        by = header_h + body_h + compare_h
+        _draw_build_panel(draw, PAD, by + 12, W - 2 * PAD, build_h - 24,
+                          build_names, f_section, f_label, f_value_cjk, f_dim)
+
     # ----- Footer -----
     _draw_footer(draw, 0, H - FOOTER_H, W, FOOTER_H)
 
@@ -219,6 +245,100 @@ def _draw_kv(draw, x, y, label, value, f_label, f_value,
     """单个 label/value 块。"""
     draw.text((x, y), label, GAME_DIM, f_label)
     draw.text((x, y + (24 if big else 22)), value, color_value, f_value)
+
+
+def _lookup_build_names(build: dict, builds_data: Optional[dict],
+                         species_raw: str) -> Optional[dict]:
+    """把 build {crew_id, crew_skills, modernizations, exteriors} 翻成中文名串。
+    builds.json 不可用时返回 None,render 端跳过 panel。"""
+    if not builds_data:
+        return None
+
+    crew_map = builds_data.get("crew", {})
+    mod_map  = builds_data.get("modernization", {})
+    ext_map  = builds_data.get("exterior", {})
+    skl_map  = builds_data.get("skill", {})
+
+    def _name(m, key, fallback="-"):
+        v = m.get(str(key))
+        if v is None:
+            return f"{key}?"
+        return v or fallback
+
+    crew_id = build.get("crew_id")
+    crew_zh = _name(crew_map, crew_id) if crew_id else "-"
+
+    mods = [_name(mod_map, mid) for mid in (build.get("modernizations") or [])]
+    exts = [_name(ext_map, eid) for eid in (build.get("exteriors") or [])]
+
+    skills = []
+    for st in build.get("crew_skills") or []:
+        s = skl_map.get(str(st))
+        skills.append(s.get("name") if (s and s.get("name")) else f"{st}?")
+
+    return {
+        "crew":  crew_zh,
+        "mods":  mods,
+        "exts":  exts,
+        "skills": skills,
+    }
+
+
+def _wrap_tokens(tokens: list, sep: str, font, max_w: int) -> list:
+    """把 token 列表用 sep 连成多行,每行宽度不超过 max_w。空列表返回 ['-']。"""
+    if not tokens:
+        return ["-"]
+    lines = []
+    cur = ""
+    for tok in tokens:
+        cand = tok if not cur else cur + sep + tok
+        if int(font.getlength(cand)) <= max_w:
+            cur = cand
+        else:
+            if cur:
+                lines.append(cur)
+            cur = tok
+            # 单个 token 过长直接截断,避免死循环
+            while int(font.getlength(cur)) > max_w and len(cur) > 1:
+                cur = cur[:-1]
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def _draw_build_panel(draw, x, y, w, h, names: dict,
+                       f_title, f_label, f_value, f_dim):
+    """本局配装 panel:4 行 (舰长/升级/旗帜/技能)。"""
+    draw.rounded_rectangle([x, y, x + w, y + h],
+                           radius=10, fill=GAME_PANEL_ALT, outline=GAME_BORDER)
+    draw.text((x + 18, y + 12), "本局配装", GAME_GOLD, f_title)
+
+    label_x = x + 18
+    value_x = x + 18 + 72   # label 占 ~72 px
+    value_max_w = w - (value_x - x) - 18
+
+    rows = [
+        ("舰长", [names["crew"]] if names["crew"] else ["-"]),
+        ("升级", names["mods"]),
+        ("旗帜", names["exts"]),
+        ("技能", names["skills"]),
+    ]
+    sep = "  ·  "
+    row_y = y + 50
+    line_h = 28
+    for label, items in rows:
+        draw.text((label_x, row_y + 2), label, GAME_DIM, f_label)
+        lines = _wrap_tokens(items, sep, f_value, value_max_w)
+        # 最多两行,超出附 "+N"
+        if len(lines) > 2:
+            extra = sum(len(l.split(sep)) for l in lines[2:])
+            lines = lines[:2]
+            if int(f_value.getlength(lines[1] + f" +{extra}")) <= value_max_w:
+                lines[1] = lines[1] + f"  +{extra}"
+        for li, line in enumerate(lines):
+            draw.text((value_x, row_y + li * (line_h - 4)), line,
+                      GAME_TEXT, f_value)
+        row_y += line_h + (line_h - 4) * (len(lines) - 1) + 6
 
 
 def _win_color(pct: float):

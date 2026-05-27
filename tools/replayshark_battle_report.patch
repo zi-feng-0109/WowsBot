@@ -1,8 +1,8 @@
 diff --git a/crates/replayshark/src/main.rs b/crates/replayshark/src/main.rs
-index bd80d52..97bb8af 100644
+index bd80d52..7521ade 100644
 --- a/crates/replayshark/src/main.rs
 +++ b/crates/replayshark/src/main.rs
-@@ -62,6 +62,22 @@ enum Commands {
+@@ -62,6 +62,30 @@ enum Commands {
          /// The replay file to use
          replay: PathBuf,
      },
@@ -22,10 +22,18 @@ index bd80d52..97bb8af 100644
 +        #[arg(short, long)]
 +        output: Option<PathBuf>,
 +    },
++    /// Dump Modernization / Exterior / Crew / CrewSkill params with IDS_* translation keys.
++    /// Consumed by tools/build_builds_json.py to produce report/data/builds.json.
++    /// Requires --extracted with content/GameParams.data.
++    BuildsDump {
++        /// Optional output file (default: stdout)
++        #[arg(short, long)]
++        output: Option<PathBuf>,
++    },
      /// Dump the packets to console
      Dump {
          /// Output filename to dump to
-@@ -664,6 +680,12 @@ fn main() {
+@@ -664,6 +688,15 @@ fn main() {
              })
              .unwrap();
          }
@@ -35,10 +43,13 @@ index bd80d52..97bb8af 100644
 +        Commands::ConsumablesDump { output } => {
 +            run_consumables_dump(extracted, output.as_deref()).unwrap();
 +        }
++        Commands::BuildsDump { output } => {
++            run_builds_dump(extracted, output.as_deref()).unwrap();
++        }
          Commands::Chat { replay } => {
              parse_replay(&replay, game_dir, extracted, |meta| {
                  wows_replays::analyzer::chat::ChatLoggerBuilder::new().build(meta)
-@@ -736,3 +758,388 @@ fn main() {
+@@ -736,3 +769,550 @@ fn main() {
          }
      }
  }
@@ -140,6 +151,146 @@ index bd80d52..97bb8af 100644
 +        println!("{}", json);
 +    }
 +    Ok(())
++}
++
++fn run_builds_dump(
++    extracted_dir: Option<&str>,
++    output: Option<&Path>,
++) -> anyhow::Result<()> {
++    use wowsunpack::game_params::provider::GameMetadataProvider;
++    use wowsunpack::game_params::types::{GameParamProvider, ParamData};
++    use wowsunpack::vfs::PhysicalFS;
++    use wowsunpack::vfs::VfsPath;
++    use std::collections::BTreeMap;
++
++    let extracted = extracted_dir.ok_or_else(|| anyhow!("--extracted is required"))?;
++    let path = Path::new(extracted);
++
++    // 复用 run_consumables_dump 的 vfs 探测:支持 path/、path/vfs/、path/<ver>/vfs/ 三种布局
++    let vfs_dir = if path.join("content").join("GameParams.data").is_file() {
++        path.to_path_buf()
++    } else if path.join("vfs").join("content").is_dir() {
++        path.join("vfs")
++    } else {
++        let mut chosen: Option<PathBuf> = None;
++        if let Ok(entries) = std::fs::read_dir(path) {
++            for entry in entries.flatten() {
++                let sub = entry.path();
++                if sub.join("vfs").join("content").is_dir() {
++                    chosen = Some(sub.join("vfs"));
++                    break;
++                }
++            }
++        }
++        chosen.ok_or_else(|| anyhow!("没在 {} 下找到 content/GameParams.data", path.display()))?
++    };
++
++    let meta = read_metadata(&vfs_dir).or_else(|| read_metadata(path));
++
++    eprintln!("loading GameParams.data from {} ...", vfs_dir.display());
++    let vfs: VfsPath = VfsPath::new(PhysicalFS::new(&vfs_dir));
++    let provider = GameMetadataProvider::from_vfs(&vfs).map_err(|e| anyhow!("{}", e))?;
++
++    // 对 Modernization / Exterior / Crew:简单地 (id, index) 入库,Python 端拼 IDS_<index> 查 .mo
++    let mut modernizations = Vec::new();
++    let mut exteriors = Vec::new();
++    let mut crews = Vec::new();
++    // Skill 是 dedupe by skill_type 的全局表 (同 skill_type 在不同 Crew 里指代同一技能,WoWs 技能树固定)
++    let mut skills: BTreeMap<usize, serde_json::Value> = BTreeMap::new();
++
++    for param in provider.params() {
++        match param.data() {
++            ParamData::Modernization(_) => {
++                modernizations.push(serde_json::json!({
++                    "id": param.id(),
++                    "index": param.index(),
++                    "name": param.name(),
++                }));
++            }
++            ParamData::Exterior(_) => {
++                exteriors.push(serde_json::json!({
++                    "id": param.id(),
++                    "index": param.index(),
++                    "name": param.name(),
++                }));
++            }
++            ParamData::Crew(crew) => {
++                crews.push(serde_json::json!({
++                    "id": param.id(),
++                    "index": param.index(),
++                    "name": param.name(),
++                }));
++                // 顺便从这位舰长身上抽 skill 表 (每位舰长技能列表都一样)
++                if let Some(skill_list) = crew.skills() {
++                    for sk in skill_list {
++                        let key = sk.skill_type();
++                        skills.entry(key).or_insert_with(|| {
++                            // IDS_SKILL_<UpperSnake(internal_name)> 是 wows-replays 已经用的约定 (controller.rs:1716)
++                            let upper_snake = to_upper_snake(sk.internal_name());
++                            serde_json::json!({
++                                "skill_type": key,
++                                "internal_name": sk.internal_name(),
++                                "name_key": format!("IDS_SKILL_{}", upper_snake),
++                                "tier": {
++                                    "AirCarrier": sk.tier().aircraft_carrier(),
++                                    "Battleship": sk.tier().battleship(),
++                                    "Cruiser":    sk.tier().cruiser(),
++                                    "Destroyer":  sk.tier().destroyer(),
++                                    "Submarine":  sk.tier().submarine(),
++                                    "Auxiliary":  sk.tier().auxiliary(),
++                                },
++                            })
++                        });
++                    }
++                }
++            }
++            _ => {}
++        }
++    }
++    modernizations.sort_by(|a, b| a["index"].as_str().unwrap_or("").cmp(b["index"].as_str().unwrap_or("")));
++    exteriors.sort_by(|a, b| a["index"].as_str().unwrap_or("").cmp(b["index"].as_str().unwrap_or("")));
++    crews.sort_by(|a, b| a["index"].as_str().unwrap_or("").cmp(b["index"].as_str().unwrap_or("")));
++
++    let skills_arr: Vec<_> = skills.into_values().collect();
++    eprintln!(
++        "found {} modernizations / {} exteriors / {} crews / {} skills",
++        modernizations.len(), exteriors.len(), crews.len(), skills_arr.len()
++    );
++
++    let (version_str, build_num) = match meta {
++        Some(m) => (m.version, m.build),
++        None => ("?".to_string(), 0),
++    };
++    let json = serde_json::to_string_pretty(&serde_json::json!({
++        "version": version_str,
++        "build":   build_num,
++        "modernizations": modernizations,
++        "exteriors":      exteriors,
++        "crews":          crews,
++        "skills":         skills_arr,
++    }))?;
++    if let Some(out) = output {
++        std::fs::write(out, json)?;
++        eprintln!("wrote to {}", out.display());
++    } else {
++        println!("{}", json);
++    }
++    Ok(())
++}
++
++// IDS_SKILL_ key uses UPPER_SNAKE of CrewSkill.internal_name (mirrors controller.rs:1716).
++// Implemented manually to avoid pulling in convert_case as a new dep for replayshark.
++fn to_upper_snake(s: &str) -> String {
++    let mut out = String::with_capacity(s.len() + 4);
++    let mut prev_lower = false;
++    for ch in s.chars() {
++        if ch.is_uppercase() && prev_lower {
++            out.push('_');
++        }
++        out.push(ch.to_ascii_uppercase());
++        prev_lower = ch.is_lowercase() || ch.is_ascii_digit();
++    }
++    out
 +}
 +
 +
@@ -292,6 +443,26 @@ index bd80d52..97bb8af 100644
 +            }
 +        }
 +
++        // 本局配装 — 舰长 + 已学技能 + 改装件 + 信号旗/伪装。
++        // 数据来源:VehicleProps (订阅包,自己/队友/敌人全程可见)。
++        // 老 replay 或异常 entity (vehicle_entity 为 None) 时整块为 null,Python 端跳过。
++        let build_json = veh_opt.map(|v| {
++            let props = v.props();
++            let cmc = props.crew_modifiers_compact_params();
++            let cfg = props.ship_config();
++            // for_species 要 &Species;species 不可识别时给空技能列表,而不是猜一个
++            let species_ref = vehicle_param.species().and_then(|r| r.known());
++            let crew_skills: Vec<u8> = species_ref
++                .map(|sp| cmc.learned_skills().for_species(sp).to_vec())
++                .unwrap_or_default();
++            serde_json::json!({
++                "crew_id":        cmc.params_id(),
++                "crew_skills":    crew_skills,
++                "modernizations": cfg.modernization(),
++                "exteriors":      cfg.exteriors(),
++            })
++        });
++
 +        players_json.push(serde_json::json!({
 +            "account_id": format!("{:?}", account_id),
 +            "name": player_name,
@@ -307,6 +478,8 @@ index bd80d52..97bb8af 100644
 +                "species": species_str,
 +                // consumable_slots: 嵌套结构,外层 slot,内层 alt ability_names
 +                "consumable_slots": consumable_slots,
++                // build: 本局配装 (舰长/技能/升级/旗帜),vehicle_entity 缺失时为 null
++                "build": build_json,
 +            },
 +            "stats": {
 +                "damage_dealt": damage,
