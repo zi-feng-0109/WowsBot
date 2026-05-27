@@ -240,12 +240,38 @@ nb create   # 选 simple / onebot-v11
 ### 5.2 挂接本插件
 
 ```bash
-cp /opt/wows-bot/plugin/minimap.py ~/my-bot/src/plugins/minimap.py
+cp /opt/wows-bot/plugin/*.py ~/my-bot/src/plugins/
 ```
+
+当前包含 7 个文件:
+- `minimap.py` — 主入口 (replay → MP4 + 战报 + 复盘 + 分析)
+- `permissions.py` — 群级开关 / 全局黑名单
+- `query_index.py` — `/查询` 索引 (战报 → 玩家)
+- `render_mode.py` — `/sa` 渲染模式 (普通/极简/详细)
+- `version.py` — 版本号工具,菜单/战报 footer 共用
+- `wg_api.py` — vortex 接口封装 (`/查询` 拉生涯数据)
+- `announcement.py` — 超管 `/全群公告` `/定向公告` (见 §5.2.1)
 
 > ⚠️ 别用软链。NoneBot 会 resolve 符号链接,发现真实路径不在你 bot 项目子目录就拒载
 > (`ValueError: '...' is not in the subpath of '...'`)。直接 `cp` 最省事;
 > 仓库更新后再 cp 一遍。
+
+### 5.2.1 (可选) 配置公告超管白名单
+
+`announcement.py` 启动时读 `<NoneBot 项目根>/data/admins.json`(注意是 NoneBot 项目
+目录,不是 wows-bot 目录),格式是一个 QQ 号 JSON 数组:
+
+```bash
+mkdir -p ~/my-bot/data
+cat > ~/my-bot/data/admins.json <<'EOF'
+["你的QQ号"]
+EOF
+```
+
+不存在 / 为空就是没人能发公告。修改后要重启 bot 才生效(只在 `on_startup` 加载一次)。
+
+> 为什么不复用 §7.1 的 `SUPERUSERS`:公告会发到全部群,权限语义比"能调试 bot"更敏感,
+> 单独留一份白名单方便缩小授权范围。
 
 ### 5.3 (可选) 启用 LLM 战后复盘
 

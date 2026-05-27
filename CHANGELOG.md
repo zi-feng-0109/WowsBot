@@ -15,6 +15,32 @@ bot 实际跑哪个版本由 NoneBot `.env` 里的 `WOWS_BOT_VERSION=...` 决定
 
 ---
 
+## [1.1.0] - 2026-05-27
+
+### 新增
+
+- **`/全群公告` `/定向公告` 公告插件 (`plugin/announcement.py`)**
+  之前一直只在生产 NoneBot 项目里散养,这次正式纳入 wows-bot 仓库,跟其它
+  `plugin/*.py` 一起走 `git pull` + `cp` 流程。
+  - `/全群公告 <内容>` (别名 `/广播` `/公告`):向 bot 所在的全部群广播。
+  - `/定向公告 <群号1> [群号2] ... <内容>` (别名 `/指定公告`):只发指定群。
+  - **公告内容支持文字 + 图片 + QQ 表情混排**(这一版相对早期纯文字版本的主要升级)。
+    解析方式从 `str(args)` 改成遍历 MessageSegment,保留 `text/image/face`,
+    自动剔掉 `at/reply` 段 —— 否则群里 `@机器人 /公告 ...` 的 @ 会跟着公告
+    一起被广播出去。
+  - 超管名单独立维护在 NoneBot 项目根的 `data/admins.json`(一个 QQ 号 JSON 数组),
+    不复用 NoneBot `SUPERUSERS`,避免"能调试 bot"和"能向全部群发消息"被同一份名单覆盖。
+  - 部署见 `docs/DEPLOY.md` §5.2 + §5.2.1。
+
+### 部署
+
+- 服务器侧:`cd /opt/wows-bot && sudo git pull` + `sudo cp plugin/*.py ~zifeng/桌面/bot/EssexBot/src/plugins/` +
+  在 `EssexBot/.env` 改 `WOWS_BOT_VERSION=1.1.0` + `systemctl restart wows-bot`。
+- 首次启用公告功能要建 `~zifeng/桌面/bot/EssexBot/data/admins.json` 并填超管 QQ 号(见 DEPLOY.md §5.2.1)。
+  之前已经在用本地 `announcement.py` 的话,`admins.json` 已经存在,直接 `cp` 覆盖插件即可。
+
+---
+
 ## [1.0.1] - 2026-05-22
 
 ### 修复
