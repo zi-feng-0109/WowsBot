@@ -710,21 +710,32 @@ def _build_indexed_players(json_path: str) -> tuple[dict, list]:
     self_p = next((p for p in players if p.get("name") == self_name), None)
     self_team = self_p.get("team_id", 0) if self_p else 0
 
-    # 尝试翻译船名: report/data/zh_sg.mo;通过 render_battle_report 的 polib loader
+    # 尝试翻译船名 + 拿 server-authoritative damage 排序 (跟战报 # 列对齐)
     try:
         import sys as _sys
         rb_path = str(Path(REPORT_FULL_CMD).parent)
         if rb_path not in _sys.path:
             _sys.path.insert(0, rb_path)
-        from render_battle_report import t as _t, load_translations as _load_translations, clean_ship_name as _clean
+        from render_battle_report import (
+            t as _t, load_translations as _load_translations,
+            clean_ship_name as _clean, result_field as _rf,
+        )
         _load_translations()
         def _ship_zh(sp): return _t(f"IDS_{sp.get('index','')}", _clean(sp.get('name', '')))
+        def _sort_dmg(p):
+            # 跟 render_battle_report 一致: results_info.damage 优先 (含玩家迷雾外的伤害),
+            # 否则 stats.damage_dealt。否则 /查询 N 会拿到 #N 之外的玩家 (issue: CV/侦察错位)
+            d = _rf(p.get("results_info"), "damage")
+            if d is None:
+                d = (p.get("stats") or {}).get("damage_dealt") or 0
+            return float(d)
     except Exception:
         def _ship_zh(sp): return sp.get("name", "")
+        def _sort_dmg(p): return float((p.get("stats") or {}).get("damage_dealt") or 0)
 
     def _team_indexed(team_id: int, start_idx: int) -> list:
         members = [p for p in players if p.get("team_id") == team_id]
-        members.sort(key=lambda p: -((p.get("stats") or {}).get("damage_dealt") or 0))
+        members.sort(key=lambda p: -_sort_dmg(p))
         out = []
         for i, p in enumerate(members):
             sp = p.get("ship", {}) or {}
