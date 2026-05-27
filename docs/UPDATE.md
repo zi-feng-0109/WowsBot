@@ -23,13 +23,18 @@ sudo cp /opt/wows-bot/plugin/*.py "$NB_PLUGIN_DIR/"
 
 # 0.3 若 tools/replayshark_battle_report.patch 跟着更新了 (commit 里会写),
 # 用预编译二进制最简单 (前提:作者推前已重编 prebuilt):
-sudo cp /opt/wows-bot/report/prebuilt/replayshark-linux-x86_64 /opt/wows-bot/replayshark
-sudo chmod +x /opt/wows-bot/replayshark
+#
+# 注意路径! wows_report 里 BOT_HOME = parent.parent = /opt/wows-bot/report
+# (脚本本身在 /opt/wows-bot/report/bin/ 下),所以默认 REPLAYSHARK 路径是
+# /opt/wows-bot/report/replayshark 而不是 /opt/wows-bot/replayshark。
+sudo cp /opt/wows-bot/report/prebuilt/replayshark-linux-x86_64 /opt/wows-bot/report/replayshark
+sudo chmod +x /opt/wows-bot/report/replayshark
+# 验证现在在用哪个: ls -la /opt/wows-bot/report/replayshark — 时间戳应该是刚 cp 的
 # 或者从源码重编 (架构非 x86_64 / 想自己验证):
 #   cd /opt/wows-toolkit && sudo git checkout . && sudo git pull
 #   sudo git apply /opt/wows-bot/tools/replayshark_battle_report.patch
 #   sudo cargo build --release -p replayshark
-#   sudo cp target/release/replayshark /opt/wows-bot/replayshark
+#   sudo cp target/release/replayshark /opt/wows-bot/report/replayshark
 
 # 0.4 plugin/* 改了要重启 bot;只改了 report/bin/* 或 specs 软链不用重启 (subprocess 现拉)。
 sudo systemctl restart wows-bot   # 改成你的 service 名,或者 kill+nb run
