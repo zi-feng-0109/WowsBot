@@ -123,7 +123,7 @@ def render_query_png(out_path: str, *, player: dict, pvp: Optional[dict],
     header_h = 110
     body_h   = 280
     compare_h = 80
-    build_h  = 290 if build_names else 0
+    build_h  = 230 if build_names else 0
     H = header_h + body_h + compare_h + build_h + FOOTER_H
 
     img = Image.new("RGB", (W, H), GAME_BG)
@@ -308,7 +308,7 @@ def _wrap_tokens(tokens: list, sep: str, font, max_w: int) -> list:
 
 def _draw_build_panel(draw, x, y, w, h, names: dict,
                        f_title, f_label, f_value, f_dim):
-    """本局配装 panel:4 行 (舰长/升级/旗帜/技能)。"""
+    """本局配装 panel:3 行 (舰长/升级/技能)。旗帜信息略,改装/技能后续走图标。"""
     draw.rounded_rectangle([x, y, x + w, y + h],
                            radius=10, fill=GAME_PANEL_ALT, outline=GAME_BORDER)
     draw.text((x + 18, y + 12), "本局配装", GAME_GOLD, f_title)
@@ -320,7 +320,6 @@ def _draw_build_panel(draw, x, y, w, h, names: dict,
     rows = [
         ("舰长", [names["crew"]] if names["crew"] else ["-"]),
         ("升级", names["mods"]),
-        ("旗帜", names["exts"]),
         ("技能", names["skills"]),
     ]
     sep = "  ·  "
