@@ -56,17 +56,22 @@ sudo bash /opt/wows-bot/tools/link_specs.sh
 
 bot 不用重启 (renderer 是 subprocess,每次新拉)。
 
-### 2.5 刷新 builds.json (ID → 中文名 字典,/查询 PNG 的本局配装面板用)
+### 2.5 刷新 builds.json + 升级/技能图标 (/查询 PNG 本局配装面板用)
 
 ```bash
 cd /opt/wows-bot
 # 依赖 polib (pip install polib),已包含在 requirements 里
 sudo python3 tools/build_builds_json.py
-# 产物:report/data/builds.json (~120 KB)
+# 产物:report/data/builds.json (~130 KB)
 # 输出会打印 modernization/exterior/crew/skill 各类的条目数和翻译缺失数
+
+# 拉升级/技能图标 (从 wowsinfo/data 镜像 master 分支)
+sudo python3 tools/fetch_build_icons.py
+# 产物:report/data/upgrade_icons/ (~120 张) + skill_icons/ (~85 张),~800 KB
+# 已存在的会跳过,加 --force 强刷
 ```
 
-跳过会让 `/查询` 的"本局配装"块走 ID-fallback (显示原始数字),功能不挂。
+跳过会让 `/查询` 的"本局配装"块走兜底(灰色方块 + 文字截 2 字),功能不挂。
 
 ### 3. 验证
 

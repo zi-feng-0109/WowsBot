@@ -93,10 +93,12 @@ def main():
     out: dict = {
         "version": raw.get("version", "?"),
         "build":   raw.get("build", 0),
-        "modernization": {},
-        "exterior":      {},
-        "crew":          {},
-        "skill":         {},
+        "modernization": {},  # id → 中文名
+        "exterior":      {},  # id → 中文名
+        "crew":          {},  # id → 中文名
+        "skill":         {},  # skill_type → {name, internal, tier}
+        # raw name(图标文件名用,跟 report/data/upgrade_icons/<name>.png 对应)
+        "modernization_raw": {},  # id → "PCM001_MainGun_Mod_I"
     }
 
     miss_mod = miss_ext = miss_crew = miss_skill = 0
@@ -106,6 +108,7 @@ def main():
             miss_mod += 1
             zh = m["name"]  # fallback
         out["modernization"][str(m["id"])] = zh
+        out["modernization_raw"][str(m["id"])] = m["name"]
 
     for e in raw["exteriors"]:
         zh = translate_exterior(e["name"], tr)
@@ -126,7 +129,12 @@ def main():
         if zh is None:
             miss_skill += 1
             zh = s["internal_name"]
-        out["skill"][str(s["skill_type"])] = {"name": zh, "tier": s["tier"]}
+        # internal 也存进去,render_query 用它拼图标路径 skill_icons/<internal>.png
+        out["skill"][str(s["skill_type"])] = {
+            "name": zh,
+            "internal": s["internal_name"],
+            "tier": s["tier"],
+        }
 
     n = {k: len(v) for k, v in out.items() if isinstance(v, dict)}
     print(

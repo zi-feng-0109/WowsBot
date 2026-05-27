@@ -23,8 +23,12 @@ from render_battle_report import (  # noqa: E402
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 
 # builds.json (ID→中文名 映射) 模块级缓存,首次调用时加载一次
-_BUILDS_PATH = Path(__file__).resolve().parent.parent / "data" / "builds.json"
+_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_BUILDS_PATH = _DATA_DIR / "builds.json"
+_UPGRADE_ICON_DIR = _DATA_DIR / "upgrade_icons"
+_SKILL_ICON_DIR   = _DATA_DIR / "skill_icons"
 _BUILDS_CACHE: Optional[dict] = None
+_ICON_CACHE: dict = {}  # path → Image (40x40 RGBA)
 
 
 def _builds() -> Optional[dict]:
@@ -35,6 +39,25 @@ def _builds() -> Optional[dict]:
         except Exception:
             _BUILDS_CACHE = {}
     return _BUILDS_CACHE or None
+
+
+def _load_icon(path: Path, size: int) -> Optional["Image.Image"]:
+    """加载图标 RGBA, resize 到 size×size。缺失返回 None。"""
+    key = (str(path), size)
+    if key in _ICON_CACHE:
+        return _ICON_CACHE[key]
+    if not path.is_file():
+        _ICON_CACHE[key] = None
+        return None
+    try:
+        im = Image.open(path).convert("RGBA")
+        if im.size != (size, size):
+            im = im.resize((size, size), Image.LANCZOS)
+        _ICON_CACHE[key] = im
+        return im
+    except Exception:
+        _ICON_CACHE[key] = None
+        return None
 
 # 跟 render_menu 同步的亮色板 (信息面板风)
 GAME_BG        = (38, 52, 78)
@@ -230,7 +253,7 @@ def render_query_png(out_path: str, *, player: dict, pvp: Optional[dict],
     # ----- 本局配装 panel -----
     if build_names:
         by = header_h + body_h + compare_h
-        _draw_build_panel(draw, PAD, by + 12, W - 2 * PAD, build_h - 24,
+        _draw_build_panel(img, draw, PAD, by + 12, W - 2 * PAD, build_h - 24,
                           build_names, f_section, f_label, f_value_cjk, f_dim)
 
     # ----- Footer -----
@@ -249,39 +272,36 @@ def _draw_kv(draw, x, y, label, value, f_label, f_value,
 
 def _lookup_build_names(build: dict, builds_data: Optional[dict],
                          species_raw: str) -> Optional[dict]:
-    """把 build {crew_id, crew_skills, modernizations, exteriors} 翻成中文名串。
+    """把 build 翻成 {crew, mods, skills} 三块。
+    mods/skills 是 [(zh_name, icon_path | None)] 列表,缺图标时 path=None。
     builds.json 不可用时返回 None,render 端跳过 panel。"""
     if not builds_data:
         return None
 
     crew_map = builds_data.get("crew", {})
     mod_map  = builds_data.get("modernization", {})
-    ext_map  = builds_data.get("exterior", {})
+    mod_raw  = builds_data.get("modernization_raw", {})
     skl_map  = builds_data.get("skill", {})
 
-    def _name(m, key, fallback="-"):
-        v = m.get(str(key))
-        if v is None:
-            return f"{key}?"
-        return v or fallback
-
     crew_id = build.get("crew_id")
-    crew_zh = _name(crew_map, crew_id) if crew_id else "-"
+    crew_zh = crew_map.get(str(crew_id), f"{crew_id}?") if crew_id else "-"
 
-    mods = [_name(mod_map, mid) for mid in (build.get("modernizations") or [])]
-    exts = [_name(ext_map, eid) for eid in (build.get("exteriors") or [])]
+    mods = []
+    for mid in (build.get("modernizations") or []):
+        zh = mod_map.get(str(mid), f"{mid}?")
+        raw = mod_raw.get(str(mid))
+        icon = _UPGRADE_ICON_DIR / f"{raw}.png" if raw else None
+        mods.append((zh, icon if icon and icon.is_file() else None))
 
     skills = []
     for st in build.get("crew_skills") or []:
-        s = skl_map.get(str(st))
-        skills.append(s.get("name") if (s and s.get("name")) else f"{st}?")
+        s = skl_map.get(str(st)) or {}
+        zh = s.get("name") or f"{st}?"
+        internal = s.get("internal")
+        icon = _SKILL_ICON_DIR / f"{internal}.png" if internal else None
+        skills.append((zh, icon if icon and icon.is_file() else None))
 
-    return {
-        "crew":  crew_zh,
-        "mods":  mods,
-        "exts":  exts,
-        "skills": skills,
-    }
+    return {"crew": crew_zh, "mods": mods, "skills": skills}
 
 
 def _wrap_tokens(tokens: list, sep: str, font, max_w: int) -> list:
@@ -306,38 +326,57 @@ def _wrap_tokens(tokens: list, sep: str, font, max_w: int) -> list:
     return lines
 
 
-def _draw_build_panel(draw, x, y, w, h, names: dict,
+def _draw_build_panel(img, draw, x, y, w, h, names: dict,
                        f_title, f_label, f_value, f_dim):
-    """本局配装 panel:3 行 (舰长/升级/技能)。旗帜信息略,改装/技能后续走图标。"""
+    """本局配装 panel:3 行 (舰长/升级/技能)。升级/技能用图标 grid,缺图标 fallback 文字。"""
     draw.rounded_rectangle([x, y, x + w, y + h],
                            radius=10, fill=GAME_PANEL_ALT, outline=GAME_BORDER)
     draw.text((x + 18, y + 12), "本局配装", GAME_GOLD, f_title)
 
     label_x = x + 18
-    value_x = x + 18 + 72   # label 占 ~72 px
+    value_x = x + 18 + 72
     value_max_w = w - (value_x - x) - 18
 
-    rows = [
-        ("舰长", [names["crew"]] if names["crew"] else ["-"]),
-        ("升级", names["mods"]),
-        ("技能", names["skills"]),
-    ]
-    sep = "  ·  "
+    # 舰长行 (纯文字)
     row_y = y + 50
-    line_h = 28
-    for label, items in rows:
-        draw.text((label_x, row_y + 2), label, GAME_DIM, f_label)
-        lines = _wrap_tokens(items, sep, f_value, value_max_w)
-        # 最多两行,超出附 "+N"
-        if len(lines) > 2:
-            extra = sum(len(l.split(sep)) for l in lines[2:])
-            lines = lines[:2]
-            if int(f_value.getlength(lines[1] + f" +{extra}")) <= value_max_w:
-                lines[1] = lines[1] + f"  +{extra}"
-        for li, line in enumerate(lines):
-            draw.text((value_x, row_y + li * (line_h - 4)), line,
-                      GAME_TEXT, f_value)
-        row_y += line_h + (line_h - 4) * (len(lines) - 1) + 6
+    draw.text((label_x, row_y + 2), "舰长", GAME_DIM, f_label)
+    draw.text((value_x, row_y), names["crew"], GAME_TEXT, f_value)
+    row_y += 36
+
+    # 升级 / 技能行 (图标 grid)
+    icon_size = 42
+    icon_gap  = 8
+    icons_per_row = max(1, (value_max_w + icon_gap) // (icon_size + icon_gap))
+
+    for label, items in [("升级", names["mods"]), ("技能", names["skills"])]:
+        draw.text((label_x, row_y + (icon_size - 18) // 2),
+                  label, GAME_DIM, f_label)
+        if not items:
+            draw.text((value_x, row_y + (icon_size - 22) // 2),
+                      "-", GAME_DIM, f_value)
+        else:
+            shown = items[:icons_per_row]
+            overflow = len(items) - len(shown)
+            for i, (zh, icon_path) in enumerate(shown):
+                ix = value_x + i * (icon_size + icon_gap)
+                if icon_path:
+                    ic = _load_icon(icon_path, icon_size)
+                    if ic is not None:
+                        img.paste(ic, (ix, row_y), ic)
+                        continue
+                # 兜底:画灰色方块 + 中文截前 2 字
+                draw.rounded_rectangle(
+                    [ix, row_y, ix + icon_size, row_y + icon_size],
+                    radius=4, fill=GAME_PANEL, outline=GAME_BORDER)
+                tag = (zh or "?")[:2]
+                tw = int(f_label.getlength(tag))
+                draw.text((ix + (icon_size - tw) // 2, row_y + icon_size // 2 - 9),
+                          tag, GAME_TEXT, f_label)
+            if overflow > 0:
+                ix = value_x + len(shown) * (icon_size + icon_gap)
+                draw.text((ix, row_y + (icon_size - 22) // 2),
+                          f"+{overflow}", GAME_DIM, f_value)
+        row_y += icon_size + 10
 
 
 def _win_color(pct: float):

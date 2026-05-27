@@ -2988,6 +2988,7 @@
   "skill": {
     "1": {
       "name": "主炮组与防空专员",
+      "internal": "GmReloadAaDamageConstant",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -2999,6 +3000,7 @@
     },
     "2": {
       "name": "基本存活性",
+      "internal": "DefenceCritFireFlooding",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3010,6 +3012,7 @@
     },
     "3": {
       "name": "齿轮润滑",
+      "internal": "GmTurn",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 1,
@@ -3021,6 +3024,7 @@
     },
     "4": {
       "name": "发射管装填手",
+      "internal": "TorpedoReload",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 2,
@@ -3032,6 +3036,7 @@
     },
     "5": {
       "name": "紧急维修专员",
+      "internal": "ConsumablesCrashcrewRegencrewReload",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 1,
@@ -3043,6 +3048,7 @@
     },
     "6": {
       "name": "消耗品强化",
+      "internal": "ConsumablesDuration",
       "tier": {
         "AirCarrier": 2,
         "Auxiliary": 2,
@@ -3054,6 +3060,7 @@
     },
     "7": {
       "name": "警觉性",
+      "internal": "DetectionTorpedoRange",
       "tier": {
         "AirCarrier": 2,
         "Auxiliary": 2,
@@ -3065,6 +3072,7 @@
     },
     "8": {
       "name": "破坏专家",
+      "internal": "HeFireProbability",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 2,
@@ -3076,6 +3084,7 @@
     },
     "9": {
       "name": "主炮组与防空专家",
+      "internal": "GmRangeAaDamageBubbles",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3087,6 +3096,7 @@
     },
     "10": {
       "name": "飞机装甲",
+      "internal": "PlanesDefenseDamageConstant",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3098,6 +3108,7 @@
     },
     "11": {
       "name": "改进型引擎增压",
+      "internal": "PlanesForsageDuration",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 1,
@@ -3109,6 +3120,7 @@
     },
     "12": {
       "name": "隐蔽专家",
+      "internal": "DetectionVisibilityRange",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3120,6 +3132,7 @@
     },
     "13": {
       "name": "消耗品专员",
+      "internal": "ConsumablesReload",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 1,
@@ -3131,6 +3144,7 @@
     },
     "14": {
       "name": "防火专家",
+      "internal": "DefenceFireProbability",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3142,6 +3156,7 @@
     },
     "15": {
       "name": "稳定瞄准",
+      "internal": "PlanesAimingBoost",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3153,6 +3168,7 @@
     },
     "16": {
       "name": "改进型引擎",
+      "internal": "PlanesSpeed",
       "tier": {
         "AirCarrier": 2,
         "Auxiliary": 2,
@@ -3164,6 +3180,7 @@
     },
     "17": {
       "name": "监督者",
+      "internal": "ConsumablesAdditional",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3175,6 +3192,7 @@
     },
     "18": {
       "name": "预防性维护",
+      "internal": "DefenseCritProbability",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 1,
@@ -3186,6 +3204,7 @@
     },
     "19": {
       "name": "敌袭预警",
+      "internal": "DetectionAlert",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 1,
@@ -3197,6 +3216,7 @@
     },
     "20": {
       "name": "背水一战",
+      "internal": "Maneuverability",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 1,
@@ -3208,6 +3228,7 @@
     },
     "21": {
       "name": "火炮装填手",
+      "internal": "GmShellReload",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 1,
@@ -3219,6 +3240,7 @@
     },
     "22": {
       "name": "截击机",
+      "internal": "PlanesConsumablesCallfightersUpgrade",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3230,6 +3252,7 @@
     },
     "23": {
       "name": "肾上腺素飙升",
+      "internal": "ArmamentReloadAaDamage",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3241,6 +3264,7 @@
     },
     "24": {
       "name": "鱼雷加速",
+      "internal": "TorpedoSpeed",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 1,
@@ -3252,6 +3276,7 @@
     },
     "25": {
       "name": "生存专家",
+      "internal": "DefenseHp",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3263,6 +3288,7 @@
     },
     "26": {
       "name": "手动副炮组瞄准",
+      "internal": "AtbaAccuracy",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3274,6 +3300,7 @@
     },
     "27": {
       "name": "集火训练",
+      "internal": "AaPrioritysectorDamageConstant",
       "tier": {
         "AirCarrier": 2,
         "Auxiliary": 2,
@@ -3285,6 +3312,7 @@
     },
     "28": {
       "name": "优先目标",
+      "internal": "DetectionAiming",
       "tier": {
         "AirCarrier": 2,
         "Auxiliary": 2,
@@ -3296,6 +3324,7 @@
     },
     "29": {
       "name": "制空权",
+      "internal": "PlanesReload",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 1,
@@ -3307,6 +3336,7 @@
     },
     "30": {
       "name": "猛烈出击",
+      "internal": "TorpedoDamage",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3318,6 +3348,7 @@
     },
     "31": {
       "name": "战斗机指挥中心",
+      "internal": "ConsumablesFighterAdditional",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 1,
@@ -3329,6 +3360,7 @@
     },
     "32": {
       "name": "引擎技师",
+      "internal": "PlanesConsumablesSpeedboosterReload",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 1,
@@ -3340,6 +3372,7 @@
     },
     "33": {
       "name": "高爆弹的惯性引信",
+      "internal": "HePenetration",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 4,
@@ -3351,6 +3384,7 @@
     },
     "34": {
       "name": "无线电定位",
+      "internal": "DetectionDirection",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3362,6 +3396,7 @@
     },
     "35": {
       "name": "对空防御和反潜作战专家",
+      "internal": "AaDamageConstantBubbles",
       "tier": {
         "AirCarrier": 2,
         "Auxiliary": 4,
@@ -3373,6 +3408,7 @@
     },
     "36": {
       "name": "副武器专家",
+      "internal": "AaDamageConstantBubblesCv",
       "tier": {
         "AirCarrier": 2,
         "Auxiliary": 2,
@@ -3384,6 +3420,7 @@
     },
     "37": {
       "name": "超重型穿甲弹",
+      "internal": "ApDamageBb",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3395,6 +3432,7 @@
     },
     "38": {
       "name": "重型穿甲弹",
+      "internal": "ApDamageCa",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3406,6 +3444,7 @@
     },
     "39": {
       "name": "特重型弹药",
+      "internal": "ApDamageDd",
       "tier": {
         "AirCarrier": 2,
         "Auxiliary": 2,
@@ -3417,6 +3456,7 @@
     },
     "40": {
       "name": "远程副炮组炮弹",
+      "internal": "AtbaRange",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3428,6 +3468,7 @@
     },
     "41": {
       "name": "防御火力专家",
+      "internal": "AtbaUpgrade",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3439,6 +3480,7 @@
     },
     "42": {
       "name": "紧急维修专家",
+      "internal": "ConsumablesCrashcrewRegencrewUpgrade",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3450,6 +3492,7 @@
     },
     "43": {
       "name": "空中之眼",
+      "internal": "ConsumablesSpotterUpgrade",
       "tier": {
         "AirCarrier": 2,
         "Auxiliary": 2,
@@ -3461,6 +3504,7 @@
     },
     "44": {
       "name": "改进型维修小组整备",
+      "internal": "DefenceUw",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3472,6 +3516,7 @@
     },
     "45": {
       "name": "隐蔽威胁",
+      "internal": "DetectionVisibilityCrashcrew",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3483,6 +3528,7 @@
     },
     "46": {
       "name": "起火专家",
+      "internal": "HeFireProbabilityCv",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3494,6 +3540,7 @@
     },
     "47": {
       "name": "重型高爆弹和半穿甲弹",
+      "internal": "HeSapDamage",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3505,6 +3552,7 @@
     },
     "48": {
       "name": "增强型穿甲弹药",
+      "internal": "PlanesApDamage",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3516,6 +3564,7 @@
     },
     "49": {
       "name": "巡逻队长",
+      "internal": "PlanesConsumablesCallfightersAdditional",
       "tier": {
         "AirCarrier": 2,
         "Auxiliary": 2,
@@ -3527,6 +3576,7 @@
     },
     "50": {
       "name": "迅速反应",
+      "internal": "PlanesConsumablesCallfightersPreparationtime",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3538,6 +3588,7 @@
     },
     "51": {
       "name": "寻之击之",
+      "internal": "PlanesConsumablesCallfightersRange",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 1,
@@ -3549,6 +3600,7 @@
     },
     "53": {
       "name": "增强型飞机装甲",
+      "internal": "PlanesDefenseDamageBubbles",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3560,6 +3612,7 @@
     },
     "54": {
       "name": "轰炸机飞行控制",
+      "internal": "PlanesDivebomberSpeed",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3571,6 +3624,7 @@
     },
     "55": {
       "name": "最后一搏",
+      "internal": "PlanesForsageRenewal",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 1,
@@ -3582,6 +3636,7 @@
     },
     "56": {
       "name": "生存专家",
+      "internal": "PlanesHp",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3593,6 +3648,7 @@
     },
     "57": {
       "name": "鱼雷轰炸机",
+      "internal": "PlanesTorpedoArmingrange",
       "tier": {
         "AirCarrier": 2,
         "Auxiliary": 2,
@@ -3604,6 +3660,7 @@
     },
     "58": {
       "name": "空投鱼雷加速",
+      "internal": "PlanesTorpedoSpeed",
       "tier": {
         "AirCarrier": 2,
         "Auxiliary": 2,
@@ -3615,6 +3672,7 @@
     },
     "59": {
       "name": "近发引信",
+      "internal": "PlanesTorpedoUwReduced",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3626,6 +3684,7 @@
     },
     "60": {
       "name": "进水专家",
+      "internal": "TorpedoFloodingProbability",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 1,
@@ -3637,6 +3696,7 @@
     },
     "61": {
       "name": "隐蔽加速",
+      "internal": "TriggerSpeedBb",
       "tier": {
         "AirCarrier": 2,
         "Auxiliary": 2,
@@ -3648,6 +3708,7 @@
     },
     "62": {
       "name": "近距离作战",
+      "internal": "TriggerGmAtbaReloadBb",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3659,6 +3720,7 @@
     },
     "63": {
       "name": "顶尖炮手",
+      "internal": "TriggerGmAtbaReloadCa",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3670,6 +3732,7 @@
     },
     "64": {
       "name": "无畏斗士",
+      "internal": "TriggerGmReload",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3681,6 +3744,7 @@
     },
     "65": {
       "name": "默默速行",
+      "internal": "TriggerSpeed",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3692,6 +3756,7 @@
     },
     "66": {
       "name": "敌众我寡",
+      "internal": "TriggerSpeedAccuracy",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3703,6 +3768,7 @@
     },
     "67": {
       "name": "眼花缭乱",
+      "internal": "TriggerSpreading",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3714,6 +3780,7 @@
     },
     "68": {
       "name": "增强型声呐",
+      "internal": "TriggerPingerReloadBuff",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 1,
@@ -3725,6 +3792,7 @@
     },
     "69": {
       "name": "增强型脉冲发生器",
+      "internal": "TriggerPingerSpeedBuff",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3736,6 +3804,7 @@
     },
     "70": {
       "name": "声呐士官",
+      "internal": "SubmarineHoldSectors",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3747,6 +3816,7 @@
     },
     "71": {
       "name": "声呐专家",
+      "internal": "TriggerConsSonarTimeCoeff",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3758,6 +3828,7 @@
     },
     "72": {
       "name": "鱼雷手训练",
+      "internal": "TriggerSeenTorpedoReload",
       "tier": {
         "AirCarrier": 2,
         "Auxiliary": 2,
@@ -3769,6 +3840,7 @@
     },
     "73": {
       "name": "鱼雷瞄准大师",
+      "internal": "SubmarineTorpedoPingDamage",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3780,6 +3852,7 @@
     },
     "74": {
       "name": "舵手",
+      "internal": "TriggerConsRudderTimeCoeff",
       "tier": {
         "AirCarrier": 1,
         "Auxiliary": 1,
@@ -3791,6 +3864,7 @@
     },
     "75": {
       "name": "改进型蓄电池容量",
+      "internal": "SubmarineBatteryCapacity",
       "tier": {
         "AirCarrier": 2,
         "Auxiliary": 2,
@@ -3802,6 +3876,7 @@
     },
     "76": {
       "name": "戒备",
+      "internal": "SubmarineDangerAlert",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3813,6 +3888,7 @@
     },
     "77": {
       "name": "改进型蓄电池效率",
+      "internal": "SubmarineBatteryBurnDown",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3824,6 +3900,7 @@
     },
     "78": {
       "name": "增大型螺旋桨轴",
+      "internal": "SubmarineSpeed",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3835,6 +3912,7 @@
     },
     "79": {
       "name": "消耗品专员",
+      "internal": "SubmarineConsumablesReload",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3846,6 +3924,7 @@
     },
     "80": {
       "name": "消耗品强化",
+      "internal": "SubmarineConsumablesDuration",
       "tier": {
         "AirCarrier": 2,
         "Auxiliary": 2,
@@ -3857,6 +3936,7 @@
     },
     "81": {
       "name": "怒火满腔",
+      "internal": "TriggerBurnGmReload",
       "tier": {
         "AirCarrier": 4,
         "Auxiliary": 4,
@@ -3868,6 +3948,7 @@
     },
     "82": {
       "name": "肾上腺素飙升",
+      "internal": "ArmamentReloadSubmarine",
       "tier": {
         "AirCarrier": 3,
         "Auxiliary": 3,
@@ -3879,6 +3960,7 @@
     },
     "83": {
       "name": "战斗机动专家",
+      "internal": "PlanesConsumablesActiveManeuveringUpgrade",
       "tier": {
         "AirCarrier": 2,
         "Auxiliary": 2,
@@ -3888,5 +3970,125 @@
         "Submarine": 2
       }
     }
+  },
+  "modernization_raw": {
+    "4293054384": "PCM001_MainGun_Mod_I",
+    "4292005808": "PCM002_Torpedo_Mod_I",
+    "4290957232": "PCM003_Airplanes_Mod_I",
+    "4289908656": "PCM004_AirDefense_Mod_I",
+    "4288860080": "PCM005_SecondaryGun_Mod_I",
+    "4287811504": "PCM006_MainGun_Mod_II",
+    "4286762928": "PCM007_Torpedo_Mod_II",
+    "4285714352": "PCM008_FireControl_Mod_I",
+    "4284665776": "PCM009_FlightControl_Mod_I",
+    "4283617200": "PCM010_Airplanes_Mod_II",
+    "4282568624": "PCM011_AirDefense_Mod_II",
+    "4281520048": "PCM012_SecondaryGun_Mod_II",
+    "4280471472": "PCM013_MainGun_Mod_III",
+    "4279422896": "PCM014_Torpedo_Mod_III",
+    "4278374320": "PCM015_FireControl_Mod_II",
+    "4277325744": "PCM016_FlightControl_Mod_II",
+    "4276277168": "PCM017_Airplanes_Mod_III",
+    "4275228592": "PCM018_AirDefense_Mod_III",
+    "4274180016": "PCM019_SecondaryGun_Mod_III",
+    "4273131440": "PCM020_DamageControl_Mod_I",
+    "4272082864": "PCM021_Engine_Mod_I",
+    "4271034288": "PCM022_SteeringGear_Mod_I",
+    "4269985712": "PCM023_DamageControl_Mod_II",
+    "4268937136": "PCM024_Engine_Mod_II",
+    "4267888560": "PCM025_SteeringGear_Mod_II",
+    "4266839984": "PCM026_LookoutStation_Mod_I",
+    "4265791408": "PCM027_ConcealmentMeasures_Mod_I",
+    "4264742832": "PCM028_FireControl_Mod_I_US",
+    "4263694256": "PCM029_FireControl_Mod_II_US",
+    "4262645680": "PCM030_MainWeapon_Mod_I",
+    "4261597104": "PCM031_SecondaryWeapon_Mod_I",
+    "4260548528": "PCM032_PowderMagazine_Mod_I",
+    "4259499952": "PCM033_Guidance_Mod_I",
+    "4258451376": "PCM034_Guidance_Mod_0",
+    "4257402800": "PCM035_SteeringGear_Mod_III",
+    "4256354224": "PCM036_SpeedBooster_Mod_I",
+    "4255305648": "PCM037_SmokeGenerator_Mod_I",
+    "4254257072": "PCM038_Spotter_Mod_I",
+    "4253208496": "PCM039_CrashCrew_Mod_I",
+    "4252159920": "PCM040_AirDefenseDisp_Mod_I",
+    "4251111344": "PCM041_SonarSearch_Mod_I",
+    "4250062768": "PCM042_RLSSearch_Mod_I",
+    "4249014192": "PCM043_Special_Mod_I_Conqueror",
+    "4247965616": "PCM044_Special_Mod_I_Republique",
+    "4246917040": "PCM045_Special_Mod_I_GKurfurst",
+    "4245868464": "PCM046_Special_Mod_I_Yamato",
+    "4244819888": "PCM047_Special_Mod_I_Montana",
+    "4243771312": "PCM048_Special_Mod_I_Zao",
+    "4242722736": "PCM049_Special_Mod_I_Hindenburg",
+    "4241674160": "PCM050_Special_Mod_I_Henri_IV",
+    "4240625584": "PCM051_Special_Mod_I_Minotaur",
+    "4239577008": "PCM052_Special_Mod_I_Des_Moines",
+    "4238528432": "PCM053_Special_Mod_I_Worcester",
+    "4237479856": "PCM054_Special_Mod_I_Moskva",
+    "4236431280": "PCM055_Special_Mod_I_Khabarovsk",
+    "4235382704": "PCM056_Special_Mod_I_Z_52",
+    "4234334128": "PCM057_Special_Mod_I_Shimakaze",
+    "4233285552": "PCM058_Special_Mod_I_Gearing",
+    "4232236976": "PCM059_Special_Mod_I_Yueyang",
+    "4231188400": "PCM060_Special_Mod_I_Grozovoi",
+    "4230139824": "PCM061_Special_Mod_I_Midway",
+    "4229091248": "PCM062_Special_Mod_I_Hakuryu",
+    "4228042672": "PCM063_Fighter_Mod_I",
+    "4226994096": "PCM064_TorpedoBomber_Mod_I",
+    "4225945520": "PCM065_DiveBomber_Mod_I",
+    "4224896944": "PCM066_TorpedoBomber_Mod_II",
+    "4223848368": "PCM067_Fighter_Mod_II",
+    "4222799792": "PCM068_PlaneEngine_Mod_I",
+    "4221751216": "PCM069_Movement_Mod_I",
+    "4220702640": "PCM070_Torpedo_Mod_IV",
+    "4219654064": "PCM071_TorpedoBombs_Mod_I",
+    "4218605488": "PCM072_AbilityWorktimeBoost_Mod_I",
+    "4217556912": "PCM073_AbilityWorktimeBoostCV_Mod_I",
+    "4216508336": "PCM074_AuxiliaryArmament_Mod_I",
+    "4215459760": "PCM075_Special_Mod_I_Daring",
+    "4214411184": "PCM076_Special_Mod_I_Kleber",
+    "4213362608": "PCM077_Special_Mod_I_Harugumo",
+    "4212314032": "PCM078_Special_Mod_I_Kremlin",
+    "4211265456": "PCM079_Special_Mod_I_Audacious",
+    "4210216880": "PCM080_Special_Mod_I_ARP_Yamato",
+    "4209168304": "PCM081_SkipBomber_Mod_I",
+    "4208119728": "PCM082_Autonomy_Mod_I",
+    "4207071152": "PCM083_Hydrophone_Mod_I",
+    "4206022576": "PCM084_Pinger_Mod_I",
+    "4204974000": "PCM085_Pinger_Mod_II",
+    "4203925424": "PCM086_Autonomy_Mod_II",
+    "4202876848": "PCM087_AirSupport_Mod_I",
+    "4201828272": "PCM088_AirSupport_Mod_II",
+    "4200779696": "PCM089_DepthCharges_Mod_I",
+    "4199731120": "PCM090_SteeringGearSubmarine_Mod_II",
+    "4198682544": "PCM091_SteeringGearSubmarine_Mod_III",
+    "4197633968": "PCM092_SkipBomber_Mod_I",
+    "4196585392": "PCM093_Airplanes_Mod_IV",
+    "4195536816": "PCM094_Special_Mod_I_Halland",
+    "4194488240": "PCM095_Special_Mod_I_Venezia",
+    "4193439664": "PCM096_Special_Mod_I_Petropavlovsk",
+    "4192391088": "PCM097_Special_Mod_I_Manfred_Richthofen",
+    "4191342512": "PCM098_Special_Mod_I_Elbing",
+    "4190293936": "PCM099_Special_Mod_I_Gouden_Leeuw",
+    "4189245360": "PCM100_DamageControl_Mod_III",
+    "4188196784": "PCM101_Torpedo_Mod_V",
+    "4187148208": "PCM102_DepthChargeResist_Mod_I",
+    "4186099632": "PCM103_SubsEnergyFreeze_Mod_I",
+    "4185051056": "PCM104_SubmarineLocator_Mod_I",
+    "4184002480": "PCM105_Special_Mod_I_Vermont",
+    "4182953904": "PCM106_Special_Mod_I_Colombo",
+    "4181905328": "PCM107_Modern_Arm_Mod_White1",
+    "4180856752": "PCM108_Modern_Arm_Mod_White2",
+    "4179808176": "PCM109_Modern_Arm_Mod_Red1",
+    "4178759600": "PCM110_Modern_Arm_Mod_Red2",
+    "4177711024": "PCM111_Modern_Def_Mod_White1",
+    "4176662448": "PCM112_Modern_Def_Mod_White2",
+    "4175613872": "PCM113_Modern_Def_Mod_Red1",
+    "4174565296": "PCM114_Modern_Def_Mod_Red2",
+    "4173516720": "PCM115_Modern_Spec_Mod_White1",
+    "4172468144": "PCM116_Modern_Spec_Mod_White2",
+    "4171419568": "PCM117_Modern_Spec_Mod_Red1",
+    "4170370992": "PCM118_Modern_Spec_Mod_Red2"
   }
 }
