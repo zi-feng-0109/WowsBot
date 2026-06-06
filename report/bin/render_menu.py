@@ -115,9 +115,14 @@ def _draw_mixed(draw, xy, text, fill, mono_font, cjk_font):
             buf = [ch]
             cur = new
     runs.append(("".join(buf), cur))
+    # 统一按 CJK 字体的基线对齐:mono 与 CJK 字体 ascent 不同,若都按顶部 (y) 画,
+    # ASCII 符号 (/ | [ ]) 的基线会和中文错开,底部不齐平。改用 anchor="ls"
+    # (左对齐 + 基线对齐),所有 run 共享同一基线。CJK 段位置与原来完全一致。
+    ascent, _ = cjk_font.getmetrics()
+    baseline = y + ascent
     for s, is_cjk in runs:
         f = cjk_font if is_cjk else mono_font
-        draw.text((x, y), s, fill=fill, font=f)
+        draw.text((x, baseline), s, fill=fill, font=f, anchor="ls")
         x += int(f.getlength(s))
 
 
