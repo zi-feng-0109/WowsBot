@@ -69,7 +69,6 @@ GAME_COMMANDS: list[tuple[str, str, str]] = [
     ("/查看答案",                    "投降并显示答案",        "任何人"),
     ("/排名  /我的排名",              "查看排位榜",            "任何人"),
     ("/玩法 [普通|排位]",             "猜船详细规则",          "任何人"),
-    ("/猜船 开|关|状态",              "本群猜船开关(默认关)",   "群主/群管/超管"),
 ]
 
 W = 1100
@@ -199,9 +198,11 @@ def _draw_super_indicator(draw, x, y, status, f_label):
 
 def render_menu_png(out_path: str, *, scope: str, ident: str,
                     state_snapshot: dict, is_super: bool,
-                    version: str = "v0.4.0") -> str:
+                    version: str = "v0.4.0", guess_enabled=None) -> str:
     """渲染一张菜单 PNG 到 out_path,返回 out_path。
-    state_snapshot 是 permissions.snapshot() 的输出。"""
+    state_snapshot 是 permissions.snapshot() 的输出。
+    guess_enabled: 本群「猜船」开关状态 (True/False)；None 表示不显示该行
+    (如私聊作用域)。猜船开关由 EssexBot 维护,这里只负责显示。"""
     f_title   = _font(CJK_FONT, 30)
     f_meta    = _font(CJK_FONT, 15)
     f_section = _font(CJK_FONT, 20)
@@ -214,11 +215,12 @@ def render_menu_png(out_path: str, *, scope: str, ident: str,
     n_features = len(FEATURES)
     n_planned = len(PLANNED_FEATURES)
     n_games = len(GAME_COMMANDS)
+    n_guess_row = 1 if guess_enabled is not None else 0  # 猜船开关行
     sa_visible = is_super
 
     height = (
         HEADER_H + PAD
-        + 30 + 22 + n_features * ROW_H + SECTION_GAP             # 当前功能 (含列头 22px)
+        + 30 + 22 + (n_features + n_guess_row) * ROW_H + SECTION_GAP  # 当前功能 (含列头 22px)
         + 30 + 2 * ROW_H + SECTION_GAP                           # 使用方法
         + 30 + 22 + n_games * 28 + SECTION_GAP                   # 游戏 (含表头 22px)
         + 30 + 22 + (5 if sa_visible else 4) * 28 + SECTION_GAP  # 全部指令 (含表头 22px)
@@ -266,6 +268,16 @@ def render_menu_png(out_path: str, *, scope: str, ident: str,
         _draw_super_indicator(draw, super_x, y + 12, super_st, f_desc)
         # 右边: 本群/本会话 toggle (开/关)
         _draw_status_dot(draw, dot_x, y + ROW_H // 2, toggle_st)
+        y += ROW_H
+    # 猜船开关行(由 EssexBot 维护,无超管全局禁用概念)
+    if guess_enabled is not None:
+        guess_st = "on" if guess_enabled else "off"
+        draw.rectangle([PAD, y, W - PAD, y + ROW_H - 2], fill=GAME_PANEL_ALT)
+        draw.text((name_x, y + 10), "猜船", GAME_TEXT, f_row)
+        draw.text((desc_x, y + 12), "猜船小游戏 (默认关)", GAME_DIM, f_desc)
+        _draw_mixed(draw, (cmd_x, y + 10), "/猜船 开|关|状态", GAME_TEXT, f_mono, f_desc)
+        draw.text((super_x, y + 12), "—", GAME_DIM, f_desc)
+        _draw_status_dot(draw, dot_x, y + ROW_H // 2, guess_st)
         y += ROW_H
     y += SECTION_GAP
 
@@ -341,6 +353,8 @@ def _cli():
                     help="可选:从该 JSON 读 state_snapshot;不给就用空 state")
     ap.add_argument("--version", default="v0.4.0",
                     help="版本字符串显示用")
+    ap.add_argument("--guess", choices=["on", "off", "none"], default="none",
+                    help="猜船开关显示:on/off 显示对应状态,none 不显示该行")
     args = ap.parse_args()
 
     if args.state_json:
@@ -349,9 +363,11 @@ def _cli():
     else:
         state = {"version": 1, "global_blacklist": [], "groups": {}, "private": {}}
 
+    guess_enabled = {"on": True, "off": False, "none": None}[args.guess]
     render_menu_png(
         args.out, scope=args.scope, ident=args.ident,
         state_snapshot=state, is_super=args.is_super, version=args.version,
+        guess_enabled=guess_enabled,
     )
     print(args.out)
 

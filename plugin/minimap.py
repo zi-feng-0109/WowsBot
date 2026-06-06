@@ -153,12 +153,31 @@ async def _at_only(bot: Bot, event: MessageEvent):
     await _reply_menu(bot, event)
 
 
+# 猜船开关状态由 EssexBot 维护(独立进程),菜单只读它的状态文件做显示。
+GUESS_TOGGLE_FILE = os.environ.get(
+    "ESSEXBOT_GUESS_TOGGLE",
+    "/home/zifeng/桌面/bot/EssexBot/data/guess_toggle.json",
+)
+
+
+def _read_guess_enabled(group_id: str) -> bool:
+    """读 EssexBot 的群级猜船开关;默认关闭,读失败也按关闭。"""
+    try:
+        with open(GUESS_TOGGLE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return bool(data.get("groups", {}).get(str(group_id), False))
+    except Exception:
+        return False
+
+
 async def _reply_menu(bot: Bot, event):
     """渲染当前作用域的菜单 PNG,回复到群/私聊。"""
     scope, ident = permissions.scope_of(event)
     is_super = permissions.is_super_admin(getattr(event, "user_id", 0))
     state = permissions.snapshot()
     version = version_str()
+    # 猜船是群级开关:只在群作用域显示 ON/OFF;私聊不显示该行
+    guess_enabled = _read_guess_enabled(ident) if scope == "group" else None
 
     # 写到一个临时文件再读;避免 PIL → bytes 转换的复杂性
     out_dir = Path(BASE_DIR) / "_menu_cache"
@@ -168,7 +187,7 @@ async def _reply_menu(bot: Bot, event):
     try:
         await asyncio.to_thread(
             _render_menu_sync,
-            str(out_path), scope, ident, state, is_super, version,
+            str(out_path), scope, ident, state, is_super, version, guess_enabled,
         )
     except Exception as e:
         logger.error(f"渲染菜单失败: {e}")
@@ -183,7 +202,7 @@ async def _reply_menu(bot: Bot, event):
     await bot.send(event, msg)
 
 
-def _render_menu_sync(out_path, scope, ident, state, is_super, version):
+def _render_menu_sync(out_path, scope, ident, state, is_super, version, guess_enabled=None):
     """sync wrapper 给 to_thread 用 — render_menu 没有 async 接口。"""
     # 在 thread 里 import,避免插件加载阶段就拉 render_menu 的依赖链
     import sys as _sys
@@ -194,6 +213,7 @@ def _render_menu_sync(out_path, scope, ident, state, is_super, version):
     render_menu_png(
         out_path, scope=scope, ident=ident,
         state_snapshot=state, is_super=is_super, version=version,
+        guess_enabled=guess_enabled,
     )
 
 
