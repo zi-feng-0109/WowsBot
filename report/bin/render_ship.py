@@ -37,7 +37,7 @@ _PANEL_ROW_H = 50
 _PANEL_PAD_BOTTOM = 14
 _PANEL_GAP = 12
 _DIVIDER_H = 38
-_CONS_PANEL_H = _PANEL_TITLE_H + _PANEL_ROW_H + _PANEL_PAD_BOTTOM  # 消耗品面板单行高
+_CONS_ROW_H = 48          # 消耗品面板里每个备选一行的高
 _HEADER_H = 132
 
 
@@ -164,19 +164,21 @@ def _build_sections(ship: dict) -> list:
     return secs
 
 
+_CN_NUM = {2: "二", 3: "三", 4: "四", 5: "五", 6: "六"}
+
+
 def _build_consumables(ship: dict) -> list:
-    """每种消耗品一个独立面板:[(title, kvs)]。同槽多个 (二选一) 各自一个面板。
-    kvs 固定列:装填 / 作用时间 / 冷却时间 / 整备时间 (+ 作用范围,有才加)。"""
-    out = []
+    """按槽位分组:[{header, rows:[(name|None, kvs)]}]。
+    单选槽:header=消耗品名, 一行无行名。
+    多选槽:header="三选一", 每个备选一行带行名 → 一眼看清哪几个在同组里选。
+    kvs 列:装填 / 作用时间 / 冷却时间 / 整备时间 (+ 作用范围,雷达声呐才有)。"""
+    groups = []
     for slot in ship.get("consumables") or []:
-        multi = len(slot) > 1
+        rows = []
         for a in slot:
             if not isinstance(a, dict):            # 旧格式兜底
-                out.append((str(a), []))
+                rows.append((str(a), []))
                 continue
-            title = a.get("name", "?")
-            if multi:
-                title = f"{title}（{len(slot)} 选 1）"
             ch = a.get("charges")
             charge_txt = ("无限" if ch == -1
                           else f"{int(ch)} 次" if isinstance(ch, (int, float)) and ch > 0
@@ -190,14 +192,49 @@ def _build_consumables(ship: dict) -> list:
             rg = a.get("range_km")
             if isinstance(rg, (int, float)) and rg > 0:
                 kvs.append(("作用范围", f"{rg:g} km"))
-            out.append((title, kvs))
-    return out
+            rows.append((a.get("name", "?"), kvs))
+        if not rows:
+            continue
+        if len(rows) == 1:
+            groups.append({"header": rows[0][0], "rows": [(None, rows[0][1])]})
+        else:
+            n = len(rows)
+            groups.append({"header": f"{_CN_NUM.get(n, n)} 选 1", "rows": rows})
+    return groups
 
 
 def _fmt_s2(v, zero_ok=False) -> str:
     if isinstance(v, (int, float)) and (v > 0 or (zero_ok and v == 0)):
         return f"{v:g} s"
     return "-"
+
+
+def _cons_group_height(group: dict) -> int:
+    return _PANEL_TITLE_H + len(group["rows"]) * _CONS_ROW_H + _PANEL_PAD_BOTTOM
+
+
+def _draw_consumable_group(img, draw, x, y, w, group, fonts) -> int:
+    """画一个槽位面板。多选槽每个备选一行 (行首带名字),单选槽一行无名。"""
+    f_title, f_label, f_value = fonts["title"], fonts["label"], fonts["value"]
+    rows = group["rows"]
+    h = _cons_group_height(group)
+    draw.rounded_rectangle([x, y, x + w, y + h], radius=10,
+                           fill=GAME_PANEL_ALT, outline=GAME_BORDER)
+    draw.text((x + 18, y + 11), group["header"], GAME_GOLD, f_title)
+
+    has_name = any(nm is not None for nm, _ in rows)
+    name_col_w = 190 if has_name else 0   # 容下最长名 (增强型方向舵装置 8 字)
+    stat_col_w = 160
+    for ri, (name, kvs) in enumerate(rows):
+        ry = y + _PANEL_TITLE_H + ri * _CONS_ROW_H
+        if name is not None:                        # 备选名 (行首,亮色当小标题)
+            draw.text((x + 18, ry + 13), name, GAME_TEXT, f_value)
+        base_x = x + 18 + name_col_w
+        for ci, (lab, val) in enumerate(kvs):
+            cx = base_x + ci * stat_col_w
+            draw.text((cx, ry), lab, GAME_DIM, f_label)
+            draw.text((cx, ry + 20), str(val), GAME_TEXT, f_value)
+    return h
 
 
 def render_ship_png(out_path: str, *, ship: dict) -> str:
@@ -220,8 +257,9 @@ def render_ship_png(out_path: str, *, ship: dict) -> str:
     for _, kvs, cols in sections:
         body_h += _panel_height(len(kvs), cols) + _PANEL_GAP
     if cons:
-        cons_rows = (len(cons) + 1) // 2          # 每行 2 个面板
-        body_h += _DIVIDER_H + cons_rows * (_CONS_PANEL_H + _PANEL_GAP)
+        body_h += _DIVIDER_H
+        for g in cons:
+            body_h += _cons_group_height(g) + _PANEL_GAP
     H = _HEADER_H + body_h + FOOTER_H
 
     img = Image.new("RGB", (W, H), GAME_BG)
@@ -258,18 +296,14 @@ def render_ship_png(out_path: str, *, ship: dict) -> str:
         used = _draw_panel(img, draw, PAD, y, W - 2 * PAD, title, kvs, cols, fonts)
         y += used + _PANEL_GAP
 
-    # ----- 消耗品 (每种一个面板,两列网格) -----
+    # ----- 消耗品 (按槽位分组,单列;多选槽标 N 选 1 并逐行列出) -----
     if cons:
         draw.text((PAD, y + 6), "消耗品", GAME_GOLD, fonts["title"])
         draw.line([PAD, y + 31, W - PAD, y + 31], fill=GAME_BORDER, width=1)
         y += _DIVIDER_H
-        half = (W - 2 * PAD - _PANEL_GAP) // 2
-        for i, (title, kvs) in enumerate(cons):
-            col = i % 2
-            x = PAD + col * (half + _PANEL_GAP)
-            _draw_panel(img, draw, x, y, half, title, kvs, max(1, len(kvs)), fonts)
-            if col == 1 or i == len(cons) - 1:
-                y += _CONS_PANEL_H + _PANEL_GAP
+        for g in cons:
+            used = _draw_consumable_group(img, draw, PAD, y, W - 2 * PAD, g, fonts)
+            y += used + _PANEL_GAP
 
     # ----- Footer -----
     _draw_footer(draw, 0, H - FOOTER_H, W, FOOTER_H)
