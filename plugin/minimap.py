@@ -64,7 +64,8 @@ def _armor_for(index: str):
     if _armor_data is None:
         try:
             _armor_data = json.loads(Path(ARMOR_JSON).read_text("utf-8"))
-        except Exception:
+        except Exception as e:
+            logger.warning(f"armor.json 读取失败 ({ARMOR_JSON}): {e}")
             _armor_data = {}
     return _armor_data.get(index)
 
@@ -422,7 +423,7 @@ async def _ship(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
     armor_mode = raw.endswith("装甲") and raw != "装甲"
     name = raw[:-2].strip() if armor_mode else raw
     if not name:
-        await ship_cmd.finish("用法: /船 <中文舰名>\n示例: /船 大和  ·  /船 岛风  ·  /船 大和 装甲")
+        await ship_cmd.finish("用法: /船 <中文舰名>\n示例: /船 大和  ·  /船 yamato  ·  /船 大和 装甲")
 
     if not ship_index.is_ready():
         await ship_cmd.finish("战舰数据未生成 (ships.json 缺失)。请管理员跑 tools/build_ships_json.py")
