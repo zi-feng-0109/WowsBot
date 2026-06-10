@@ -87,7 +87,8 @@ def main():
     print(f"  matched={matched}  with next_ships={n_next}  "
           f"premium={n_prem}  special={n_spec}", file=sys.stderr)
 
-    args.ships.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # indent=1 跟 build_ships_json.py 保持一致,避免重格式化导致巨型 diff
+    args.ships.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"  wrote {args.ships}", file=sys.stderr)
 
 
