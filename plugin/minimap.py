@@ -34,6 +34,7 @@ from . import query_index
 from . import render_mode
 from . import wg_api
 from . import ship_index
+from . import tech_tree
 from nonebot import on_notice
 from nonebot.rule import to_me
 from nonebot.adapters.onebot.v11.event import GroupIncreaseNoticeEvent, MessageEvent
@@ -442,6 +443,59 @@ def _render_ship_sync(out_path: str, ship: dict):
         _sys.path.insert(0, bin_path)
     from render_ship import render_ship_png
     render_ship_png(out_path, ship=ship)
+
+
+# /线 <国家> <舰种> —— 整条科技树
+line_cmd = on_command("线", aliases={"线路", "科技树", "tree"}, priority=5, block=True)
+
+_LINE_USAGE = (
+    "用法: /线 <国家> <舰种>\n"
+    "示例: /线 美国 巡洋舰  ·  /线 日 战列舰  ·  /线 德国 驱逐舰\n"
+    "国家: 美/日/苏/德/英/法/意/泛亚/欧洲/荷兰/泛美/英联邦/西班牙\n"
+    "舰种: 战列舰/巡洋舰/驱逐舰/航母/潜艇"
+)
+
+
+@line_cmd.handle()
+async def _line(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
+    parts = args.extract_plain_text().split()
+    if len(parts) < 2:
+        await line_cmd.finish(_LINE_USAGE)
+
+    if not ship_index.is_ready():
+        await line_cmd.finish("战舰数据未生成 (ships.json 缺失)。请管理员跑 tools/build_ships_json.py")
+
+    nation = tech_tree.resolve_nation(parts[0])
+    species = tech_tree.resolve_species(parts[1])
+    if not nation:
+        await line_cmd.finish(f"认不出国家「{parts[0]}」\n" + _LINE_USAGE)
+    if not species:
+        await line_cmd.finish(f"认不出舰种「{parts[1]}」\n" + _LINE_USAGE)
+
+    tree = tech_tree.build_tree(ship_index.all_ships(), nation, species)
+    if not tree:
+        await line_cmd.finish(f"{parts[0]} {parts[1]} 没有科技树线路")
+
+    out_dir = Path(BASE_DIR) / "_line_cache"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_png = out_dir / f"line_{nation}_{species}.png"
+    try:
+        await asyncio.to_thread(_render_line_sync, str(out_png), tree)
+    except Exception as e:
+        logger.error(f"渲染 /线 失败: {e}")
+        await line_cmd.finish(f"⚠️ 渲染失败: {e}")
+
+    await line_cmd.finish(MessageSegment.image(f"file://{out_png}"))
+
+
+def _render_line_sync(out_path: str, tree: dict):
+    """thread wrapper — render_line 没 async 接口。"""
+    import sys as _sys
+    bin_path = str(Path(REPORT_FULL_CMD).parent)
+    if bin_path not in _sys.path:
+        _sys.path.insert(0, bin_path)
+    from render_line import render_line_png
+    render_line_png(out_path, tree)
 
 
 @replay_handler.handle()

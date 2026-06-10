@@ -62,6 +62,11 @@ def get(ship_id: str) -> Optional[dict]:
     return _ships.get(str(ship_id))
 
 
+def all_ships() -> dict:
+    """整个 ships 字典 (ship_id -> meta);给 /线 科技树重建用。"""
+    return _ships
+
+
 def version() -> str:
     return _data.get("version", "?")
 

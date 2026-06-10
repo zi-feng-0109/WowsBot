@@ -222,7 +222,8 @@ def wg_get(host: str, app_id: str, path: str, **params) -> dict:
 
 def fetch_all_ships(host: str, app_id: str, language: str) -> dict:
     """分页拉全船 (含 default_profile/images/modules_tree)。返回 {ship_id_str: ship}。"""
-    fields = "ship_id,name,tier,type,nation,default_profile,images,modules_tree"
+    fields = ("ship_id,name,tier,type,nation,default_profile,images,modules_tree,"
+              "next_ships,is_premium,is_special")  # next_ships 等供 /线 科技树
     out = {}
     page = 1
     while True:
@@ -466,6 +467,10 @@ def main():
             "nation_zh": NATION_ZH.get(nation, nation),
             "icon": index,
             "consumables": consumables,
+            # 科技树(/线)用:next_ships={下一艘sid: 研发xp},研发关系沿此走
+            "next_ships": {str(k): int(v) for k, v in (w.get("next_ships") or {}).items()},
+            "is_premium": bool(w.get("is_premium")),
+            "is_special": bool(w.get("is_special")),
             **stats,
         }
 
