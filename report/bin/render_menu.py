@@ -223,7 +223,7 @@ def render_menu_png(out_path: str, *, scope: str, ident: str,
         + 30 + 22 + (n_features + n_guess_row) * ROW_H + SECTION_GAP  # 当前功能 (含列头 22px)
         + 30 + 2 * ROW_H + SECTION_GAP                           # 使用方法
         + 30 + 22 + n_games * 28 + SECTION_GAP                   # 游戏 (含表头 22px)
-        + 30 + 22 + (5 if sa_visible else 4) * 28 + SECTION_GAP  # 全部指令 (含表头 22px)
+        + 30 + 22 + (6 if sa_visible else 5) * 28 + SECTION_GAP  # 全部指令 (含表头 22px)
         + 30 + max(1, n_planned) * 24 + SECTION_GAP              # 规划中
         + FOOTER_H + PAD
     )
@@ -312,6 +312,7 @@ def render_menu_png(out_path: str, *, scope: str, ident: str,
         ("/<功能> 开|关",        "切换本群开关",    "群主/群管/超管"),
         ("/<功能> 状态",         "查看本群当前开关", "任何人"),
         ("/查询 <编号>",         "引用战报查玩家生涯水平", "任何人"),
+        ("/船 <中文舰名>",        "查战舰数值卡",          "任何人"),
     ]
     if sa_visible:
         cmds.append(("/sa ban|unban <功能>", "全局禁用/解禁", "仅超管"))

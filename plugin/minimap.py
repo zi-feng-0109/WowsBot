@@ -33,6 +33,7 @@ from . import permissions
 from . import query_index
 from . import render_mode
 from . import wg_api
+from . import ship_index
 from nonebot import on_notice
 from nonebot.rule import to_me
 from nonebot.adapters.onebot.v11.event import GroupIncreaseNoticeEvent, MessageEvent
@@ -48,6 +49,9 @@ RENDER_CRIMINALS_PY = os.environ.get("WOWS_RENDER_CRIMINALS",
 REPORT_CMD       = os.environ.get("WOWS_REPORT_CMD", REPORT_FULL_CMD)
 ANALYZE_CMD      = os.environ.get("WOWS_ANALYZE_CMD", "/opt/wows-bot/report/bin/wows_analyze")
 BASE_DIR         = os.path.expanduser(os.environ.get("WOWS_REPLAY_BASEDIR", "~/wows-bot-replay"))
+# /船 战舰数值卡:ships.json 跟 render_ship.py 都在 report 包里 (subprocess/import 现拉)
+SHIPS_JSON       = os.environ.get("WOWS_SHIPS_JSON",
+                                  str(Path(REPORT_FULL_CMD).parent.parent / "data" / "ships.json"))
 MP4_TIMEOUT      = int(os.environ.get("WOWS_MP4_TIMEOUT", "600"))
 PNG_TIMEOUT      = int(os.environ.get("WOWS_PNG_TIMEOUT", "300"))
 ANALYZE_TIMEOUT  = int(os.environ.get("WOWS_ANALYZE_TIMEOUT", "120"))
@@ -85,6 +89,16 @@ async def _init_permissions():
                     f"(parallel={render_mode.is_parallel()})")
     except Exception as e:
         logger.error(f"render_mode 初始化失败: {e}")
+    try:
+        ship_index.init(SHIPS_JSON)
+        if ship_index.is_ready():
+            logger.info(f"ship_index inited from {SHIPS_JSON} "
+                        f"(v{ship_index.version()})")
+        else:
+            logger.warning(f"ship_index 未就绪 (ships.json 缺失?): {SHIPS_JSON} — "
+                           f"/船 命令会提示数据未生成")
+    except Exception as e:
+        logger.error(f"ship_index 初始化失败: {e}")
 
 
 # ====== 4-feature toggle 命令 (视频/战报/复盘/分析) =====================
@@ -376,6 +390,58 @@ def _render_query_sync(out_path: str, player: dict, pvp, realm):
         _sys.path.insert(0, bin_path)
     from render_query import render_query_png
     render_query_png(out_path, player=player, pvp=pvp, realm=realm)
+
+
+# ====== /船 <中文名> 战舰数值卡 ==============================================
+# 查询类命令,任何人可用,不接 permissions 开关。数据全在本地 ships.json,
+# 运行时不打外部 API (跟 /查询 走 vortex 不同)。
+
+ship_cmd = on_command("船", aliases={"战舰", "ship"}, priority=5, block=True)
+
+
+@ship_cmd.handle()
+async def _ship(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
+    name = args.extract_plain_text().strip()
+    if not name:
+        await ship_cmd.finish("用法: /船 <中文舰名>\n示例: /船 大和  ·  /船 岛风  ·  /船 yamato")
+
+    if not ship_index.is_ready():
+        await ship_cmd.finish("战舰数据未生成 (ships.json 缺失)。请管理员跑 tools/build_ships_json.py")
+
+    kind, payload = ship_index.find(name)
+    if kind == "none":
+        if payload:
+            sug = "  ".join(payload[:8])
+            await ship_cmd.finish(f"没找到「{name}」。你是不是想查:{sug}")
+        await ship_cmd.finish(f"没找到「{name}」,换个名字试试 (支持中文名 / 英文名)")
+    if kind == "multi":
+        lines = "\n".join(
+            f"  · {s['name_zh']} ({s['name_en']} T{s['tier']} {s.get('species_zh','')})"
+            for s in payload
+        )
+        await ship_cmd.finish(f"「{name}」匹配到多艘,请发完整舰名:\n{lines}")
+
+    ship = payload[0]
+    out_dir = Path(BASE_DIR) / "_ship_cache"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_png = out_dir / f"ship_{ship.get('index', ship.get('name_en', 'x'))}.png"
+    try:
+        await asyncio.to_thread(_render_ship_sync, str(out_png), ship)
+    except Exception as e:
+        logger.error(f"渲染 /船 卡失败: {e}")
+        await ship_cmd.finish(f"⚠️ 渲染失败: {e}")
+
+    await ship_cmd.finish(MessageSegment.image(f"file://{out_png}"))
+
+
+def _render_ship_sync(out_path: str, ship: dict):
+    """thread wrapper — render_ship 没 async 接口。"""
+    import sys as _sys
+    bin_path = str(Path(REPORT_FULL_CMD).parent)
+    if bin_path not in _sys.path:
+        _sys.path.insert(0, bin_path)
+    from render_ship import render_ship_png
+    render_ship_png(out_path, ship=ship)
 
 
 @replay_handler.handle()

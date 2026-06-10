@@ -243,10 +243,11 @@ nb create   # 选 simple / onebot-v11
 cp /opt/wows-bot/plugin/*.py ~/my-bot/src/plugins/
 ```
 
-当前包含 7 个文件:
+当前包含 8 个文件:
 - `minimap.py` — 主入口 (replay → MP4 + 战报 + 复盘 + 分析)
 - `permissions.py` — 群级开关 / 全局黑名单
 - `query_index.py` — `/查询` 索引 (战报 → 玩家)
+- `ship_index.py` — `/船` 战舰名 → 数值查找/消歧 (读 ships.json)
 - `render_mode.py` — `/sa` 渲染模式 (普通/极简/详细)
 - `version.py` — 版本号工具,菜单/战报 footer 共用
 - `wg_api.py` — vortex 接口封装 (`/查询` 拉生涯数据)
@@ -301,6 +302,22 @@ export WOWS_DEEPSEEK_KEY=sk-xxxxxxxx   # https://platform.deepseek.com 申请
 - 不设环境变量 = 每次随机
 - 加新人格: 在 `report/data/personas/` 下放 `<名字>.txt`,文件内容就是 system prompt 全文
 
+### 5.3.1 (可选) WG application_id —— 仅构建期用,运行时不需要
+
+`/船 <中文舰名>` 战舰数值卡读的是预构建的 `report/data/ships.json`,**运行时 bot
+不打任何外部 API**。这份 json 由 `tools/build_ships_json.py` 在大版本更新时生成
+(见 UPDATE.md §2.6),那一步需要一个 WG application_id 去拉官方数值:
+
+```bash
+# developers.wargaming.net 免费申请;eu/asia host 都认,realm 无关
+export WOWS_WG_APP_ID=<你的 application_id>
+sudo -E python3 tools/build_ships_json.py
+sudo -E python3 tools/fetch_ship_icons.py
+```
+
+**这个 key 只在构建机/构建步骤用,不用进 systemd unit、不用进运行时环境。**
+ships.json + ship_icons/ 生成好提交进仓库后,生产端 `git pull` 即可,bot 重启加载。
+
 ### 5.4 (可选) 覆盖默认路径
 
 如果你没按 `/opt/wows-bot` 默认布局,启动 nb 前 export:
@@ -312,6 +329,7 @@ export WOWS_REPORT_BATTLE_CMD=/your/path/report/bin/wows_report        # 仅战�
 export WOWS_REPORT_DAMAGE_CMD=/your/path/report/bin/wows_damage_report # 仅复盘 PNG
 export WOWS_ANALYZE_CMD=/your/path/report/bin/wows_analyze
 export WOWS_REPLAY_BASEDIR=~/wows-bot-replay   # 中转目录,bot 自动建/删
+export WOWS_SHIPS_JSON=                        # /船 数值字典路径,默认 report/data/ships.json
 export WOWS_TOGGLE_FILE=                       # toggle_state.json 路径,默认 $WOWS_REPLAY_BASEDIR/
 export WOWS_MP4_TIMEOUT=600                    # MP4 超时秒数
 export WOWS_PNG_TIMEOUT=300                    # PNG 超时秒数

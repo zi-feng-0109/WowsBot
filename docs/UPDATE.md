@@ -78,6 +78,27 @@ sudo python3 tools/fetch_build_icons.py
 
 跳过会让 `/查询` 的"本局配装"块走兜底(灰色方块 + 文字截 2 字),功能不挂。
 
+### 2.6 刷新 ships.json + 战舰预览图 (/船 战舰数值卡用)
+
+```bash
+cd /opt/wows-bot
+# 需要 WG application_id (developers.wargaming.net 免费申请,仅构建期用,运行时 bot 不碰)
+export WOWS_WG_APP_ID=<你的 application_id>
+
+# 生成 ships.json (GameParams unpickle + WG API 数值 + zh_sg.mo 中文名 三源 join)
+sudo -E python3 tools/build_ships_json.py
+# 产物:report/data/ships.json (~1.2 MB,~960 船)
+# 多船体老船会并发走 shipprofile 拿满配,跑 ~4 分钟 (含 ~300 次请求)
+
+# 拉战舰预览图 (从 WG wgcdn,文件名按 ship index)
+sudo -E python3 tools/fetch_ship_icons.py
+# 产物:report/data/ship_icons/ (~960 张 medium 渲染图,~17 MB)
+# 已存在的会跳过,加 --force 强刷
+```
+
+跳过会让 `/船` 提示"战舰数据未生成";只缺预览图则卡片不贴船图,数值照出。
+bot 重启后才会重新 load ships.json (ship_index 启动时读一次)。
+
 ### 3. 验证
 
 ```bash
