@@ -110,7 +110,6 @@ def _build_sections(ship: dict) -> list:
         kvs = [
             ("射程", _fmt_km(a.get("range_km"))),
             ("装填", _fmt_s(a.get("reload_s"))),
-            ("射速", f"{a.get('rpm','-')} 发/分"),
         ]
         if ap.get("dmg"):
             kvs.append(("AP 单发", _fmt_int(ap["dmg"])))
