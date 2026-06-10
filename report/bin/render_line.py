@@ -55,6 +55,16 @@ def _load_icon(name, width):
     return im
 
 
+def _fmt_credit(n):
+    """银币价 → 紧凑中文(万)。0/空返回空串。"""
+    if not n:
+        return ""
+    if n >= 10000:
+        w = n / 10000
+        return f"{int(w)}万" if w == int(w) else f"{w:.1f}万"
+    return str(n)
+
+
 def render_line_png(out_path: str, tree: dict) -> str:
     """把 tech_tree.build_tree 的结果渲成 PNG。tree 为 None 时调用方自己兜底。"""
     nodes = tree["nodes"]
@@ -115,17 +125,21 @@ def render_line_png(out_path: str, tree: dict) -> str:
         d.text((hx - d.textlength(label, font=f_rowhdr) / 2, ty - 10), label,
                font=f_rowhdr, fill=color)
 
-    # ---- 连线(节点下层) ----
+    # ---- 连线(节点下层);标注研发经验(绿) + 购买银币(银) ----
     for p, c in edges:
         pt, ct = nodes[p], nodes[c]
-        xp = ct.get("xp") or 0
+        xp = _fmt_int(ct["xp"]) if ct.get("xp") else ""
+        cr = _fmt_credit(ct.get("credit"))
         if pt["tier"] == ct["tier"]:
             # 同 tier 同列:父底 → 子顶 竖向
             x = cell_cx(pt["tier"])
             y0, y1 = row_cy(pt["row"]) + _ICON_HALF, row_cy(ct["row"]) - _ICON_HALF
             d.line([(x, y0), (x, y1)], fill=GAME_BORDER, width=2)
+            my = (y0 + y1) // 2
             if xp:
-                d.text((x + 6, (y0 + y1) // 2 - 7), _fmt_int(xp), font=f_xp, fill=GAME_GREEN)
+                d.text((x + 6, my - 14), xp, font=f_xp, fill=GAME_GREEN)
+            if cr:
+                d.text((x + 6, my + 1), cr, font=f_xp, fill=GAME_DIM)
         else:
             px, py = col_x(pt["tier"]) + ICON_W, row_cy(pt["row"])
             cx, cy = col_x(ct["tier"]), row_cy(ct["row"])
@@ -133,9 +147,9 @@ def render_line_png(out_path: str, tree: dict) -> str:
             d.line([(px, py), (midx, py), (midx, cy), (cx, cy)],
                    fill=GAME_BORDER, width=2, joint="curve")
             if xp:
-                lbl = _fmt_int(xp)
-                d.text((cx - d.textlength(lbl, font=f_xp) - 4, cy - 18),
-                       lbl, font=f_xp, fill=GAME_GREEN)
+                d.text((cx - d.textlength(xp, font=f_xp) - 4, cy - 30), xp, font=f_xp, fill=GAME_GREEN)
+            if cr:
+                d.text((cx - d.textlength(cr, font=f_xp) - 4, cy - 16), cr, font=f_xp, fill=GAME_DIM)
 
     # ---- 节点(图标 + 名字) ----
     for sid, n in nodes.items():

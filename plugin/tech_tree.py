@@ -185,6 +185,7 @@ def build_tree(ships: dict, nation: str, species: str) -> Optional[dict]:
             "icon": s.get("icon") or s.get("index"),
             "row": rows[sid],
             "xp": xp_of[sid],
+            "credit": int(s.get("price_credit") or 0),
             "species": sp,
             "kind": SPECIES_SHORT.get(sp, sp or ""),
         }

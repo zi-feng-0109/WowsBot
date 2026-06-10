@@ -29,7 +29,7 @@ def fetch_next_ships(host: str, app_id: str) -> dict:
     page = 1
     while True:
         d = wg_get(host, app_id, "/wows/encyclopedia/ships/",
-                   fields="ship_id,next_ships,is_premium,is_special",
+                   fields="ship_id,next_ships,is_premium,is_special,price_credit",
                    language="en", page_no=page, limit=100)
         if d.get("status") != "ok":
             raise RuntimeError(f"WG API error: {d.get('error')}")
@@ -38,6 +38,7 @@ def fetch_next_ships(host: str, app_id: str) -> dict:
                 "next_ships": info.get("next_ships") or {},
                 "is_premium": bool(info.get("is_premium")),
                 "is_special": bool(info.get("is_special")),
+                "price_credit": int(info.get("price_credit") or 0),
             }
         meta = d.get("meta", {})
         if page >= meta.get("page_total", page):
@@ -70,6 +71,7 @@ def main():
             ship["next_ships"] = {}
             ship["is_premium"] = bool(ship.get("is_premium", False))
             ship["is_special"] = bool(ship.get("is_special", False))
+            ship["price_credit"] = int(ship.get("price_credit", 0))
             continue
         matched += 1
         # next_ships 值统一成 int 研发经验;key 用字符串 ship_id
@@ -77,6 +79,7 @@ def main():
         ship["next_ships"] = ns
         ship["is_premium"] = info["is_premium"]
         ship["is_special"] = info["is_special"]
+        ship["price_credit"] = info["price_credit"]
         if ns:
             n_next += 1
         if info["is_premium"]:
