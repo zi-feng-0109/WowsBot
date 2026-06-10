@@ -2917,7 +2917,7 @@
       "work_s": 1.0,
       "reload_s": 30.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 9.0
      }
     ],
     [
@@ -9334,7 +9334,7 @@
       "work_s": 1.0,
       "reload_s": 60.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 9.0
      }
     ],
     [
@@ -9630,7 +9630,7 @@
       "work_s": 1.0,
       "reload_s": 60.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 7.0
      }
     ],
     [
@@ -13748,7 +13748,7 @@
       "work_s": 1.0,
       "reload_s": 30.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 9.0
      }
     ],
     [
@@ -15254,7 +15254,7 @@
       "work_s": 1.0,
       "reload_s": 30.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 6.0
      }
     ],
     [
@@ -17764,7 +17764,7 @@
       "work_s": 1.0,
       "reload_s": 80.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 8.0
      }
     ],
     [
@@ -30564,7 +30564,7 @@
       "work_s": 1.0,
       "reload_s": 30.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 9.0
      }
     ],
     [
@@ -33299,7 +33299,7 @@
       "work_s": 1.0,
       "reload_s": 80.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 8.0
      }
     ],
     [
@@ -38347,7 +38347,7 @@
       "work_s": 1.0,
       "reload_s": 60.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 9.0
      }
     ],
     [
@@ -40497,7 +40497,7 @@
       "work_s": 1.0,
       "reload_s": 30.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 6.0
      }
     ],
     [
@@ -42153,7 +42153,7 @@
       "work_s": 1.0,
       "reload_s": 80.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 7.0
      }
     ],
     [
@@ -51004,7 +51004,7 @@
       "work_s": 1.0,
       "reload_s": 80.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 7.0
      }
     ],
     [
@@ -51831,7 +51831,7 @@
       "work_s": 1.0,
       "reload_s": 80.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 7.0
      }
     ],
     [
@@ -53120,7 +53120,7 @@
       "work_s": 1.0,
       "reload_s": 80.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 8.0
      }
     ],
     [
@@ -55127,7 +55127,7 @@
       "work_s": 1.0,
       "reload_s": 60.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 9.0
      }
     ],
     [
@@ -55944,7 +55944,7 @@
       "work_s": 1.0,
       "reload_s": 60.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 8.0
      }
     ],
     [
@@ -57381,7 +57381,7 @@
       "work_s": 1.0,
       "reload_s": 60.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 8.0
      }
     ],
     [
@@ -57989,7 +57989,7 @@
       "work_s": 1.0,
       "reload_s": 80.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 7.0
      }
     ],
     [
@@ -59628,7 +59628,7 @@
       "work_s": 1.0,
       "reload_s": 30.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 6.0
      }
     ],
     [
@@ -59895,7 +59895,7 @@
       "work_s": 1.0,
       "reload_s": 30.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 6.0
      }
     ],
     [
@@ -61281,7 +61281,7 @@
       "work_s": 1.0,
       "reload_s": 80.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 7.0
      }
     ],
     [
@@ -69224,7 +69224,7 @@
       "work_s": 1.0,
       "reload_s": 30.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 6.0
      }
     ],
     [
@@ -71786,7 +71786,7 @@
       "work_s": 1.0,
       "reload_s": 80.0,
       "prep_s": 0.0,
-      "range_km": null
+      "range_km": 7.0
      }
     ],
     [

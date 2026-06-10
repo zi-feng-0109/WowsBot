@@ -151,10 +151,15 @@ def extract_ships_from_gp(gp: dict) -> dict:
                     pp = var.get("preparationTime")
                     if isinstance(pp, (int, float)):
                         prep_s = round(pp, 1)
-                    # 作用范围:logic.distShip (1 单位=30m,×0.03→km);雷达/声呐/监视等才有
-                    ds = _d(var.get("logic")).get("distShip")
+                    # 作用范围 (侦测类):雷达/声呐/监视 = logic.distShip (1 单位=30m,×0.03→km);
+                    # 水听器 = logic.hydrophoneWaveRadius (米,÷1000→km)。单位不同,分别处理。
+                    lg = _d(var.get("logic"))
+                    ds = lg.get("distShip")
+                    hw = lg.get("hydrophoneWaveRadius")
                     if isinstance(ds, (int, float)) and ds > 0:
                         range_km = round(ds * 0.03, 1)
+                    elif isinstance(hw, (int, float)) and hw > 0:
+                        range_km = round(hw / 1000, 1)
                 alts.append({"ability": nm, "charges": charges, "work_s": work_s,
                              "reload_s": reload_s, "prep_s": prep_s, "range_km": range_km})
             if alts:
