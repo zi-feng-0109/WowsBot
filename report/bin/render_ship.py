@@ -166,16 +166,26 @@ def _build_sections(ship: dict) -> list:
         for i, slot in enumerate(cons):
             parts = []
             for a in slot:
-                if isinstance(a, dict):           # 新格式 {name, charges}
-                    nm = a.get("name", "?")
-                    ch = a.get("charges")
-                    if isinstance(ch, (int, float)) and ch > 0:  # -1=无限,不写
-                        nm = f"{nm} ×{int(ch)}"
-                    parts.append(nm)
-                else:                              # 旧格式:纯字符串
+                if not isinstance(a, dict):        # 旧格式:纯字符串
                     parts.append(str(a))
+                    continue
+                nm = a.get("name", "?")
+                ch = a.get("charges")
+                if isinstance(ch, (int, float)) and ch > 0:  # -1=无限,不写
+                    nm = f"{nm} ×{int(ch)}"
+                # 作用时间 / 作用范围 (有才写,放括号里)
+                extra = []
+                w = a.get("work_s")
+                if isinstance(w, (int, float)) and w > 0:
+                    extra.append(f"{w:g}s")
+                rg = a.get("range_km")
+                if isinstance(rg, (int, float)) and rg > 0:
+                    extra.append(f"{rg:g}km")
+                if extra:
+                    nm = f"{nm} ({' · '.join(extra)})"
+                parts.append(nm)
             kvs.append((f"槽位 {i + 1}", " / ".join(parts)))
-        secs.append(("消耗品", kvs, 2))
+        secs.append(("消耗品", kvs, 1))
 
     return secs
 

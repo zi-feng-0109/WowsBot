@@ -136,11 +136,20 @@ def extract_ships_from_gp(gp: dict) -> dict:
                 if not nm or nm in seen:
                     continue
                 seen.add(nm)
-                charges = None
+                charges = work_s = range_km = None
                 ab = _d(gp.get(nm))
                 if variant and variant in ab:
-                    charges = _d(ab[variant]).get("numConsumables")
-                alts.append({"ability": nm, "charges": charges})
+                    var = _d(ab[variant])
+                    charges = var.get("numConsumables")
+                    wt = var.get("workTime")
+                    if isinstance(wt, (int, float)) and wt > 0:
+                        work_s = round(wt, 1)
+                    # 作用范围:logic.distShip (1 单位=30m,×0.03→km);雷达/声呐/监视等才有
+                    ds = _d(var.get("logic")).get("distShip")
+                    if isinstance(ds, (int, float)) and ds > 0:
+                        range_km = round(ds * 0.03, 1)
+                alts.append({"ability": nm, "charges": charges,
+                             "work_s": work_s, "range_km": range_km})
             if alts:
                 consumables.append(alts)
         ships[int(sid)] = {
@@ -422,7 +431,8 @@ def main():
                 if zh in seen:
                     continue
                 seen.add(zh)
-                alts.append({"name": zh, "charges": a.get("charges")})
+                alts.append({"name": zh, "charges": a.get("charges"),
+                             "work_s": a.get("work_s"), "range_km": a.get("range_km")})
             if alts:
                 consumables.append(alts)
 
