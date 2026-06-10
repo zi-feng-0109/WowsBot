@@ -27602,17 +27602,6 @@
           {
             "face": "AuTurretSide",
             "mm": [
-              25
-            ]
-          }
-        ],
-        "name": "主炮"
-      },
-      {
-        "faces": [
-          {
-            "face": "AuTurretSide",
-            "mm": [
               6
             ]
           }
@@ -41081,17 +41070,6 @@
             "face": "AuTurretSide",
             "mm": [
               13
-            ]
-          }
-        ],
-        "name": "主炮"
-      },
-      {
-        "faces": [
-          {
-            "face": "AuTurretSide",
-            "mm": [
-              6
             ]
           }
         ],
@@ -126755,54 +126733,19 @@
           {
             "face": "TurretSide",
             "mm": [
-              16
+              6
             ]
           },
           {
             "face": "TurretTop",
             "mm": [
-              16
-            ]
-          },
-          {
-            "face": "TurretAft",
-            "mm": [
-              16
-            ]
-          },
-          {
-            "face": "TurretDown",
-            "mm": [
-              16
+              6
             ]
           },
           {
             "face": "TurretFwd",
             "mm": [
-              16
-            ]
-          }
-        ],
-        "name": "主炮"
-      },
-      {
-        "faces": [
-          {
-            "face": "TurretSide",
-            "mm": [
-              8
-            ]
-          },
-          {
-            "face": "TurretTop",
-            "mm": [
-              8
-            ]
-          },
-          {
-            "face": "TurretFwd",
-            "mm": [
-              8
+              10
             ]
           }
         ],
@@ -174162,10 +174105,6 @@
       }
     ]
   },
-  "PJSB799": {
-    "hull": {},
-    "turrets": []
-  },
   "PJSB878": {
     "hull": {
       "Bow": [
@@ -197492,25 +197431,31 @@
           {
             "face": "TurretSide",
             "mm": [
-              13
+              20
             ]
           },
           {
             "face": "TurretTop",
             "mm": [
-              13
+              20
             ]
           },
           {
             "face": "TurretAft",
             "mm": [
-              13
+              20
+            ]
+          },
+          {
+            "face": "TurretDown",
+            "mm": [
+              20
             ]
           },
           {
             "face": "TurretFwd",
             "mm": [
-              13
+              20
             ]
           }
         ],
@@ -199172,14 +199117,6 @@
         "name": "主炮"
       }
     ]
-  },
-  "PJSX701": {
-    "hull": {},
-    "turrets": []
-  },
-  "PJSX702": {
-    "hull": {},
-    "turrets": []
   },
   "PRSA104": {
     "hull": {
@@ -210446,7 +210383,7 @@
           {
             "face": "TurretFwd",
             "mm": [
-              70
+              50
             ]
           }
         ],
