@@ -53,6 +53,22 @@ BASE_DIR         = os.path.expanduser(os.environ.get("WOWS_REPLAY_BASEDIR", "~/w
 # /船 战舰数值卡:ships.json 跟 render_ship.py 都在 report 包里 (subprocess/import 现拉)
 SHIPS_JSON       = os.environ.get("WOWS_SHIPS_JSON",
                                   str(Path(REPORT_FULL_CMD).parent.parent / "data" / "ships.json"))
+ARMOR_JSON       = os.environ.get("WOWS_ARMOR_JSON",
+                                  str(Path(SHIPS_JSON).parent / "armor.json"))
+_armor_data = None  # 懒加载缓存:index -> {hull, turrets}
+
+
+def _armor_for(index: str):
+    """读 armor.json 取一条;文件缺失/无该船返回 None。"""
+    global _armor_data
+    if _armor_data is None:
+        try:
+            _armor_data = json.loads(Path(ARMOR_JSON).read_text("utf-8"))
+        except Exception:
+            _armor_data = {}
+    return _armor_data.get(index)
+
+
 MP4_TIMEOUT      = int(os.environ.get("WOWS_MP4_TIMEOUT", "600"))
 PNG_TIMEOUT      = int(os.environ.get("WOWS_PNG_TIMEOUT", "300"))
 ANALYZE_TIMEOUT  = int(os.environ.get("WOWS_ANALYZE_TIMEOUT", "120"))
@@ -402,9 +418,11 @@ ship_cmd = on_command("船", aliases={"战舰", "ship"}, priority=5, block=True)
 
 @ship_cmd.handle()
 async def _ship(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
-    name = args.extract_plain_text().strip()
+    raw = args.extract_plain_text().strip()
+    armor_mode = raw.endswith("装甲") and raw != "装甲"
+    name = raw[:-2].strip() if armor_mode else raw
     if not name:
-        await ship_cmd.finish("用法: /船 <中文舰名>\n示例: /船 大和  ·  /船 岛风  ·  /船 yamato")
+        await ship_cmd.finish("用法: /船 <中文舰名>\n示例: /船 大和  ·  /船 岛风  ·  /船 大和 装甲")
 
     if not ship_index.is_ready():
         await ship_cmd.finish("战舰数据未生成 (ships.json 缺失)。请管理员跑 tools/build_ships_json.py")
@@ -425,6 +443,19 @@ async def _ship(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
     ship = payload[0]
     out_dir = Path(BASE_DIR) / "_ship_cache"
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if armor_mode:
+        armor = _armor_for(ship.get("index", ""))
+        if not armor:
+            await ship_cmd.finish(f"「{ship.get('name_zh', name)}」暂无装甲数据")
+        out_png = out_dir / f"armor_{ship.get('index', 'x')}.png"
+        try:
+            await asyncio.to_thread(_render_armor_sync, str(out_png), ship, armor)
+        except Exception as e:
+            logger.error(f"渲染 /船 装甲图失败: {e}")
+            await ship_cmd.finish(f"⚠️ 渲染失败: {e}")
+        await ship_cmd.finish(MessageSegment.image(f"file://{out_png}"))
+
     out_png = out_dir / f"ship_{ship.get('index', ship.get('name_en', 'x'))}.png"
     try:
         await asyncio.to_thread(_render_ship_sync, str(out_png), ship)
@@ -443,6 +474,16 @@ def _render_ship_sync(out_path: str, ship: dict):
         _sys.path.insert(0, bin_path)
     from render_ship import render_ship_png
     render_ship_png(out_path, ship=ship)
+
+
+def _render_armor_sync(out_path: str, ship: dict, armor: dict):
+    """thread wrapper — render_armor 没 async 接口。"""
+    import sys as _sys
+    bin_path = str(Path(REPORT_FULL_CMD).parent)
+    if bin_path not in _sys.path:
+        _sys.path.insert(0, bin_path)
+    from render_armor import render_armor_png
+    render_armor_png(out_path, ship=ship, armor=armor)
 
 
 # /线 <国家> <舰种> —— 整条科技树
