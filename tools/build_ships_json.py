@@ -116,6 +116,8 @@ def extract_ships_from_gp(gp: dict) -> dict:
         if sid is None:
             continue
         # 消耗品:ShipAbilities → AbilitySlot* → abils = [(ability_name, variant)]
+        # 每个 slot 可能多个 (玩家二选一);装填数 numConsumables 在具体 variant 里
+        # (-1 = 无限,正数 = 装填次数)
         consumables = []
         sa = _d(d.get("ShipAbilities"))
         for slot_key in sorted(sa.keys()):
@@ -123,15 +125,24 @@ def extract_ships_from_gp(gp: dict) -> dict:
             abils = slot.get("abils") or []
             if not abils:
                 continue
-            names = []
+            alts = []
+            seen = set()
             for entry in abils:
                 # entry = (ability_name, variant)
-                if isinstance(entry, (list, tuple)) and entry:
-                    nm = entry[0]
-                    if nm and nm not in names:
-                        names.append(nm)
-            if names:
-                consumables.append(names)
+                if not (isinstance(entry, (list, tuple)) and entry):
+                    continue
+                nm = entry[0]
+                variant = entry[1] if len(entry) > 1 else None
+                if not nm or nm in seen:
+                    continue
+                seen.add(nm)
+                charges = None
+                ab = _d(gp.get(nm))
+                if variant and variant in ab:
+                    charges = _d(ab[variant]).get("numConsumables")
+                alts.append({"ability": nm, "charges": charges})
+            if alts:
+                consumables.append(alts)
         ships[int(sid)] = {
             "index": d.get("index"),
             "level": d.get("level"),
@@ -401,16 +412,19 @@ def main():
         profile = top_profiles.get(sid_str) or w.get("default_profile") or {}
         stats = extract_stats(profile)
 
-        # 消耗品 → 中文 (每个 slot 内多个 = 二选一)
+        # 消耗品 → 中文 (每个 slot 内多个 = 二选一);带装填数 charges
         consumables = []
         for slot in gpe.get("consumables") or []:
-            names = []
-            for ab in slot:
-                zh = consumable_zh(ab, tr)
-                if zh not in names:
-                    names.append(zh)
-            if names:
-                consumables.append(names)
+            alts = []
+            seen = set()
+            for a in slot:
+                zh = consumable_zh(a["ability"], tr)
+                if zh in seen:
+                    continue
+                seen.add(zh)
+                alts.append({"name": zh, "charges": a.get("charges")})
+            if alts:
+                consumables.append(alts)
 
         ships[sid_str] = {
             "index": index,

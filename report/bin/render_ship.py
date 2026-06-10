@@ -164,7 +164,17 @@ def _build_sections(ship: dict) -> list:
     if cons:
         kvs = []
         for i, slot in enumerate(cons):
-            kvs.append((f"槽位 {i + 1}", " / ".join(slot)))
+            parts = []
+            for a in slot:
+                if isinstance(a, dict):           # 新格式 {name, charges}
+                    nm = a.get("name", "?")
+                    ch = a.get("charges")
+                    if isinstance(ch, (int, float)) and ch > 0:  # -1=无限,不写
+                        nm = f"{nm} ×{int(ch)}"
+                    parts.append(nm)
+                else:                              # 旧格式:纯字符串
+                    parts.append(str(a))
+            kvs.append((f"槽位 {i + 1}", " / ".join(parts)))
         secs.append(("消耗品", kvs, 2))
 
     return secs
