@@ -45,6 +45,11 @@ SPECIES_CODE2ZH = {
     "Battleship": "战列舰", "Cruiser": "巡洋舰", "Destroyer": "驱逐舰",
     "AirCarrier": "航空母舰", "Submarine": "潜艇",
 }
+# 节点上显示的短类别
+SPECIES_SHORT = {
+    "Battleship": "战列", "Cruiser": "巡洋", "Destroyer": "驱逐",
+    "AirCarrier": "航母", "Submarine": "潜艇",
+}
 
 
 def resolve_nation(s: str) -> Optional[str]:
@@ -173,12 +178,15 @@ def build_tree(ships: dict, nation: str, species: str) -> Optional[dict]:
         s = cand[sid]
         t = s.get("tier", 0)
         tiers.append(t)
+        sp = s.get("species")
         nodes[sid] = {
             "tier": t,
             "name": s.get("name_zh") or s.get("name_en") or sid,
             "icon": s.get("icon") or s.get("index"),
             "row": rows[sid],
             "xp": xp_of[sid],
+            "species": sp,
+            "kind": SPECIES_SHORT.get(sp, sp or ""),
         }
     edges = [(sid, c) for sid in alive for c in children[sid]]
 

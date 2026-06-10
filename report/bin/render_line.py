@@ -69,6 +69,7 @@ def render_line_png(out_path: str, tree: dict) -> str:
     d = ImageDraw.Draw(img)
     f_title = _font(CJK_FONT, 28)
     f_name = _font(CJK_FONT, 16)
+    f_kind = _font(CJK_FONT, 12)
     f_xp = _font(CJK_FONT, 12)
     f_col = _font(MONO_FONT, 16)
 
@@ -130,7 +131,13 @@ def render_line_png(out_path: str, tree: dict) -> str:
         name = n["name"]
         # 线尾(T11 超级船)名字描金
         color = GAME_GOLD if t >= 11 else GAME_TEXT
-        d.text((cx - d.textlength(name, font=f_name) / 2, cy + 24), name, font=f_name, fill=color)
+        d.text((cx - d.textlength(name, font=f_name) / 2, cy + 22), name, font=f_name, fill=color)
+        # 舰种类别(战列/巡洋/驱逐/航母/潜艇);非本线舰种(共享前段)用强调色标出
+        kind = n.get("kind") or ""
+        if kind:
+            off = n.get("species") and n["species"] != tree.get("species")
+            kc = GAME_GOLD if off else GAME_DIM
+            d.text((cx - d.textlength(kind, font=f_kind) / 2, cy + 44), kind, font=f_kind, fill=kc)
 
     _draw_footer(d, 0, H - FOOTER_H, W, FOOTER_H)
     img.save(out_path)
