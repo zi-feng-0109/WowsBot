@@ -9,13 +9,13 @@
 from typing import Optional
 
 
-# 中文(及简写)→ ships.json 里的 nation code
+# 中文(及简写)→ ships.json 里的 nation code(GameParams 代号,实测见下)
 NATION_ZH2CODE = {
     "日本": "Japan", "日": "Japan",
     "美国": "USA", "美": "USA",
-    "苏联": "Ussr", "苏": "Ussr",
+    "苏联": "Russia", "苏": "Russia", "俄国": "Russia", "俄罗斯": "Russia",
     "德国": "Germany", "德": "Germany",
-    "英国": "Uk", "英": "Uk",
+    "英国": "United_Kingdom", "英": "United_Kingdom",
     "法国": "France", "法": "France",
     "意大利": "Italy", "意": "Italy",
     "泛亚": "Pan_Asia",
@@ -24,8 +24,6 @@ NATION_ZH2CODE = {
     "泛美": "Pan_America",
     "英联邦": "Commonwealth",
     "西班牙": "Spain", "西": "Spain",
-    "波兰": "Poland",
-    "巴西": "Brazil",
 }
 
 # 中文(及简写/英文缩写)→ ships.json 里的 species code
@@ -38,10 +36,10 @@ SPECIES_ZH2CODE = {
 }
 
 NATION_CODE2ZH = {
-    "Japan": "日本", "USA": "美国", "Ussr": "苏联", "Germany": "德国", "Uk": "英国",
-    "France": "法国", "Italy": "意大利", "Pan_Asia": "泛亚", "Europe": "欧洲",
-    "Netherlands": "荷兰", "Pan_America": "泛美", "Commonwealth": "英联邦",
-    "Spain": "西班牙", "Poland": "波兰", "Brazil": "巴西",
+    "Japan": "日本", "USA": "美国", "Russia": "苏联", "Germany": "德国",
+    "United_Kingdom": "英国", "France": "法国", "Italy": "意大利",
+    "Pan_Asia": "泛亚", "Europe": "欧洲", "Netherlands": "荷兰",
+    "Pan_America": "泛美", "Commonwealth": "英联邦", "Spain": "西班牙",
 }
 SPECIES_CODE2ZH = {
     "Battleship": "战列舰", "Cruiser": "巡洋舰", "Destroyer": "驱逐舰",
