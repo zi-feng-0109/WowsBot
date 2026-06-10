@@ -36,6 +36,8 @@ _PANEL_TITLE_H = 40
 _PANEL_ROW_H = 50
 _PANEL_PAD_BOTTOM = 14
 _PANEL_GAP = 12
+_DIVIDER_H = 38
+_CONS_PANEL_H = _PANEL_TITLE_H + _PANEL_ROW_H + _PANEL_PAD_BOTTOM  # 消耗品面板单行高
 _HEADER_H = 132
 
 
@@ -159,35 +161,43 @@ def _build_sections(ship: dict) -> list:
     if surv:
         secs.append(("生存 · 机动 · 隐蔽", surv, 3))
 
-    # 消耗品 (每 slot 一行,内层多个=二选一,用 / 连)
-    cons = ship.get("consumables") or []
-    if cons:
-        kvs = []
-        for i, slot in enumerate(cons):
-            parts = []
-            for a in slot:
-                if not isinstance(a, dict):        # 旧格式:纯字符串
-                    parts.append(str(a))
-                    continue
-                nm = a.get("name", "?")
-                ch = a.get("charges")
-                if isinstance(ch, (int, float)) and ch > 0:  # -1=无限,不写
-                    nm = f"{nm} ×{int(ch)}"
-                # 作用时间 / 作用范围 (有才写,放括号里)
-                extra = []
-                w = a.get("work_s")
-                if isinstance(w, (int, float)) and w > 0:
-                    extra.append(f"{w:g}s")
-                rg = a.get("range_km")
-                if isinstance(rg, (int, float)) and rg > 0:
-                    extra.append(f"{rg:g}km")
-                if extra:
-                    nm = f"{nm} ({' · '.join(extra)})"
-                parts.append(nm)
-            kvs.append((f"槽位 {i + 1}", " / ".join(parts)))
-        secs.append(("消耗品", kvs, 1))
-
     return secs
+
+
+def _build_consumables(ship: dict) -> list:
+    """每种消耗品一个独立面板:[(title, kvs)]。同槽多个 (二选一) 各自一个面板。
+    kvs 固定列:装填 / 作用时间 / 冷却时间 / 整备时间 (+ 作用范围,有才加)。"""
+    out = []
+    for slot in ship.get("consumables") or []:
+        multi = len(slot) > 1
+        for a in slot:
+            if not isinstance(a, dict):            # 旧格式兜底
+                out.append((str(a), []))
+                continue
+            title = a.get("name", "?")
+            if multi:
+                title = f"{title}（{len(slot)} 选 1）"
+            ch = a.get("charges")
+            charge_txt = ("无限" if ch == -1
+                          else f"{int(ch)} 次" if isinstance(ch, (int, float)) and ch > 0
+                          else "-")
+            kvs = [
+                ("装填", charge_txt),
+                ("作用时间", _fmt_s2(a.get("work_s"))),
+                ("冷却时间", _fmt_s2(a.get("reload_s"))),
+                ("整备时间", _fmt_s2(a.get("prep_s"), zero_ok=True)),
+            ]
+            rg = a.get("range_km")
+            if isinstance(rg, (int, float)) and rg > 0:
+                kvs.append(("作用范围", f"{rg:g} km"))
+            out.append((title, kvs))
+    return out
+
+
+def _fmt_s2(v, zero_ok=False) -> str:
+    if isinstance(v, (int, float)) and (v > 0 or (zero_ok and v == 0)):
+        return f"{v:g} s"
+    return "-"
 
 
 def render_ship_png(out_path: str, *, ship: dict) -> str:
@@ -203,11 +213,15 @@ def render_ship_png(out_path: str, *, ship: dict) -> str:
     }
 
     sections = _build_sections(ship)
+    cons = _build_consumables(ship)
 
     # ----- 高度 -----
     body_h = 12
     for _, kvs, cols in sections:
         body_h += _panel_height(len(kvs), cols) + _PANEL_GAP
+    if cons:
+        cons_rows = (len(cons) + 1) // 2          # 每行 2 个面板
+        body_h += _DIVIDER_H + cons_rows * (_CONS_PANEL_H + _PANEL_GAP)
     H = _HEADER_H + body_h + FOOTER_H
 
     img = Image.new("RGB", (W, H), GAME_BG)
@@ -238,11 +252,24 @@ def render_ship_png(out_path: str, *, ship: dict) -> str:
         py = (_HEADER_H - pic.height) // 2
         img.paste(pic, (px, max(8, py)), pic)
 
-    # ----- Sections -----
+    # ----- Sections (火力/鱼雷/生存,单列) -----
     y = _HEADER_H + 12
     for title, kvs, cols in sections:
         used = _draw_panel(img, draw, PAD, y, W - 2 * PAD, title, kvs, cols, fonts)
         y += used + _PANEL_GAP
+
+    # ----- 消耗品 (每种一个面板,两列网格) -----
+    if cons:
+        draw.text((PAD, y + 6), "消耗品", GAME_GOLD, fonts["title"])
+        draw.line([PAD, y + 31, W - PAD, y + 31], fill=GAME_BORDER, width=1)
+        y += _DIVIDER_H
+        half = (W - 2 * PAD - _PANEL_GAP) // 2
+        for i, (title, kvs) in enumerate(cons):
+            col = i % 2
+            x = PAD + col * (half + _PANEL_GAP)
+            _draw_panel(img, draw, x, y, half, title, kvs, max(1, len(kvs)), fonts)
+            if col == 1 or i == len(cons) - 1:
+                y += _CONS_PANEL_H + _PANEL_GAP
 
     # ----- Footer -----
     _draw_footer(draw, 0, H - FOOTER_H, W, FOOTER_H)

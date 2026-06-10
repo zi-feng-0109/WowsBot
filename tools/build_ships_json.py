@@ -138,18 +138,25 @@ def extract_ships_from_gp(gp: dict) -> dict:
                 seen.add(nm)
                 charges = work_s = range_km = None
                 ab = _d(gp.get(nm))
+                reload_s = prep_s = None
                 if variant and variant in ab:
                     var = _d(ab[variant])
                     charges = var.get("numConsumables")
                     wt = var.get("workTime")
                     if isinstance(wt, (int, float)) and wt > 0:
                         work_s = round(wt, 1)
+                    rl = var.get("reloadTime")
+                    if isinstance(rl, (int, float)) and rl > 0:
+                        reload_s = round(rl, 1)
+                    pp = var.get("preparationTime")
+                    if isinstance(pp, (int, float)):
+                        prep_s = round(pp, 1)
                     # 作用范围:logic.distShip (1 单位=30m,×0.03→km);雷达/声呐/监视等才有
                     ds = _d(var.get("logic")).get("distShip")
                     if isinstance(ds, (int, float)) and ds > 0:
                         range_km = round(ds * 0.03, 1)
-                alts.append({"ability": nm, "charges": charges,
-                             "work_s": work_s, "range_km": range_km})
+                alts.append({"ability": nm, "charges": charges, "work_s": work_s,
+                             "reload_s": reload_s, "prep_s": prep_s, "range_km": range_km})
             if alts:
                 consumables.append(alts)
         ships[int(sid)] = {
@@ -432,7 +439,8 @@ def main():
                     continue
                 seen.add(zh)
                 alts.append({"name": zh, "charges": a.get("charges"),
-                             "work_s": a.get("work_s"), "range_km": a.get("range_km")})
+                             "work_s": a.get("work_s"), "reload_s": a.get("reload_s"),
+                             "prep_s": a.get("prep_s"), "range_km": a.get("range_km")})
             if alts:
                 consumables.append(alts)
 
