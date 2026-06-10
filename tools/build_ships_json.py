@@ -151,17 +151,22 @@ def extract_ships_from_gp(gp: dict) -> dict:
                     pp = var.get("preparationTime")
                     if isinstance(pp, (int, float)):
                         prep_s = round(pp, 1)
-                    # 作用范围 (侦测类):雷达/声呐/监视 = logic.distShip (1 单位=30m,×0.03→km);
-                    # 水听器 = logic.hydrophoneWaveRadius (米,÷1000→km)。单位不同,分别处理。
+                    # 作用范围:按 wows-toolkit 的换算 (BW_TO_METERS=30)。
+                    #   distShip/distTorpedo/radius = BigWorld 距离 (×30→米→÷1000 km = ×0.03)
+                    #   hydrophoneWaveRadius = 米 (÷1000 km)
+                    # 雷达/监视=distShip,声呐=distShip+distTorpedo,水听器=hydrophoneWaveRadius,
+                    # 烟雾/战斗机/巡逻战斗机=radius。
                     lg = _d(var.get("logic"))
-                    ds = lg.get("distShip")
-                    hw = lg.get("hydrophoneWaveRadius")
-                    if isinstance(ds, (int, float)) and ds > 0:
-                        range_km = round(ds * 0.03, 1)
-                    elif isinstance(hw, (int, float)) and hw > 0:
-                        range_km = round(hw / 1000, 1)
+                    def _bw(v):  # BigWorld → km
+                        return round(v * 0.03, 2) if isinstance(v, (int, float)) and v > 0 else None
+                    def _m(v):   # 米 → km
+                        return round(v / 1000, 2) if isinstance(v, (int, float)) and v > 0 else None
+                    range_km = (_bw(lg.get("distShip")) or _m(lg.get("hydrophoneWaveRadius"))
+                                or _bw(lg.get("radius")))
+                    range_torp_km = _bw(lg.get("distTorpedo"))
                 alts.append({"ability": nm, "charges": charges, "work_s": work_s,
-                             "reload_s": reload_s, "prep_s": prep_s, "range_km": range_km})
+                             "reload_s": reload_s, "prep_s": prep_s,
+                             "range_km": range_km, "range_torp_km": range_torp_km})
             if alts:
                 consumables.append(alts)
         ships[int(sid)] = {
@@ -445,7 +450,8 @@ def main():
                 seen.add(zh)
                 alts.append({"name": zh, "charges": a.get("charges"),
                              "work_s": a.get("work_s"), "reload_s": a.get("reload_s"),
-                             "prep_s": a.get("prep_s"), "range_km": a.get("range_km")})
+                             "prep_s": a.get("prep_s"), "range_km": a.get("range_km"),
+                             "range_torp_km": a.get("range_torp_km")})
             if alts:
                 consumables.append(alts)
 

@@ -190,8 +190,12 @@ def _build_consumables(ship: dict) -> list:
                 ("整备时间", _fmt_s2(a.get("prep_s"), zero_ok=True)),
             ]
             rg = a.get("range_km")
+            rt = a.get("range_torp_km")
             if isinstance(rg, (int, float)) and rg > 0:
-                kvs.append(("作用范围", f"{rg:g} km"))
+                val = _fmt_rng(rg)
+                if isinstance(rt, (int, float)) and rt > 0:   # 声呐:舰 + 鱼雷
+                    val = f"{val} / 雷 {_fmt_rng(rt)}"
+                kvs.append(("作用范围", val))
             rows.append((a.get("name", "?"), kvs))
         if not rows:
             continue
@@ -207,6 +211,13 @@ def _fmt_s2(v, zero_ok=False) -> str:
     if isinstance(v, (int, float)) and (v > 0 or (zero_ok and v == 0)):
         return f"{v:g} s"
     return "-"
+
+
+def _fmt_rng(km) -> str:
+    """范围:>=1km 用 km,小范围 (烟雾半径等) 用米。"""
+    if km >= 1:
+        return f"{km:g} km"
+    return f"{int(round(km * 1000))} m"
 
 
 def _cons_group_height(group: dict) -> int:
