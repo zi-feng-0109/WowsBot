@@ -29,6 +29,7 @@ _ICON_DIR = Path(__file__).resolve().parent.parent / "data" / "ship_icons"
 PAD = 28
 HEADER_H = 64
 TIER_HDR_H = 28
+ROW_HDR_W = 78    # 左侧行首:舰种类别(行号),跟顶部 tier(列号)对应
 COL_W = 142
 ROW_H = 120
 ICON_W = 98
@@ -62,19 +63,19 @@ def render_line_png(out_path: str, tree: dict) -> str:
     n_rows = tree["n_rows"]
     n_cols = max_t - min_t + 1
 
-    W = PAD * 2 + n_cols * COL_W
+    W = PAD * 2 + ROW_HDR_W + n_cols * COL_W
     H = HEADER_H + TIER_HDR_H + n_rows * ROW_H + FOOTER_H + 8
 
     img = Image.new("RGB", (W, H), GAME_BG)
     d = ImageDraw.Draw(img)
     f_title = _font(CJK_FONT, 28)
     f_name = _font(CJK_FONT, 16)
-    f_kind = _font(CJK_FONT, 12)
     f_xp = _font(CJK_FONT, 12)
     f_col = _font(MONO_FONT, 16)
+    f_rowhdr = _font(CJK_FONT, 17)
 
     def col_x(t):
-        return PAD + (t - min_t) * COL_W
+        return PAD + ROW_HDR_W + (t - min_t) * COL_W
 
     def cell_cx(t):
         return col_x(t) + ICON_W // 2
@@ -96,6 +97,23 @@ def render_line_png(out_path: str, tree: dict) -> str:
         lbl = f"T{t}"
         d.text((cell_cx(t) - d.textlength(lbl, font=f_col) / 2, HEADER_H + 5),
                lbl, font=f_col, fill=GAME_DIM)
+
+    # ---- 行首:每行舰种类别(行号);纯共享前段(异舰种)行用金色标出 ----
+    main_sp = tree.get("species")
+    row_kinds = {}   # row -> {kind: is_off}
+    for n in nodes.values():
+        row_kinds.setdefault(n["row"], {})
+        row_kinds[n["row"]][n.get("kind", "")] = (n.get("species") != main_sp)
+    hx = PAD + ROW_HDR_W // 2
+    for r in range(n_rows):
+        kinds = row_kinds.get(r)
+        if not kinds:
+            continue
+        label = "/".join(k for k in kinds if k)
+        color = GAME_GOLD if all(kinds.values()) else GAME_DIM   # 整行都是异舰种=前段
+        ty = row_cy(r)
+        d.text((hx - d.textlength(label, font=f_rowhdr) / 2, ty - 10), label,
+               font=f_rowhdr, fill=color)
 
     # ---- 连线(节点下层) ----
     for p, c in edges:
@@ -131,13 +149,7 @@ def render_line_png(out_path: str, tree: dict) -> str:
         name = n["name"]
         # 线尾(T11 超级船)名字描金
         color = GAME_GOLD if t >= 11 else GAME_TEXT
-        d.text((cx - d.textlength(name, font=f_name) / 2, cy + 22), name, font=f_name, fill=color)
-        # 舰种类别(战列/巡洋/驱逐/航母/潜艇);非本线舰种(共享前段)用强调色标出
-        kind = n.get("kind") or ""
-        if kind:
-            off = n.get("species") and n["species"] != tree.get("species")
-            kc = GAME_GOLD if off else GAME_DIM
-            d.text((cx - d.textlength(kind, font=f_kind) / 2, cy + 44), kind, font=f_kind, fill=kc)
+        d.text((cx - d.textlength(name, font=f_name) / 2, cy + 26), name, font=f_name, fill=color)
 
     _draw_footer(d, 0, H - FOOTER_H, W, FOOTER_H)
     img.save(out_path)
