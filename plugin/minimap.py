@@ -419,11 +419,9 @@ ship_cmd = on_command("船", aliases={"战舰", "ship"}, priority=5, block=True)
 
 @ship_cmd.handle()
 async def _ship(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
-    raw = args.extract_plain_text().strip()
-    armor_mode = raw.endswith("装甲") and raw != "装甲"
-    name = raw[:-2].strip() if armor_mode else raw
+    name = args.extract_plain_text().strip()
     if not name:
-        await ship_cmd.finish("用法: /船 <中文舰名>\n示例: /船 大和  ·  /船 yamato  ·  /船 大和 装甲")
+        await ship_cmd.finish("用法: /船 <中文舰名>\n示例: /船 大和  ·  /船 yamato  ·  /船 岛风")
 
     if not ship_index.is_ready():
         await ship_cmd.finish("战舰数据未生成 (ships.json 缺失)。请管理员跑 tools/build_ships_json.py")
@@ -444,27 +442,28 @@ async def _ship(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
     ship = payload[0]
     out_dir = Path(BASE_DIR) / "_ship_cache"
     out_dir.mkdir(parents=True, exist_ok=True)
+    idx = ship.get("index", ship.get("name_en", "x"))
 
-    if armor_mode:
-        armor = _armor_for(ship.get("index", ""))
-        if not armor:
-            await ship_cmd.finish(f"「{ship.get('name_zh', name)}」暂无装甲数据")
-        out_png = out_dir / f"armor_{ship.get('index', 'x')}.png"
-        try:
-            await asyncio.to_thread(_render_armor_sync, str(out_png), ship, armor)
-        except Exception as e:
-            logger.error(f"渲染 /船 装甲图失败: {e}")
-            await ship_cmd.finish(f"⚠️ 渲染失败: {e}")
-        await ship_cmd.finish(MessageSegment.image(f"file://{out_png}"))
-
-    out_png = out_dir / f"ship_{ship.get('index', ship.get('name_en', 'x'))}.png"
+    # 数值卡(必出)
+    ship_png = out_dir / f"ship_{idx}.png"
     try:
-        await asyncio.to_thread(_render_ship_sync, str(out_png), ship)
+        await asyncio.to_thread(_render_ship_sync, str(ship_png), ship)
     except Exception as e:
         logger.error(f"渲染 /船 卡失败: {e}")
         await ship_cmd.finish(f"⚠️ 渲染失败: {e}")
+    msg = MessageSegment.image(f"file://{ship_png}")
 
-    await ship_cmd.finish(MessageSegment.image(f"file://{out_png}"))
+    # 装甲卡(有装甲数据才追加;装甲渲染失败不影响数值卡)
+    armor = _armor_for(ship.get("index", ""))
+    if armor:
+        armor_png = out_dir / f"armor_{idx}.png"
+        try:
+            await asyncio.to_thread(_render_armor_sync, str(armor_png), ship, armor)
+            msg = msg + MessageSegment.image(f"file://{armor_png}")
+        except Exception as e:
+            logger.error(f"渲染 /船 装甲图失败: {e}")
+
+    await ship_cmd.finish(msg)
 
 
 def _render_ship_sync(out_path: str, ship: dict):
