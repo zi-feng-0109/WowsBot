@@ -69,12 +69,34 @@ def build_tree(ships: dict, nation: str, species: str) -> Optional[dict]:
       }
     无该组合 / 无科技线时返回 None。
     """
-    # 1. 候选:同国同舰种,排除金币/特种
-    cand = {
+    # 1. 候选:同国同舰种 + 向上回溯的共享前段(如 T1 杂项/巡洋)。
+    #    WoWs 每国只有一艘 T1,各舰种线从它分叉(日驱: 桥立T1巡→筑摩T2巡→海风T2驱),
+    #    这些异舰种的祖先也要画进来——你得研发过它们才能爬到本线。
+    pool = {
         sid: s for sid, s in ships.items()
-        if s.get("nation") == nation and s.get("species") == species
+        if s.get("nation") == nation
         and not s.get("is_premium") and not s.get("is_special")
     }
+    type_ids = {sid for sid in pool if pool[sid].get("species") == species}
+    if not type_ids:
+        return None
+    # 反向边(限 pool 内):谁指向我
+    preds = {sid: [] for sid in pool}
+    for sid, s in pool.items():
+        for j in (s.get("next_ships") or {}):
+            j = str(j)
+            if j in pool:
+                preds[j].append(sid)
+    # 从本舰种向上回溯所有祖先,收进候选(只向上,不碰其它舰种的旁支)
+    keep = set(type_ids)
+    stack = list(type_ids)
+    while stack:
+        x = stack.pop()
+        for p in preds[x]:
+            if p not in keep:
+                keep.add(p)
+                stack.append(p)
+    cand = {sid: pool[sid] for sid in keep}
     if not cand:
         return None
 
