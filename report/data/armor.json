@@ -41074,6 +41074,17 @@
           }
         ],
         "name": "主炮"
+      },
+      {
+        "faces": [
+          {
+            "face": "AuTurretSide",
+            "mm": [
+              6
+            ]
+          }
+        ],
+        "name": "主炮"
       }
     ]
   },
@@ -73160,6 +73171,35 @@
           },
           {
             "face": "TurretAft",
+            "mm": [
+              6
+            ]
+          },
+          {
+            "face": "TurretDown",
+            "mm": [
+              6
+            ]
+          },
+          {
+            "face": "TurretFwd",
+            "mm": [
+              6
+            ]
+          }
+        ],
+        "name": "主炮"
+      },
+      {
+        "faces": [
+          {
+            "face": "TurretSide",
+            "mm": [
+              6
+            ]
+          },
+          {
+            "face": "TurretTop",
             "mm": [
               6
             ]
@@ -209908,13 +209948,7 @@
           {
             "face": "TurretSide",
             "mm": [
-              13
-            ]
-          },
-          {
-            "face": "TurretFwd",
-            "mm": [
-              13
+              20
             ]
           }
         ],
@@ -209925,7 +209959,13 @@
           {
             "face": "TurretSide",
             "mm": [
-              20
+              13
+            ]
+          },
+          {
+            "face": "TurretFwd",
+            "mm": [
+              13
             ]
           }
         ],
