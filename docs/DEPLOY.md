@@ -318,6 +318,14 @@ sudo -E python3 tools/fetch_ship_icons.py
 **这个 key 只在构建机/构建步骤用,不用进 systemd unit、不用进运行时环境。**
 ships.json + ship_icons/ 生成好提交进仓库后,生产端 `git pull` 即可,bot 重启加载。
 
+`report/data/` 主要数据文件一览:
+- `ships.json` — 每船数值卡数据(build_ships_json.py 产出,见 UPDATE.md §2.6)
+- `armor.json` — 每船分面装甲厚度(replayshark armor-dump 产出,见 UPDATE.md §2.7)
+
+`report/bin/` 主要渲染脚本一览:
+- `render_ship.py` — `/船 <名>` 战舰数值卡渲染
+- `render_armor.py` — `/船 <名> 装甲` 装甲分面图渲染
+
 ### 5.4 (可选) 覆盖默认路径
 
 如果你没按 `/opt/wows-bot` 默认布局,启动 nb 前 export:

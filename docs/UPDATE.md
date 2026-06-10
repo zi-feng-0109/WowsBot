@@ -99,6 +99,18 @@ sudo -E python3 tools/fetch_ship_icons.py
 跳过会让 `/船` 提示"战舰数据未生成";只缺预览图则卡片不贴船图,数值照出。
 bot 重启后才会重新 load ships.json (ship_index 启动时读一次)。
 
+### 2.7 刷新 armor.json (/船 <名> 装甲 装甲分面图用)
+
+装甲厚度只能从本地客户端 GameParams 解析(WG API 无此数据),用 replayshark
+的 armor-dump 子命令产出:
+
+```bash
+replayshark.exe --extracted <GameParams 目录,如 extracted/15.4.0_xxxx> \
+  armor-dump -o report/data/armor.json
+```
+
+缺这步只影响 `/船 <名> 装甲`(会回「暂无装甲数据」);`/船 <名>` 数值卡不受影响。
+
 ### 3. 验证
 
 ```bash

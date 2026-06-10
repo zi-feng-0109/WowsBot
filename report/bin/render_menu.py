@@ -223,7 +223,7 @@ def render_menu_png(out_path: str, *, scope: str, ident: str,
         + 30 + 22 + (n_features + n_guess_row) * ROW_H + SECTION_GAP  # 当前功能 (含列头 22px)
         + 30 + 2 * ROW_H + SECTION_GAP                           # 使用方法
         + 30 + 22 + n_games * 28 + SECTION_GAP                   # 游戏 (含表头 22px)
-        + 30 + 22 + (7 if sa_visible else 6) * 28 + SECTION_GAP  # 全部指令 (含表头 22px)
+        + 30 + 22 + (8 if sa_visible else 7) * 28 + SECTION_GAP  # 全部指令 (含表头 22px)
         + 30 + max(1, n_planned) * 24 + SECTION_GAP              # 规划中
         + FOOTER_H + PAD
     )
@@ -313,6 +313,7 @@ def render_menu_png(out_path: str, *, scope: str, ident: str,
         ("/<功能> 状态",         "查看本群当前开关", "任何人"),
         ("/查询 <编号>",         "引用战报查玩家生涯水平", "任何人"),
         ("/船 <中文舰名>",        "查战舰数值卡",          "任何人"),
+        ("/船 <名> 装甲",         "查装甲分面厚度",         "任何人"),
         ("/线 <国家> <舰种>",     "查整条科技树线路",       "任何人"),
     ]
     if sa_visible:
