@@ -174,9 +174,12 @@ async def _group_join(bot: Bot, event: GroupIncreaseNoticeEvent):
         await _reply_menu(bot, event)
 
 
-# @bot 且没附别的内容 —— plaintext 为空就发菜单
+# 群里 @bot 且没附别的内容 —— plaintext 为空就发菜单。
+# 注:私聊里 to_me() 恒 True,空明文消息(QQ 表情/卡片/系统"已接收文件"提示等)
+# 会无差别触发,所以这条规则**只在群聊生效**;私聊用户想看菜单显式发 /菜单 即可。
 def _is_pure_at(event: MessageEvent) -> bool:
-    return not event.get_plaintext().strip()
+    return (isinstance(event, GroupMessageEvent)
+            and not event.get_plaintext().strip())
 
 at_only = on_message(rule=to_me() & _is_pure_at, priority=20, block=False)
 
@@ -652,21 +655,46 @@ async def handle_replay_file(bot: Bot, event: Event, state: T_State):
 
 
 async def get_file_url(bot: Bot, event: Event, file_id: str) -> Optional[str]:
+    """返回**下载源**:群聊给 HTTP URL,私聊 napcat 通常给本地 file:// 或绝对路径。
+    download_file 两种都吃。"""
     try:
         if isinstance(event, GroupMessageEvent):
             info = await bot.call_api("get_group_file_url", group_id=event.group_id, file_id=file_id)
         else:
             info = await bot.call_api("get_file", file_id=file_id)
-        return info.get("url")
+        # napcat get_file 偶有把路径放在 'file' 而非 'url' 字段(版本差异),双重兜底。
+        return info.get("url") or info.get("file")
     except Exception as e:
         logger.error(f"获取文件 URL 失败: {e}")
         raise
 
 
-async def download_file(url: str, save_path: str):
+async def download_file(source: str, save_path: str):
+    """把文件搬到 save_path。source 可以是 http(s) URL(走 aiohttp 下载)
+    或者 napcat 本地路径(file:// 或 /root/... 这种 — 直接 copy)。
+
+    napcat 私聊的 get_file 返回的就是 bot 进程能 stat 的本地路径,因为
+    napcat 跟 bot 同机部署。"""
+    # 1) 本地路径:file:// 前缀剥掉;或直接看是不是已存在的文件
+    local_path = source
+    if source.startswith("file://"):
+        local_path = source[len("file://"):]
+        # Windows 形如 file:///C:/... → /C:/...,去掉前导斜杠
+        if len(local_path) >= 3 and local_path[0] == "/" and local_path[2] == ":":
+            local_path = local_path[1:]
+    if not source.lower().startswith(("http://", "https://")) and os.path.exists(local_path):
+        try:
+            shutil.copyfile(local_path, save_path)
+            logger.info(f"本地文件拷贝完成: {local_path} -> {save_path}")
+            return
+        except Exception as e:
+            raise RuntimeError(f"本地文件拷贝失败: {e}")
+    # 2) HTTP(S) 下载
+    if not source.lower().startswith(("http://", "https://")):
+        raise RuntimeError(f"不是有效的下载源(非 http 也不是本地文件): {source}")
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=300)) as resp:
+            async with session.get(source, timeout=aiohttp.ClientTimeout(total=300)) as resp:
                 if resp.status != 200:
                     raise RuntimeError(f"下载失败,HTTP 状态码 {resp.status}")
                 with open(save_path, "wb") as f:
