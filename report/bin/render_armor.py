@@ -40,19 +40,49 @@ ZONE_ZH = {
 _ZONE_ORDER = ["Citadel", "Hull", "Bow", "Stern", "Casemate", "Superstructure",
                "TorpedoProtection", "SteeringGear", "Turret", "Other", "unknown"]
 
-# 分面 material 名 → 中文。只精确映射常见名;未命中退化原英文(保证不丢分面、不撞名)。
-_FACE_EXACT = {
-    "Belt": "舷侧装甲带", "Deck": "甲板", "Bottom": "船底",
-    "Trans": "横向隔壁", "Inclin": "倾斜装甲",
+import re  # noqa: E402
+
+# 分面 material 名是组合式内部名 (WG 无官方中文,wows-toolkit 也显示原文)。
+# 按词根组合翻译:<区>_<部件> / Dual_<区A>_<区B>_<部件> / Tur<N>Gk<部位>。
+# 区 (zone) 词根
+_FACE_ZONE = {
+    "Bow": "舰艏", "St": "舰艉", "SS": "上层建筑", "Cit": "核心区", "Cas": "炮郭",
+    "SSC": "上建核心", "OCit": "外核心", "Art": "弹药库",
+}
+# 部件 / 整词 (单 token,含复合的舵机·舰桥·炮塔分面)
+_FACE_PART = {
+    "Deck": "甲板", "Trans": "横隔壁", "Bottom": "船底", "ConstrSide": "外壳侧",
+    "Belt": "装甲带", "Side": "侧面", "Top": "顶部", "FwdTrans": "前横隔壁",
+    "AftTrans": "后横隔壁", "Bulge": "防雷鼓包", "Inclin": "倾斜装甲",
+    "Fdck": "艏楼甲板", "Hang": "机库",
+    "ArtSide": "弹药库侧", "ArtBottom": "弹药库底", "ArtTop": "弹药库顶", "ArtDeck": "弹药库甲板",
+    "RudderTop": "舵机顶", "RudderAft": "舵机后", "RudderFwd": "舵机前", "RudderSide": "舵机侧",
+    "BridgeSide": "舰桥侧", "BridgeTop": "舰桥顶", "BridgeBottom": "舰桥底",
+    # 炮塔分面 (armor.turrets[].faces 用)
     "TurretFront": "炮塔正面", "TurretFwd": "炮塔正面", "TurretSide": "炮塔侧面",
     "TurretTop": "炮塔顶部", "TurretAft": "炮塔背面", "TurretDown": "炮塔底部",
-    "TurretBarbette": "座圈",
+    "TurretBarbette": "座圈", "AuTurretSide": "副炮塔侧面", "AuTurretDown": "副炮塔底部",
 }
+_GK_PART = {"Bar": "座圈", "Top": "顶部", "Down": "底部"}
+
+
+def _tok_zh(t: str) -> str:
+    return _FACE_ZONE.get(t) or _FACE_PART.get(t) or t
 
 
 def face_zh(name: str) -> str:
-    """分面中文名;未精确命中则原样返回英文 material 名(完整分面、零丢失)。"""
-    return _FACE_EXACT.get(name, name)
+    """分面中文名:词根组合翻译;完全未识别的 token 原样保留,保证零丢失。"""
+    if name in _FACE_PART:
+        return _FACE_PART[name]
+    m = re.fullmatch(r"Tur(\d+)Gk(Bar|Top|Down)", name)   # 主炮座圈/顶/底
+    if m:
+        return f"{m.group(1)}号炮塔{_GK_PART[m.group(2)]}"
+    parts = name.split("_")
+    if parts and parts[0] == "Dual" and len(parts) >= 3:  # 两区交界板
+        a, b, rest = parts[1], parts[2], parts[3:]
+        tail = "".join(_tok_zh(p) for p in rest)
+        return f"{_tok_zh(a)}–{_tok_zh(b)}间{tail}"
+    return "".join(_tok_zh(p) for p in parts)
 
 
 def _fmt_mm(mm: list) -> str:
