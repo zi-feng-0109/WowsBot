@@ -50,11 +50,14 @@ SPECIES_ZH = {
     "AirCarrier": "航空母舰", "Submarine": "潜艇", "Auxiliary": "辅助舰",
 }
 NATION_ZH = {
-    "Japan": "日本", "USA": "美国", "Ussr": "苏联", "Germany": "德国",
-    "Uk": "英国", "France": "法国", "Italy": "意大利", "Pan_Asia": "泛亚",
+    # GameParams typeinfo.nation 用的代号 (注意苏联=Russia、英国=United_Kingdom)
+    "Japan": "日本", "USA": "美国", "Russia": "苏联", "Germany": "德国",
+    "United_Kingdom": "英国", "France": "法国", "Italy": "意大利", "Pan_Asia": "泛亚",
     "Commonwealth": "英联邦", "Poland": "波兰", "Netherlands": "荷兰",
     "Spain": "西班牙", "Pan_America": "泛美", "Europe": "欧洲", "Brazil": "巴西",
     "Common": "通用",
+    # WG public API 小写代号兜底 (以防来源切换)
+    "Ussr": "苏联", "Uk": "英国",
 }
 
 # shipprofile 接口的模块类型 → query 参数名
