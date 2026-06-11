@@ -486,6 +486,64 @@ def _render_armor_sync(out_path: str, ship: dict, armor: dict):
     render_armor_png(out_path, ship=ship, armor=armor)
 
 
+# /装甲分析 <船名> —— 防御视角穿深矩阵
+# (5 块代表板 × 距离×角度 矩阵, 每格写"主流战列弹达到 X mm 口径可击穿"的临界值)
+pen_cmd = on_command("装甲分析", aliases={"穿深", "穿透", "防御分析"},
+                     priority=5, block=True)
+
+
+@pen_cmd.handle()
+async def _pen(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
+    name = args.extract_plain_text().strip()
+    if not name:
+        await pen_cmd.finish("用法: /装甲分析 <中文舰名>\n"
+                             "示例: /装甲分析 蒙大拿  ·  /装甲分析 大和  ·  /装甲分析 yamato")
+    if not ship_index.is_ready():
+        await pen_cmd.finish("战舰数据未生成 (ships.json 缺失)。请管理员跑 tools/build_ships_json.py")
+    kind, payload = ship_index.find(name)
+    if kind == "none":
+        if payload:
+            sug = "  ".join(payload[:8])
+            await pen_cmd.finish(f"没找到「{name}」。你是不是想查:{sug}")
+        await pen_cmd.finish(f"没找到「{name}」,换个名字试试 (支持中文名 / 英文名)")
+    if kind == "multi":
+        lines = "\n".join(
+            f"  · {s['name_zh']} ({s['name_en']} T{s['tier']} {s.get('species_zh','')})"
+            for s in payload
+        )
+        await pen_cmd.finish(f"「{name}」匹配到多艘,请发完整舰名:\n{lines}")
+
+    target = payload[0]
+    armor = _armor_for(target.get("index", ""))
+    if not armor:
+        await pen_cmd.finish(f"{target['name_zh']} 暂无装甲数据 (armor.json 缺该船)")
+
+    out_dir = Path(BASE_DIR) / "_ship_cache"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_png = out_dir / f"pen_{target['index']}.png"
+    try:
+        await asyncio.to_thread(_render_pen_sync, str(out_png), target, armor)
+    except Exception as e:
+        logger.error(f"渲染 /装甲分析 失败: {e}")
+        await pen_cmd.finish(f"⚠️ 渲染失败: {e}")
+    await pen_cmd.finish(MessageSegment.image(f"file://{out_png}"))
+
+
+def _render_pen_sync(out_path: str, target: dict, armor: dict):
+    """thread wrapper。需要把 ships.json 里所有 ap_ballistic 一起传(典型弹拟合用)。"""
+    import sys as _sys
+    bin_path = str(Path(REPORT_FULL_CMD).parent)
+    if bin_path not in _sys.path:
+        _sys.path.insert(0, bin_path)
+    import json
+    ships_data = json.loads(Path(SHIPS_JSON).read_text("utf-8")).get("ships") or {}
+    all_ap = [s.get("ap_ballistic") for s in ships_data.values()
+              if s.get("ap_ballistic")]
+    from render_pen import render_armor_analysis_png
+    render_armor_analysis_png(out_path, target=target, armor=armor,
+                              all_ap_shells=all_ap)
+
+
 # /线 <国家> <舰种> —— 整条科技树
 line_cmd = on_command("线", aliases={"线路", "科技树", "tree"}, priority=5, block=True)
 

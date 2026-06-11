@@ -172,12 +172,43 @@ def extract_ships_from_gp(gp: dict) -> dict:
                              "range_km": range_km, "range_torp_km": range_torp_km})
             if alts:
                 consumables.append(alts)
+        # 主炮 AP 弹道参数 (供 /穿透 用)。Ship.A_Artillery.HP_*.ammoList → 找 AP Projectile。
+        # 多个炮塔通常共用一组弹种,取第一个找到的即可。
+        ap_ballistic = None
+        art = _d(d.get("A_Artillery"))
+        for hp_key, hp_obj in art.items():
+            hp = _d(hp_obj)
+            hp_ti = _d(hp.get("typeinfo"))
+            if hp_ti.get("type") != "Gun" or hp_ti.get("species") != "Main":
+                continue
+            for ammo_name in (hp.get("ammoList") or ()):
+                proj = _d(gp.get(ammo_name))
+                if proj.get("ammoType") != "AP":
+                    continue
+                ap_ballistic = {
+                    "shell_index": proj.get("index"),
+                    "krupp": proj.get("bulletKrupp"),
+                    "mass": proj.get("bulletMass"),
+                    "diameter": proj.get("bulletDiametr"),
+                    "drag": proj.get("bulletAirDrag"),
+                    "velocity": proj.get("bulletSpeed"),
+                    "ricochet": proj.get("bulletRicochetAt"),
+                    "always_ricochet": proj.get("bulletAlwaysRicochetAt"),
+                    "cap_normalize": proj.get("bulletCapNormalizeMaxAngle"),
+                    "fuse_threshold": proj.get("bulletDetonatorThreshold"),
+                    "alpha_damage": proj.get("alphaDamage"),
+                }
+                break
+            if ap_ballistic:
+                break
+
         ships[int(sid)] = {
             "index": d.get("index"),
             "level": d.get("level"),
             "species": ti.get("species"),
             "nation": ti.get("nation"),
             "consumables": consumables,
+            "ap_ballistic": ap_ballistic,
         }
     return ships
 
@@ -475,6 +506,8 @@ def main():
             "is_premium": bool(w.get("is_premium")),
             "is_special": bool(w.get("is_special")),
             "price_credit": int(w.get("price_credit") or 0),  # 购买银币价
+            # /穿透 用:AP 弹道+穿深参数(GameParams,无 AP 主炮的船=None)
+            "ap_ballistic": gpe.get("ap_ballistic"),
             **stats,
         }
 
