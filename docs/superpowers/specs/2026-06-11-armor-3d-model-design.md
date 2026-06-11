@@ -40,13 +40,22 @@ wowsunpack export-armor-glb  →  <idx>.glb
 - `wowsunpack export-armor-glb --extracted <specs> --ship <index> -o <index>.glb`
 - 复用 `gltf_export`:导出战舰外壳 + 装甲网格,**厚度色烤进顶点色**。积木都在库里,工作量小。
 
-### 3.2 GLB → 图片(离线渲染脚本,新建 `tools/render_armor_3d.py` 或 Blender .py)
-- **Blender headless**(`blender -b -P render_armor_3d.py -- <idx>.glb <out_dir>`):质量最稳。
-  脚本:导入 GLB → 顶点色当材质 → 摆 4 机位(舷侧/俯视/正面/¾)合成一张 PNG,
-  + 一圈 turntable 渲 36 帧合成 GIF。叠厚度色阶图例(复用 `armor_color_legend` 的 mm→色)。
-- 备选:`pyrender`/`moderngl` + `trimesh` 纯 Python 离屏(轻,但要处理离屏 GL context)。
-- **增量**:产物已存在则跳过(同 `fetch_ship_icons` 的 skip);`--force <index>` 单独重渲
-  (仅极少数 WG 真改了装甲的船才需要)。
+### 3.2 GLB → 图片 —— **已实现并验证:`tools/render_armor_3d.py`(纯 numpy 软件渲染)**
+2026-06-11 在 mac 上跑通(无 GPU/无 Blender/无显示):自带 numpy z-buffer 光栅器 +
+朗伯着色 + 顶点色支持,`trimesh` 读 GLB。出 4 视角(舷侧/俯视/正面/立体)2×2 合成 PNG
++ 绕竖轴转圈 GIF。**顶点色路径已验证**:喂带"厚度色"的网格能正确出 蓝薄→红厚 渐变
+(真实装甲 GLB 把厚度烤进顶点色,直接出彩;无色模型退默认钢灰)。
+```
+python tools/render_armor_3d.py <in.glb> <out_prefix> [--size 520] [--frames 36] [--no-gif]
+```
+- **优点**:零依赖(numpy+Pillow+trimesh),mac/Linux 服务器都能跑,不用 Blender/GPU。
+- **代价**:纯 Python 光栅慢(~12 万面、4 视角 +24 帧 ≈ 70s/船)。全量 ~960 船一次性
+  约十几小时;增量(每版本几艘新船)无所谓。嫌慢可换 Blender(GPU,快很多)出图,
+  但产物格式/管线不变。
+- **待补**:① 厚度色阶图例条(复用 wowsunpack `armor_color_legend` 的 mm→色);
+  ② 加 `--skip-existing`(增量,同 fetch_ship_icons)+ `--force <index>`;
+  ③ 套 /船 卡 header(T10 大和…)统一风格(可选)。
+- 真实装甲 GLB 由 §3.1 的 wowsunpack `export-armor-glb` 提供(顶点色已烤厚度)。
 
 ### 3.3 一次性 vs 增量(成本)
 - **一次性全量**:~960 船 × (多视角 PNG + 36 帧 GIF),Blender 跑一遍是唯一大头(几小时)。
