@@ -378,21 +378,36 @@ def find_criminals(raw):
     """返回 [(player, score, reasons, is_ringleader)] 按 score 降序, 仅败方且 score>=2。"""
     m = raw["match"]
     br = m.get("battle_result") or {}
-    win_team = br.get("team_id")
+
+    # 判胜方的口径**跟战报 badge 完全一致** —— 战报用 br.type ("Win"/"Loss"/"Draw",
+    # 是 self_player 视角,可信);战犯榜不能直接信 br.team_id,因为 replayshark
+    # 偶尔会给错(逆向工程的字段含义在某些 timeout / 特殊模式下不准),会导致
+    # 战犯榜显示胜方玩家。
+    # 推真胜方:self 在哪队 + self 赢没赢 → win_team = self_team if 赢 else 1-self
+    self_name = m.get("self_player_name")
+    self_player = next((p for p in raw.get("players", []) if p.get("name") == self_name), None)
+    self_team = self_player.get("team_id") if self_player else None
+
+    win_type = br.get("type", "Draw")
+    win_team = None
+    if self_team in (0, 1) and win_type == "Win":
+        win_team = self_team
+    elif self_team in (0, 1) and win_type == "Loss":
+        win_team = 1 - self_team
+
     if win_team is None:
-        # timeout 局 wows-toolkit 把 winning_team 留空 (replayshark 给 Draw),
-        # 跟 render_battle_report.py 同一兜底: 按 team_scores 推断胜方。
+        # type=="Draw" 或 self_player 拿不到 → 按 team_scores 兜底(domination 模式
+        # 下分数高的队赢;真同分平局会落到下面的 return [])。跟 render_battle_report
+        # 同一兜底。
         team_scores = m.get("team_scores") or []
         scores = {ts["team_index"]: ts["score"] for ts in team_scores}
         if 0 in scores and 1 in scores and scores[0] != scores[1]:
             win_team = 0 if scores[0] > scores[1] else 1
+
     if win_team is None:
         return []  # 真同分平局或未结束,不评战犯
 
-    # 全部玩家中胜方剔除,留败方
-    loser_team = 1 - win_team if win_team in (0, 1) else None
-    if loser_team is None:
-        return []
+    loser_team = 1 - win_team
 
     losers = [p for p in raw.get("players", []) if p.get("team_id") == loser_team]
     if not losers:
