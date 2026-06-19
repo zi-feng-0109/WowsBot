@@ -1023,7 +1023,11 @@ def _build_indexed_players(json_path: str) -> tuple[dict, list]:
                 "species_zh": _SPECIES_ZH.get(species_raw, species_raw or "?"),
                 "team_id":    team_id,
                 "this_game": {
-                    "dmg":   int(st.get("damage_dealt") or 0),
+                    # 跟 _sort_dmg + 战报 PNG # 列同源:results_info.damage 优先
+                    # (server 权威值,含玩家迷雾外伤害),否则 stats.damage_dealt 兜底。
+                    # 否则会出现 /查询 显示值跟战报对不上(stats.damage_dealt 是玩家视角,
+                    # 在 CV / 侦察机相关情形偶尔偏小)。
+                    "dmg":   int(_sort_dmg(p)),
                     "frags": int(st.get("frags") or 0),
                     "alive": bool(st.get("is_alive")),
                     "time_lived_secs": st.get("time_lived_secs"),
