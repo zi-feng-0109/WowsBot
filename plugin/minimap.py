@@ -35,6 +35,7 @@ from . import render_mode
 from . import wg_api
 from . import ship_index
 from . import tech_tree
+from . import user_stats
 from nonebot import on_notice
 from nonebot.rule import to_me
 from nonebot.adapters.onebot.v11.event import GroupIncreaseNoticeEvent, MessageEvent
@@ -117,6 +118,13 @@ async def _init_permissions():
                            f"/船 命令会提示数据未生成")
     except Exception as e:
         logger.error(f"ship_index 初始化失败: {e}")
+    try:
+        user_stats.init(BASE_DIR)
+        snap = user_stats.snapshot(top_n=1)
+        logger.info(f"user_stats inited at {BASE_DIR} "
+                    f"({snap['total_users']} 用户 / {snap['total_calls']} 次调用)")
+    except Exception as e:
+        logger.error(f"user_stats 初始化失败: {e}")
 
 
 # ====== 4-feature toggle 命令 (视频/战报/复盘/分析) =====================
@@ -332,6 +340,60 @@ async def _sa(event: Event, args: Message = CommandArg()):
     await sa_cmd.finish(f"未知子命令 '{sub}'\n\n{_SA_HELP}")
 
 
+# ====== /用户统计 (仅超管) =====================================================
+# 用户 = 触发过非菜单功能的 QQ 号(/船 /查询 /线 拖 replay 猜船开局/猜中)。
+# 输出 PNG:总用户数 + 总调用次数 + Top 5(头像 / 昵称 / 总次数 / 各功能拆分)。
+
+user_stats_cmd = on_command("用户统计", priority=5, block=True)
+
+
+@user_stats_cmd.handle()
+async def _user_stats(bot: Bot, event: MessageEvent):
+    if not permissions.is_super_admin(event.get_user_id()):
+        await user_stats_cmd.finish("权限不足:本命令只允许超管使用")
+    snap = user_stats.snapshot(top_n=5)
+    if snap["total_users"] == 0:
+        await user_stats_cmd.finish(
+            "暂无任何用户使用记录(本版本上线后从零开始计)")
+    # 为 top 5 补头像 + 昵称(QQ 头像走 https,昵称走 OneBot get_stranger_info)
+    enriched = []
+    for u in snap["top"]:
+        uid = u["user_id"]
+        nick = uid
+        try:
+            info = await bot.call_api("get_stranger_info", user_id=int(uid))
+            nick = info.get("nickname") or info.get("nick") or uid
+        except Exception as e:
+            logger.debug(f"get_stranger_info({uid}) 失败: {e}")
+        enriched.append({**u, "nickname": nick})
+    out_dir = Path(BASE_DIR) / "_stats_cache"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_png = out_dir / "user_stats.png"
+    try:
+        await asyncio.to_thread(_render_user_stats_sync, str(out_png),
+                                 snap["total_users"], snap["total_calls"], enriched)
+    except Exception as e:
+        logger.error(f"渲染 /用户统计 失败: {e}")
+        # PNG 失败兜底为纯文本
+        lines = [f"总用户数: {snap['total_users']}   总调用: {snap['total_calls']}", "Top 5:"]
+        for i, u in enumerate(enriched, 1):
+            lines.append(f"  {i}. {u['nickname']} ({u['user_id']}) — {u['total']} 次")
+        await user_stats_cmd.finish("\n".join(lines))
+    await user_stats_cmd.finish(MessageSegment.image(f"file://{out_png}"))
+
+
+def _render_user_stats_sync(out_path: str, total_users: int,
+                             total_calls: int, top: list):
+    """thread wrapper — render_user_stats 没 async 接口。"""
+    import sys as _sys
+    bin_path = str(Path(REPORT_FULL_CMD).parent)
+    if bin_path not in _sys.path:
+        _sys.path.insert(0, bin_path)
+    from render_user_stats import render_user_stats_png
+    render_user_stats_png(out_path, total_users=total_users,
+                          total_calls=total_calls, top=top)
+
+
 # ====== /查询 <编号> ===========================================================
 # 要求用户引用回复战报消息;按 # 列编号查该玩家这条船的 WG 生涯数据。
 
@@ -368,6 +430,7 @@ async def _query(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
     if player is None:
         await query_cmd.finish(f"编号 {idx} 在本局不存在 (本局共 {len(players)} 人)")
 
+    user_stats.record(event.get_user_id(), "query")
     await query_cmd.send(f"查询中… (#{idx} {player.get('name','?')})")
     cached_realm = entry.get("_realms", {}).get(str(player["account_id"]))
     try:
@@ -443,6 +506,7 @@ async def _ship(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
         await ship_cmd.finish(f"「{name}」匹配到多艘,请发完整舰名:\n{lines}")
 
     ship = payload[0]
+    user_stats.record(event.get_user_id(), "ship")
     out_dir = Path(BASE_DIR) / "_ship_cache"
     out_dir.mkdir(parents=True, exist_ok=True)
     idx = ship.get("index", ship.get("name_en", "x"))
@@ -578,6 +642,7 @@ async def _line(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
     if not tree:
         await line_cmd.finish(f"{parts[0]} {parts[1]} 没有科技树线路")
 
+    user_stats.record(event.get_user_id(), "line")
     out_dir = Path(BASE_DIR) / "_line_cache"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_png = out_dir / f"line_{nation}_{species}.png"
@@ -634,6 +699,7 @@ async def handle_replay_file(bot: Bot, event: Event, state: T_State):
             await download_file(file_url, file_path)
 
             await task_queue.put((user_id, event.message_id, group_id, user_dir, file_path))
+            user_stats.record(user_id, "replay")
 
             await send_message(
                 bot, user_id, group_id, event.message_id,
