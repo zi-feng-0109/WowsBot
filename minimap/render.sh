@@ -9,6 +9,9 @@
 #                     默认 /opt/wows-toolkit/target/release/minimap_renderer
 #   WOWS_DATA_DIR     wows-toolkit 解包出的 extracted 根目录
 #                     默认 /var/lib/wows-data/extracted
+#   WOWS_RENDER_LANG  渲染界面文字 locale,对应 extracted/<ver>/translations/<lang>/。
+#                     默认 zh_sg(亚服简中,跟游戏内一致)。
+#                     置空跳过 --lang(用 binary 默认 en)。可选 zh / zh_tw / en / ru ...
 #
 # 任何额外参数都会原样传给 minimap_renderer (放在 -o/输入文件之前)。
 set -euo pipefail
@@ -24,6 +27,7 @@ shift 2
 
 TOOLKIT_BIN="${WOWS_TOOLKIT_BIN:-/opt/wows-toolkit/target/release/minimap_renderer}"
 DATA_DIR="${WOWS_DATA_DIR:-/var/lib/wows-data/extracted}"
+RENDER_LANG="${WOWS_RENDER_LANG-zh_sg}"
 
 if [ ! -x "$TOOLKIT_BIN" ]; then
     echo "error: $TOOLKIT_BIN 不存在或不可执行 (设 WOWS_TOOLKIT_BIN 覆盖)" >&2
@@ -34,10 +38,16 @@ if [ ! -d "$DATA_DIR" ]; then
     exit 1
 fi
 
+LANG_ARG=()
+if [ -n "$RENDER_LANG" ]; then
+    LANG_ARG=(--lang "$RENDER_LANG")
+fi
+
 exec "$TOOLKIT_BIN" \
     --extracted-dir "$DATA_DIR" \
     --cpu \
     --no-progress \
+    "${LANG_ARG[@]}" \
     -o "$OUTPUT" \
     "$@" \
     "$INPUT"
