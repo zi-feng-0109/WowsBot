@@ -982,7 +982,7 @@ async def process_queue(bot: Bot):
             if on["聊天"]:
                 try:
                     chat_png = await run_chat(replay_path, user_dir)
-                    if chat_png:  # 空串 = 本局无聊天
+                    if chat_png:  # 空串 = 本局无聊天 + 无 F 键预设
                         msg = (MessageSegment.reply(message_id)
                                + MessageSegment.image(f"file://{chat_png}"))
                         if group_id:
@@ -991,6 +991,10 @@ async def process_queue(bot: Bot):
                         else:
                             await bot.call_api("send_private_msg",
                                                 user_id=int(user_id), message=msg)
+                    else:
+                        # 显式告知 "本局没聊天",免得用户以为 toggle 没生效
+                        await send_message(bot, user_id, group_id, message_id,
+                                           "💬 本局无聊天 / 预设语音,跳过聊天 PNG")
                 except Exception as e:
                     logger.warning(f"聊天渲染失败: {e}")
                     await send_message(bot, user_id, group_id, message_id,
