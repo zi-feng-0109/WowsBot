@@ -956,23 +956,52 @@ async def process_queue(bot: Bot):
 
 
 async def render_mp4(replay_path: str, work_dir: str):
-    """调用 WOWS_RENDER_SH 渲染 MP4。"""
+    """调用 WOWS_RENDER_SH 渲染 MP4。
+
+    流式读 subprocess stdout/stderr,逐行喂给 logger.info ——
+    nonebot 的 logger 写哪 (控制台 + record file),进度就到哪。同时累积
+    tail_buf 给失败时报错截尾用,不再到结束后才一次性 communicate()
+    (那样进度全憋在 pipe 里,bot 看着像"卡住了")。"""
     output_path = os.path.join(work_dir, f"{Path(replay_path).stem}.mp4")
+    name = Path(replay_path).stem
     try:
         proc = await asyncio.create_subprocess_exec(
             RENDER_SH, replay_path, output_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+
+        tail_buf: list[str] = []
+        TAIL_MAX = 200
+
+        async def _stream(reader, label: str):
+            assert reader is not None
+            async for raw in reader:
+                line = raw.decode('utf-8', errors='ignore').rstrip()
+                if not line:
+                    continue
+                logger.info(f"[mp4:{name} {label}] {line}")
+                tail_buf.append(line)
+                if len(tail_buf) > TAIL_MAX:
+                    tail_buf.pop(0)
+
         try:
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=MP4_TIMEOUT)
+            await asyncio.wait_for(
+                asyncio.gather(
+                    _stream(proc.stdout, "out"),
+                    _stream(proc.stderr, "err"),
+                    proc.wait(),
+                ),
+                timeout=MP4_TIMEOUT,
+            )
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
             raise RuntimeError(f"MP4 渲染超时({MP4_TIMEOUT}s)")
+
         if proc.returncode != 0:
-            tail = stderr.decode('utf-8', errors='ignore')[-500:] if stderr else "未知错误"
-            raise RuntimeError(f"MP4 渲染失败: {tail}")
+            tail = "\n".join(tail_buf[-20:]) or "未知错误"
+            raise RuntimeError(f"MP4 渲染失败:\n{tail}")
         logger.info(f"MP4 完成: {output_path}")
     except FileNotFoundError:
         raise RuntimeError(f"找不到 MP4 渲染脚本: {RENDER_SH}")
