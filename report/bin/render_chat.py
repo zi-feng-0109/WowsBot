@@ -35,6 +35,27 @@ from PIL import Image, ImageDraw  # noqa: E402
 REPLAYSHARK = os.environ.get(
     "WOWS_REPLAYSHARK_BIN", "/opt/wows-toolkit/target/release/replayshark"
 )
+WOWS_DATA_DIR = os.environ.get("WOWS_DATA_DIR", "/var/lib/wows-data/extracted")
+
+
+def find_latest_extracted() -> str | None:
+    """从 WOWS_DATA_DIR 下挑版本号最大的 <ver>_<build>/ 子目录,给
+    replayshark -e 用。新版 replayshark chat 也要 GameParams 解 entity。"""
+    base = Path(WOWS_DATA_DIR)
+    if not base.is_dir():
+        return None
+    pat = re.compile(r"^(\d+)\.(\d+)\.(\d+)_(\d+)$")
+    cands = []
+    for p in base.iterdir():
+        if not p.is_dir():
+            continue
+        m = pat.match(p.name)
+        if m:
+            cands.append((tuple(int(x) for x in m.groups()), p))
+    if not cands:
+        return None
+    cands.sort()
+    return str(cands[-1][1])
 
 _HEADER_H = 72
 _ROW_H    = 26
@@ -149,9 +170,14 @@ def main():
     if not Path(REPLAYSHARK).is_file():
         print(f"replayshark binary 不存在: {REPLAYSHARK} "
               "(设 WOWS_REPLAYSHARK_BIN 覆盖)", file=sys.stderr); sys.exit(2)
+    cmd = [REPLAYSHARK]
+    extracted = find_latest_extracted()
+    if extracted:
+        cmd += ["-e", extracted]
+    cmd += ["chat", args.replay]
     try:
         proc = subprocess.run(
-            [REPLAYSHARK, "chat", args.replay],
+            cmd,
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=120,
         )
