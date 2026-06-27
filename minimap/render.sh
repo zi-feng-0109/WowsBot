@@ -45,7 +45,7 @@ fi
 
 exec "$TOOLKIT_BIN" \
     --extracted-dir "$DATA_DIR" \
-    --cpu \
+    --codec h264 \
     --team-rosters \
     --no-progress \
     --recreate-game-params \
