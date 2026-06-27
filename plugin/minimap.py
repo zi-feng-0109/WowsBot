@@ -32,6 +32,7 @@ from nonebot.log import logger
 
 from . import permissions
 from . import query_index
+from . import render_backend
 from . import render_mode
 from . import wg_api
 from . import ship_index
@@ -109,6 +110,12 @@ async def _init_permissions():
                     f"(parallel={render_mode.is_parallel()})")
     except Exception as e:
         logger.error(f"render_mode 初始化失败: {e}")
+    try:
+        render_backend.init(BASE_DIR)
+        logger.info(f"render_backend inited at {BASE_DIR} "
+                    f"(backend={render_backend.get_backend()})")
+    except Exception as e:
+        logger.error(f"render_backend 初始化失败: {e}")
     try:
         ship_index.init(SHIPS_JSON)
         if ship_index.is_ready():
@@ -339,6 +346,40 @@ async def _sa(event: Event, args: Message = CommandArg()):
         await sa_cmd.finish(f"未知操作 '{op}',合法: 开|关|status")
 
     await sa_cmd.finish(f"未知子命令 '{sub}'\n\n{_SA_HELP}")
+
+
+# ====== /渲染模式 cpu|gpu|状态 (仅超管) =========================================
+# 切换 MP4 渲染 backend。切换不影响正在跑的渲染(subprocess 已 spawn 带旧 env),
+# 只影响下一份 replay。状态持久化到 render_backend.json,重启 bot 也保留。
+
+render_backend_cmd = on_command("渲染模式", priority=5, block=True)
+
+
+@render_backend_cmd.handle()
+async def _render_backend_cmd(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
+    if not permissions.is_super_admin(event.get_user_id()):
+        await render_backend_cmd.finish("权限不足:本命令只允许超管使用")
+    sub = (args.extract_plain_text().strip().lower() if args else "")
+    cur = render_backend.get_backend()
+    if sub in ("", "状态", "status"):
+        await render_backend_cmd.finish(
+            f"当前渲染 backend: {cur.upper()}\n"
+            f"  - CPU: 默认 AV1 软编,~7 MB / 20min,慢(2-3 分钟)、稳定\n"
+            f"  - GPU: NVENC H.264 硬编,~10 MB / 20min,快(~20 秒)、依赖 NVIDIA driver\n"
+            f"切换:/渲染模式 cpu  或  /渲染模式 gpu"
+        )
+    if sub not in ("cpu", "gpu"):
+        await render_backend_cmd.finish("用法: /渲染模式 cpu | gpu | 状态")
+    try:
+        new = render_backend.set_backend(sub)
+    except ValueError as e:
+        await render_backend_cmd.finish(f"❌ {e}")
+    if new == cur:
+        await render_backend_cmd.finish(f"渲染 backend 本来就是 {new.upper()},无变化")
+    await render_backend_cmd.finish(
+        f"渲染 backend: {cur.upper()} → {new.upper()} ✓\n"
+        f"(正在渲染的 replay 不受影响,下一份起按新 backend 跑)"
+    )
 
 
 # ====== /用户统计 (仅超管) =====================================================
@@ -983,11 +1024,17 @@ async def render_mp4(replay_path: str, work_dir: str):
       (那样进度全憋在 pipe 里,bot 看着像"卡住了")。"""
     output_path = os.path.join(work_dir, f"{Path(replay_path).stem}.mp4")
     name = Path(replay_path).stem
+    # spawn 时按当前 backend 选 cpu/gpu 注入 env。subprocess 一旦 fork 出去就
+    # 带着这份 env,后续 /渲染模式 切换不影响正在跑的渲染,只影响下一次新 spawn。
+    backend = render_backend.get_backend()
+    env = {**os.environ, "WOWS_RENDER_BACKEND": backend}
+    logger.info(f"[mp4:{name}] 启动渲染 backend={backend}")
     try:
         proc = await asyncio.create_subprocess_exec(
             RENDER_SH, replay_path, output_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
 
         tail_buf: list[str] = []
