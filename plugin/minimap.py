@@ -14,12 +14,13 @@ NoneBot 插件: 接收 .wowsreplay 文件,并行渲染 MP4 (小地图) + PNG (�
 DeepSeek API key 在 wows_analyze 那边读 WOWS_DEEPSEEK_KEY,不在本插件。
 """
 import os
+import re
 import sys
 import json
 import shutil
 import asyncio
 import aiohttp
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 from pathlib import Path
 
 from nonebot import on_message, on_command, get_driver
@@ -955,13 +956,30 @@ async def process_queue(bot: Bot):
     processing = False
 
 
+_MP4_PROGRESS_RE = re.compile(r"INFO Progress stage=(\w+) frame=(\d+) total=(\d+)")
+_MP4_BAR_WIDTH   = 24
+_MP4_PCT_STEP    = 0.05   # 进度变化 ≥5% 才 emit
+_MP4_TIME_STEP   = 5.0    # 或 时间 ≥5s 才 emit
+
+
+def _mp4_progress_bar(stage: str, frame: int, total: int) -> str:
+    """`Encoding ████████░░░░░░░░ 53.4% ( 824/1545)` 字符画风格。"""
+    pct = (frame / total) if total > 0 else 0.0
+    fill = int(round(_MP4_BAR_WIDTH * pct))
+    bar = "█" * fill + "░" * (_MP4_BAR_WIDTH - fill)
+    width = len(str(total))
+    return f"{stage:8s} {bar} {pct*100:5.1f}% ({frame:>{width}}/{total})"
+
+
 async def render_mp4(replay_path: str, work_dir: str):
     """调用 WOWS_RENDER_SH 渲染 MP4。
 
-    流式读 subprocess stdout/stderr,逐行喂给 logger.info ——
-    nonebot 的 logger 写哪 (控制台 + record file),进度就到哪。同时累积
-    tail_buf 给失败时报错截尾用,不再到结束后才一次性 communicate()
-    (那样进度全憋在 pipe 里,bot 看着像"卡住了")。"""
+    流式读 subprocess stdout/stderr 喂给 logger:
+    - `Progress stage=X frame=Y total=Z` 行 → 解析 + 节流(≥5% 或 ≥5s 一条)+
+      字符画进度条,代替逐 100 帧刷屏。
+    - 其他 INFO / WARN / 错误行原样 INFO,带 `[mp4:<name>] <line>` 前缀。
+    - 累积 tail_buf 给失败时报错截尾,不到结束才一次性 communicate()
+      (那样进度全憋在 pipe 里,bot 看着像"卡住了")。"""
     output_path = os.path.join(work_dir, f"{Path(replay_path).stem}.mp4")
     name = Path(replay_path).stem
     try:
@@ -973,6 +991,9 @@ async def render_mp4(replay_path: str, work_dir: str):
 
         tail_buf: list[str] = []
         TAIL_MAX = 200
+        # stage → (last_pct, last_ts) 节流用
+        last_progress: Dict[str, Tuple[float, float]] = {}
+        loop = asyncio.get_event_loop()
 
         async def _stream(reader, label: str):
             assert reader is not None
@@ -980,10 +1001,23 @@ async def render_mp4(replay_path: str, work_dir: str):
                 line = raw.decode('utf-8', errors='ignore').rstrip()
                 if not line:
                     continue
-                logger.info(f"[mp4:{name} {label}] {line}")
+                # 进度条节流(始终累计到 tail_buf,以便失败时报错有完整上下文)
                 tail_buf.append(line)
                 if len(tail_buf) > TAIL_MAX:
                     tail_buf.pop(0)
+                m = _MP4_PROGRESS_RE.search(line)
+                if m:
+                    stage, frame, total = m.group(1), int(m.group(2)), int(m.group(3))
+                    pct = (frame / total) if total > 0 else 0.0
+                    now = loop.time()
+                    last_pct, last_ts = last_progress.get(stage, (-1.0, 0.0))
+                    if (pct - last_pct >= _MP4_PCT_STEP
+                            or now - last_ts >= _MP4_TIME_STEP
+                            or pct >= 1.0):
+                        last_progress[stage] = (pct, now)
+                        logger.info(f"[mp4:{name}] {_mp4_progress_bar(stage, frame, total)}")
+                    continue
+                logger.info(f"[mp4:{name} {label}] {line}")
 
         try:
             await asyncio.wait_for(
