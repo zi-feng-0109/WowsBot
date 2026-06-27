@@ -956,6 +956,7 @@ async def process_queue(bot: Bot):
     processing = False
 
 
+_MP4_ANSI_RE     = re.compile(r"\x1b\[[0-9;]*m")  # 剥 tracing 输出的 ANSI 颜色码
 _MP4_PROGRESS_RE = re.compile(r"INFO Progress stage=(\w+) frame=(\d+) total=(\d+)")
 _MP4_BAR_WIDTH   = 24
 _MP4_PCT_STEP    = 0.05   # 进度变化 ≥5% 才 emit
@@ -1001,6 +1002,9 @@ async def render_mp4(replay_path: str, work_dir: str):
                 line = raw.decode('utf-8', errors='ignore').rstrip()
                 if not line:
                     continue
+                # 剥 ANSI 颜色码 —— tracing 默认带颜色,regex 匹配不到,而且
+                # 写到 nonebot 文件 log 是 \x1b 乱码字节,清掉对终端显示无害。
+                line = _MP4_ANSI_RE.sub("", line)
                 # 进度条节流(始终累计到 tail_buf,以便失败时报错有完整上下文)
                 tail_buf.append(line)
                 if len(tail_buf) > TAIL_MAX:
