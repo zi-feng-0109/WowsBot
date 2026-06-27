@@ -29,6 +29,14 @@ TOOLKIT_BIN="${WOWS_TOOLKIT_BIN:-/opt/wows-toolkit/target/release/minimap_render
 DATA_DIR="${WOWS_DATA_DIR:-/var/lib/wows-data/extracted}"
 RENDER_LANG="${WOWS_RENDER_LANG-zh_sg}"
 
+# Optimus 笔记本(NVIDIA dGPU + AMD/Intel iGPU)Vulkan loader 默认枚举所有
+# Vulkan device,wgpu 经常挑到 iGPU(RENOIR / Intel)。强制只用 NVIDIA ICD
+# → minimap_renderer 必走 NVENC 硬编(快得多、质量更好)。
+# 文件不存在 / 没装 NVIDIA driver 时不 set,自然 fallback 到 iGPU/CPU。
+if [ -z "${VK_DRIVER_FILES:-}" ] && [ -f /usr/share/vulkan/icd.d/nvidia_icd.json ]; then
+    export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json
+fi
+
 if [ ! -x "$TOOLKIT_BIN" ]; then
     echo "error: $TOOLKIT_BIN 不存在或不可执行 (设 WOWS_TOOLKIT_BIN 覆盖)" >&2
     exit 1
@@ -46,6 +54,7 @@ fi
 exec "$TOOLKIT_BIN" \
     --extracted-dir "$DATA_DIR" \
     --codec h264 \
+    --max-size-mib 10 \
     --team-rosters \
     --no-progress \
     --recreate-game-params \
