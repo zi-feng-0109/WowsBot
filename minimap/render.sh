@@ -47,6 +47,7 @@ exec "$TOOLKIT_BIN" \
     --extracted-dir "$DATA_DIR" \
     --cpu \
     --no-progress \
+    --recreate-game-params \
     "${LANG_ARG[@]}" \
     -o "$OUTPUT" \
     "$@" \
