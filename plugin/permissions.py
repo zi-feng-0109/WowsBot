@@ -20,16 +20,19 @@ from typing import Tuple
 from nonebot import get_driver
 from nonebot.adapters.onebot.v11 import GroupMessageEvent, MessageEvent
 
-FEATURES = ["视频", "战报", "复盘", "分析", "战犯"]
+FEATURES = ["视频", "战报", "复盘", "分析", "战犯", "聊天"]
 # 每个 feature 的默认开启状态(用户没主动设过的话采用这里的值)。
 # 分析 默认关:DeepSeek 调用要 API key + 算钱,群主自己评估再开。
 # 战犯 默认关:噪声大、对录制者非 CV 时数据受限,需要群主手动开启。
+# 聊天 默认关:加 team-roster 后视频里 chat 被覆盖,拆成独立 PNG;群里可能不
+#   想公开本局聊天记录,需要群主明确开启。
 DEFAULT_ENABLED = {
     "视频": True,
     "战报": True,
     "复盘": True,
     "分析": False,
     "战犯": False,
+    "聊天": False,
 }
 _STATE_VERSION = 1
 _LEGACY_FILE_NAME = "analyze_toggle.json"

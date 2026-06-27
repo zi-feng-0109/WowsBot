@@ -49,6 +49,8 @@ REPORT_BATTLE_CMD = os.environ.get("WOWS_REPORT_BATTLE_CMD", "/opt/wows-bot/repo
 REPORT_DAMAGE_CMD = os.environ.get("WOWS_REPORT_DAMAGE_CMD", "/opt/wows-bot/report/bin/wows_damage_report")
 RENDER_CRIMINALS_PY = os.environ.get("WOWS_RENDER_CRIMINALS",
                                       "/opt/wows-bot/report/bin/render_criminals.py")
+RENDER_CHAT_PY = os.environ.get("WOWS_RENDER_CHAT",
+                                 "/opt/wows-bot/report/bin/render_chat.py")
 # 旧 alias 暂留兼容(.env 里可能还有);后续清理
 REPORT_CMD       = os.environ.get("WOWS_REPORT_CMD", REPORT_FULL_CMD)
 ANALYZE_CMD      = os.environ.get("WOWS_ANALYZE_CMD", "/opt/wows-bot/report/bin/wows_analyze")
@@ -976,6 +978,24 @@ async def process_queue(bot: Bot):
                 else:
                     logger.warning(f"未找到 JSON,跳过战犯: {json_path}")
 
+            # 聊天 PNG (本局玩家发言 + F 键预设语音,独立成图;不依赖 JSON,直接读 replay)
+            if on["聊天"]:
+                try:
+                    chat_png = await run_chat(replay_path, user_dir)
+                    if chat_png:  # 空串 = 本局无聊天
+                        msg = (MessageSegment.reply(message_id)
+                               + MessageSegment.image(f"file://{chat_png}"))
+                        if group_id:
+                            await bot.call_api("send_group_msg",
+                                                group_id=group_id, message=msg)
+                        else:
+                            await bot.call_api("send_private_msg",
+                                                user_id=int(user_id), message=msg)
+                except Exception as e:
+                    logger.warning(f"聊天渲染失败: {e}")
+                    await send_message(bot, user_id, group_id, message_id,
+                                       f"⚠️ 聊天渲染失败: {e}")
+
             logger.info(f"用户 {user_id} 任务完成 (开: {[k for k,v in on.items() if v]})")
 
         except Exception as e:
@@ -1264,6 +1284,35 @@ async def run_criminals(json_path: str, work_dir: str) -> str:
         return out_png
     except FileNotFoundError:
         raise RuntimeError(f"找不到战犯渲染脚本: {RENDER_CRIMINALS_PY}")
+
+
+async def run_chat(replay_path: str, work_dir: str) -> str:
+    """跑 render_chat.py 出本局聊天 PNG。
+    rc=3 = 本局无任何聊天(replay 安静),返空串让上层降级静默。"""
+    out_png = os.path.join(work_dir, f"{Path(replay_path).stem}.chat.png")
+    py = os.environ.get("WOWS_PYTHON") or sys.executable
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            py, RENDER_CHAT_PY, replay_path, out_png,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=PNG_TIMEOUT)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError(f"聊天渲染超时({PNG_TIMEOUT}s)")
+        if proc.returncode == 3:
+            return ""   # 本局无聊天, 静默
+        if proc.returncode != 0:
+            tail = stderr.decode('utf-8', errors='ignore')[-500:] if stderr else "?"
+            raise RuntimeError(f"聊天渲染失败: {tail}")
+        if not os.path.exists(out_png):
+            raise RuntimeError(f"聊天 PNG 未生成: {out_png}")
+        return out_png
+    except FileNotFoundError:
+        raise RuntimeError(f"找不到聊天渲染脚本: {RENDER_CHAT_PY}")
 
 
 async def _run_report_like(cmd: str, replay_path: str, work_dir: str, label: str,

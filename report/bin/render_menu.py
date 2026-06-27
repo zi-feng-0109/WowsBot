@@ -37,13 +37,14 @@ GAME_BORDER    = (105, 125, 155)
 AUTHOR = "[NUIST]___Ciallo___"
 
 # Feature 列表必须跟 plugin/permissions.FEATURES 顺序一致
-FEATURES = ["视频", "战报", "复盘", "分析", "战犯"]
+FEATURES = ["视频", "战报", "复盘", "分析", "战犯", "聊天"]
 FEATURE_DESC = {
     "视频":  "MP4 战斗回放",
     "战报":  "全队成绩单",
     "复盘":  "主角伤害分布",
     "分析":  "埃酱复盘文本 [测试中...]",
     "战犯":  "败方战犯榜 [测试中...]",
+    "聊天":  "本局聊天记录(玩家+预设)",
 }
 # 跟 plugin/permissions.DEFAULT_ENABLED 同步;CLI 模式下读不到 plugin,本地硬编码。
 DEFAULT_ENABLED = {
@@ -52,6 +53,7 @@ DEFAULT_ENABLED = {
     "复盘": True,
     "分析": False,
     "战犯": False,
+    "聊天": False,
 }
 
 # 规划中功能;在这里追加: ("名字", "一句话简介")
