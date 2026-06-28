@@ -57,7 +57,7 @@ def find_latest_extracted() -> str | None:
     cands.sort()
     return str(cands[-1][1])
 
-_HEADER_H = 92   # 给副标题留两行 (玩家/语音统计 + upstream bug 提示)
+_HEADER_H = 112  # 给副标题留三行 (玩家/语音统计 + upstream bug 提示 + 系统消息提示)
 _ROW_H    = 26
 _VOICE_COLOR  = (110, 195, 255)   # 浅蓝
 _CHAT_COLOR   = (250, 230, 170)   # 暖黄 玩家名
@@ -143,13 +143,16 @@ def render_chat_png(out_path: str, rows: list) -> str:
         "user":  _font(CJK_FONT, 15),
         "msg":   _font(CJK_FONT, 15),
     }
-    # Upstream wows-replays 在 WoWs 12.7.0+ 解不出 voiceline 具体 ID(协议改了),
-    # 这类 row 的 msg 形如 "Unknown(0)" — 信息量为零,从 body 隐藏,只在副标题
-    # 里给计数。如果哪天 upstream 修了,Unknown 自然消失,真值显示就回来。
-    visible = [r for r in rows if not (r["kind"] == "voice" and r["msg"].startswith("Unknown("))]
-    chat_n  = sum(1 for r in rows if r["kind"] == "chat")
+    # 两类 row 信息量为零,从 body 隐藏只在副标题给计数:
+    #   1) voiceline + msg "Unknown(0)" — WoWs 12.7.0+ upstream 没解的协议
+    #   2) chat + msg 空 — 一般是系统消息 / sender_id=0 的特殊包,replay 解不出正文
+    def _is_unknown_voice(r): return r["kind"] == "voice" and r["msg"].startswith("Unknown(")
+    def _is_empty_chat(r):   return r["kind"] == "chat" and not r["msg"].strip()
+    visible = [r for r in rows if not _is_unknown_voice(r) and not _is_empty_chat(r)]
+    chat_n          = sum(1 for r in rows if r["kind"] == "chat" and r["msg"].strip())
+    chat_n_empty    = sum(1 for r in rows if _is_empty_chat(r))
     voice_n_known   = sum(1 for r in rows if r["kind"] == "voice" and not r["msg"].startswith("Unknown("))
-    voice_n_unknown = sum(1 for r in rows if r["kind"] == "voice" and r["msg"].startswith("Unknown("))
+    voice_n_unknown = sum(1 for r in rows if _is_unknown_voice(r))
 
     n = len(visible)
     body_h = max(_ROW_H, n * _ROW_H + 12)
@@ -161,12 +164,18 @@ def render_chat_png(out_path: str, rows: list) -> str:
     # Header
     draw.rectangle([0, 0, W, _HEADER_H], fill=GAME_PANEL)
     draw.line([0, _HEADER_H, W, _HEADER_H], fill=GAME_GOLD, width=2)
-    draw.text((PAD, 12), "聊天记录", GAME_TEXT, fonts["title"])
-    draw.text((PAD, 42), f"玩家发言 {chat_n}  ·  预设语音 {voice_n_known}",
+    draw.text((PAD, 10), "聊天记录", GAME_TEXT, fonts["title"])
+    draw.text((PAD, 40), f"玩家发言 {chat_n}  ·  预设语音 {voice_n_known}",
               GAME_DIM, fonts["sub"])
+    sub_y = 60
     if voice_n_unknown:
-        draw.text((PAD, 62),
+        draw.text((PAD, sub_y),
                   f"另有 {voice_n_unknown} 条预设语音 (按 F 键的提示) — 上游解码器暂未支持新版 voiceline,内容未知",
+                  GAME_DIM, fonts["sub"])
+        sub_y += 18
+    if chat_n_empty:
+        draw.text((PAD, sub_y),
+                  f"另有 {chat_n_empty} 条系统消息 — 正文未在 replay 中携带,内容未知",
                   GAME_DIM, fonts["sub"])
 
     # Body
