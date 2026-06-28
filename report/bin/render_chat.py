@@ -177,7 +177,8 @@ def render_chat_png(out_path: str, rows: list) -> str:
             user += "…"
         draw.text((x, y), user, user_color, fonts["user"])
         x += user_col_w
-        prefix = "📣 " if r["kind"] == "voice" else ""
+        # 不用 emoji — CJK_FONT (Noto Sans CJK) 不带 emoji 字形,会变 □ 豆腐
+        prefix = "[F] " if r["kind"] == "voice" else ""
         msg = prefix + r["msg"]
         # 简单截断,不做 wrap(过长消息也几乎都在 100 字符内)
         if fonts["msg"].getlength(msg) > W - x - PAD:
