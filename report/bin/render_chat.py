@@ -62,37 +62,69 @@ _ROW_H    = 26
 _VOICE_COLOR  = (110, 195, 255)   # 浅蓝
 _CHAT_COLOR   = (250, 230, 170)   # 暖黄 玩家名
 
-# replayshark chat 输出行格式(见 wows-replays/src/analyzer/chat.rs):
-#   "{clock}: {username}: {audience} {message}"           # 玩家
-#   "{clock}: {username}: voiceline {voiceline_msg}"      # F 键预设
-_CHAT_RE  = re.compile(r"^([0-9.:]+): ([^:]+): (\S+) (.*)$")
-_VOICE_RE = re.compile(r"^([0-9.:]+): ([^:]+): voiceline (.*)$")
+# replayshark chat 输出格式(见 wows-replays/src/analyzer/chat.rs):
+#   "{clock}: {username}: {audience} {message}"           # 玩家 chat
+#   "{clock}: {username}: voiceline {voiceline_msg:#?}"   # F 键预设
+# {clock} 现在是 "127.8s" 或 "02:13.456";voiceline 用 Rust pretty-debug
+# `{:#?}`,enum 含 field 时会换行(例如 `Unknown(\n    0,\n)` 跨 3 行),所以
+# 不能 line-by-line 直接 regex,要先折叠续行。
+_TS_RE  = re.compile(r"^[\d.:]+s?$")
+_REC_RE = re.compile(r"^(\S+?): (.+?): (\S+) ?(.*)$")
+_WS_RE  = re.compile(r"\s+")
+
+
+def _collapse_records(text: str) -> list[str]:
+    """把 stdout 折成一条一行 — "行首像时间戳" 起新记录,其它视为续行 strip
+    后追加,中间用空格分隔。"""
+    records: list[str] = []
+    cur: str | None = None
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if not line:
+            continue
+        head = line.split(":", 1)[0].strip()
+        if _TS_RE.match(head):
+            if cur is not None:
+                records.append(cur)
+            cur = line
+        elif cur is not None:
+            cur += " " + line.strip()
+    if cur is not None:
+        records.append(cur)
+    return records
+
+
+def _clean_voiceline(payload: str) -> str:
+    """`Unknown( 0, )` 类多行 debug 折叠后形如 'Unknown( 0, )',压回 'Unknown(0)'。"""
+    payload = _WS_RE.sub(" ", payload).strip()
+    payload = re.sub(r"\(\s+", "(", payload)
+    payload = re.sub(r",?\s+\)", ")", payload)
+    return payload
 
 
 def parse_chat_log(text: str) -> list:
     """返回 [{kind, time, user, audience, msg}]。kind ∈ 'chat' | 'voice'."""
     rows = []
-    for line in text.splitlines():
-        line = line.rstrip()
-        if not line:
+    for rec in _collapse_records(text):
+        m = _REC_RE.match(rec)
+        if not m:
             continue
-        m = _VOICE_RE.match(line)
-        if m:
-            rows.append({"kind": "voice", "time": m.group(1),
-                         "user": m.group(2).strip(), "audience": "",
-                         "msg": m.group(3).strip()})
-            continue
-        m = _CHAT_RE.match(line)
-        if m and m.group(3) != "voiceline":
-            rows.append({"kind": "chat", "time": m.group(1),
-                         "user": m.group(2).strip(),
-                         "audience": m.group(3).strip(),
-                         "msg": m.group(4)})
+        ts, user, third, rest = m.group(1), m.group(2).strip(), m.group(3), m.group(4)
+        if third == "voiceline":
+            payload = _clean_voiceline(rest)
+            if not payload:
+                continue
+            rows.append({"kind": "voice", "time": ts, "user": user,
+                         "audience": "", "msg": payload})
+        else:
+            rows.append({"kind": "chat", "time": ts, "user": user,
+                         "audience": third, "msg": rest})
     return rows
 
 
 def _fmt_time(clock: str) -> str:
-    """replayshark 输出 clock 形如 '02:13.456' 或 '123.456';截到 MM:SS。"""
+    """replayshark 输出 clock 形如 '02:13.456' 或 '127.8s' / '123.456';截到 MM:SS。"""
+    clock = clock.rstrip("s")
     if ":" in clock:
         head = clock.split(".")[0]
         return head
