@@ -1308,6 +1308,11 @@ async def run_chat(replay_path: str, work_dir: str) -> str:
             await proc.wait()
             raise RuntimeError(f"聊天渲染超时({PNG_TIMEOUT}s)")
         if proc.returncode == 3:
+            # 把 render_chat 的 stderr 打到 bot log,owner 能定位 "真无聊天" vs
+            # "regex 没吃" 两种情况;用户那边仍然走静默"本局无聊天"提示
+            tail = stderr.decode('utf-8', errors='ignore').strip() if stderr else ""
+            if tail:
+                logger.warning(f"[chat] render_chat rc=3 stderr:\n{tail[-1500:]}")
             return ""   # 本局无聊天, 静默
         if proc.returncode != 0:
             tail = stderr.decode('utf-8', errors='ignore')[-500:] if stderr else "?"

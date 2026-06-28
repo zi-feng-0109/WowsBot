@@ -189,7 +189,16 @@ def main():
               file=sys.stderr); sys.exit(1)
     rows = parse_chat_log(proc.stdout)
     if not rows:
-        print("本局无聊天 / 预设语音", file=sys.stderr); sys.exit(3)
+        # 区分两种 "无聊天":真的没输出 vs 有输出但 regex 没吃。后者把样本回写
+        # 给上游 log,定位 replayshark 输出格式漂移(比如 voiceline 用了 {:#?})
+        stdout_stripped = (proc.stdout or "").strip()
+        if stdout_stripped:
+            sample = "\n".join(stdout_stripped.splitlines()[:10])
+            print(f"replayshark chat 输出 {len(stdout_stripped.splitlines())} 行但 0 行能解析,样本:\n{sample}",
+                  file=sys.stderr)
+        else:
+            print("本局无聊天 / 预设语音 (replayshark 无输出)", file=sys.stderr)
+        sys.exit(3)
     render_chat_png(args.out, rows)
     print(args.out)
 
