@@ -36,7 +36,8 @@ _state: dict = {"version": 1, "users": {}}
 
 
 def init(base_dir: str) -> None:
-    """启动时调一次。base_dir 跟 query_index / permissions 同一目录。"""
+    """启动时调一次。base_dir 跟 query_index / permissions 同一目录。
+    顺手把历史误记的超管条目清掉(规则改前漏记的)。"""
     global _state_path, _state
     _state_path = Path(base_dir) / _STATE_FILE_NAME
     _state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,6 +50,22 @@ def init(base_dir: str) -> None:
             _state = {"version": 1, "users": {}}
     else:
         _state = {"version": 1, "users": {}}
+    _prune_superusers()
+
+
+def _prune_superusers() -> None:
+    """清掉当前 SUPERUSERS 名单里的用户条目(历史误记的)。"""
+    try:
+        from . import permissions
+    except Exception:
+        return
+    users = _state.get("users") or {}
+    removed = [uid for uid in list(users) if permissions.is_super_admin(uid)]
+    if not removed:
+        return
+    for uid in removed:
+        users.pop(uid, None)
+    _save()
 
 
 def _save() -> None:
@@ -61,12 +78,20 @@ def _save() -> None:
 
 
 def record(user_id, feature: str) -> None:
-    """记一次。user_id 强转 str(QQ 号),feature 任意 tag(ship/query/line/replay/guess_start/guess_win)。"""
+    """记一次。user_id 强转 str(QQ 号),feature 任意 tag(ship/query/line/replay/guess_start/guess_win)。
+    超管 (SUPERUSERS) 被排除 — 调试/巡检 会污染"真实用户"指标。"""
     if _state_path is None:        # init 没跑过(测试 / 早期启动)直接吞掉,不抛
         return
     uid = str(user_id)
     if not uid or not feature:
         return
+    # 排除超管 (晚 import 避循环依赖)
+    try:
+        from . import permissions
+        if permissions.is_super_admin(uid):
+            return
+    except Exception:
+        pass
     now = time.time()
     u = _state["users"].setdefault(uid, {
         "first_seen_ts": now,
