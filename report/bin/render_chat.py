@@ -65,24 +65,52 @@ _UNKNOWN_CHAT   = (250, 230, 170)   # 暖黄 — 战报 JSON 缺失时的 chat f
 _UNKNOWN_VOICE  = (110, 195, 255)   # 浅蓝 — 同上, voiceline fallback
 
 
+_ID_RE = re.compile(r"[A-Za-z_]+\((-?\d+)\)")
+
+
+def _strip_id(s) -> int:
+    """'AccountId(123)' / 'EntityId(456)' → 123;数字/空/None → 0。"""
+    if s is None: return 0
+    if isinstance(s, int): return s
+    s = str(s)
+    m = _ID_RE.match(s)
+    if m: return int(m.group(1))
+    try: return int(s)
+    except ValueError: return 0
+
+
+# 死亡原因中文映射(跟 render_battle_report 保持一致,cause 字段的 debug wrap
+# 形如 "AerialBomb"/"ApShell"/... — 已经被 replayshark 剥掉了 enum 前缀)
+_DEATH_CAUSE_CN = {
+    "ApShell": "AP", "HeShell": "HE", "CsShell": "CS",
+    "Torpedo": "鱼雷", "AerialTorpedo": "机雷", "AerialRocket": "火箭",
+    "AerialBomb": "炸弹", "DiveBomber": "俯冲", "SkipBomber": "跳炸",
+    "AerialDepthCharge": "深弹", "DepthCharge": "深弹",
+    "Fire": "燃烧", "Flooding": "进水", "Ram": "撞击", "Terrain": "撞礁",
+    "Detonate": "弹药库", "SecondaryCaliber": "副炮", "AntiAir": "副炮",
+    "SeaMine": "水雷", "Health": "血量",
+}
+
+
 def load_player_meta(json_path: str | None) -> dict:
-    """从战报 JSON 建 name → {ship_zh, relation}。
-    JSON 缺失/损坏/无 players 段 → 返空 dict,render 时退化到中性色 + 纯用户名。
-    key 用玩家 username 字符串(replayshark 输出的也是 name 字段,亚服数字 ID
-    玩家两边都是 "348616720" 这种字符串,天然匹配)。"""
+    """读战报 JSON,返回 {"by_name": {name: info}, "by_eid": {eid: info},
+    "deaths": [kill_event]}。查不到 JSON → 全空。
+    info = {"name", "ship", "relation"}。
+    kill_event = {"time_secs", "killer_info"|None, "victim_info", "cause"}。"""
+    empty = {"by_name": {}, "by_eid": {}, "deaths": []}
     if not json_path or not Path(json_path).is_file():
-        return {}
+        return empty
     try:
         raw = json.load(open(json_path, encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return {}
+        return empty
     self_name = (raw.get("match") or {}).get("self_player_name") or ""
     self_team = None
     for p in raw.get("players", []) or []:
         if p.get("name") == self_name:
             self_team = p.get("team_id")
             break
-    out = {}
+    by_name, by_eid = {}, {}
     for p in raw.get("players", []) or []:
         name = p.get("name")
         if not name:
@@ -90,7 +118,6 @@ def load_player_meta(json_path: str | None) -> dict:
         ship = p.get("ship") or {}
         ship_idx = ship.get("index") or ""
         ship_raw = ship.get("name") or ""
-        # 复用战报的 IDS_<index> → zh_sg.mo 翻译;查不到 fallback 原名。
         ship_zh = _translate(f"IDS_{ship_idx}", ship_raw) if ship_idx else ship_raw
         team = p.get("team_id")
         if name == self_name:
@@ -101,15 +128,81 @@ def load_player_meta(json_path: str | None) -> dict:
             relation = "enemy"
         else:
             relation = "unknown"
-        out[name] = {"ship": ship_zh, "relation": relation}
-    return out
+        info = {"name": name, "ship": ship_zh, "relation": relation}
+        by_name[name] = info
+        eid = _strip_id(p.get("vehicle_entity_id") or p.get("entity_id"))
+        if eid:
+            by_eid[eid] = info
+
+    deaths = []
+    for d in raw.get("deaths") or []:
+        vid = _strip_id(d.get("victim_entity_id"))
+        kid = _strip_id(d.get("killer_entity_id"))
+        victim = by_eid.get(vid)
+        if not victim:
+            continue
+        killer = by_eid.get(kid) if kid else None
+        cause_raw = str(d.get("cause") or "")
+        # replayshark 的 cause 可能带 debug wrap "Wrap(\"ApShell\")",简单剥离
+        cause_clean = cause_raw.strip('"').split("(")[-1].strip('")')
+        cause = _DEATH_CAUSE_CN.get(cause_clean, cause_clean)
+        # 自损:killer == victim(火/进水扩散无 killer 或者 killer 就是自己)
+        if killer and killer["name"] == victim["name"]:
+            killer = None
+        deaths.append({
+            "time_secs": float(d.get("time_secs") or 0.0),
+            "killer": killer, "victim": victim, "cause": cause,
+        })
+    return {"by_name": by_name, "by_eid": by_eid, "deaths": deaths}
 
 
-def _relation_color(relation: str, kind: str) -> tuple:
+def _relation_color(relation: str, kind: str = "chat") -> tuple:
     if relation == "self":     return _COLOR_SELF
     if relation == "friendly": return _COLOR_FRIENDLY
     if relation == "enemy":    return _COLOR_ENEMY
     return _UNKNOWN_VOICE if kind == "voice" else _UNKNOWN_CHAT
+
+
+def _parse_clock_to_secs(clock: str) -> float:
+    """'127.8s' / '02:13.456' / '133.456' → 秒数 (float)。parse 失败返 0.0。"""
+    s = clock.rstrip("s")
+    try:
+        if ":" in s:
+            mm, rest = s.split(":", 1)
+            return int(mm) * 60 + float(rest)
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+def _draw_kill_row(draw, x: int, y: int, r: dict, fonts: dict) -> None:
+    """击杀行分段多色: killer 用其 relation 色, victim 用其 relation 色,
+    连接词 + cause 用 dim。killer=None 意味自损/环境(火/进水/撞礁),用 dim。"""
+    killer = r.get("killer")
+    victim = r.get("victim") or {}
+    victim_color = _relation_color(victim.get("relation", "unknown"))
+    victim_text = f"{victim.get('name', '?')} [{victim.get('ship', '?')}]"
+    if killer:
+        killer_color = _relation_color(killer.get("relation", "unknown"))
+        killer_text = f"{killer.get('name', '?')} [{killer.get('ship', '?')}]"
+    else:
+        killer_color = GAME_DIM
+        killer_text = "环境/自损"
+    tag = "[K] "
+    arrow = " 击沉 "
+    cause = f"  ({r.get('cause', '?')})"
+
+    f = fonts["msg"]
+    # Tag
+    draw.text((x, y), tag, GAME_DIM, f); x += int(f.getlength(tag))
+    # Killer
+    draw.text((x, y), killer_text, killer_color, f); x += int(f.getlength(killer_text))
+    # Arrow
+    draw.text((x, y), arrow, GAME_DIM, f); x += int(f.getlength(arrow))
+    # Victim
+    draw.text((x, y), victim_text, victim_color, f); x += int(f.getlength(victim_text))
+    # Cause
+    draw.text((x, y), cause, GAME_DIM, f)
 
 # replayshark chat 输出格式(见 wows-replays/src/analyzer/chat.rs):
 #   "{clock}: {username}: {audience} {message}"           # 玩家 chat
@@ -152,23 +245,41 @@ def _clean_voiceline(payload: str) -> str:
 
 
 def parse_chat_log(text: str) -> list:
-    """返回 [{kind, time, user, audience, msg}]。kind ∈ 'chat' | 'voice'."""
+    """返回 [{kind, time, _secs, user, audience, msg}]。kind ∈ 'chat' | 'voice'。
+    _secs 是 float 秒数,用来跟击杀事件按时间轴合并 sort。"""
     rows = []
     for rec in _collapse_records(text):
         m = _REC_RE.match(rec)
         if not m:
             continue
         ts, user, third, rest = m.group(1), m.group(2).strip(), m.group(3), m.group(4)
+        secs = _parse_clock_to_secs(ts)
         if third == "voiceline":
             payload = _clean_voiceline(rest)
             if not payload:
                 continue
-            rows.append({"kind": "voice", "time": ts, "user": user,
+            rows.append({"kind": "voice", "time": ts, "_secs": secs, "user": user,
                          "audience": "", "msg": payload})
         else:
-            rows.append({"kind": "chat", "time": ts, "user": user,
+            rows.append({"kind": "chat", "time": ts, "_secs": secs, "user": user,
                          "audience": third, "msg": rest})
     return rows
+
+
+def merge_kills_into_timeline(rows: list, deaths: list) -> list:
+    """把击杀事件转成 kind='kill' 的 row,跟 chat/voice rows 按 _secs 合并 sort。"""
+    if not deaths:
+        return rows
+    kill_rows = []
+    for d in deaths:
+        secs = d["time_secs"]
+        # kill row 的 time 字符串用 "MM:SS.f" 风格,跟 chat 保持一致 (_fmt_time 会截)
+        clock = f"{int(secs // 60):02d}:{secs % 60:05.2f}"
+        kill_rows.append({
+            "kind": "kill", "time": clock, "_secs": secs,
+            "killer": d["killer"], "victim": d["victim"], "cause": d["cause"],
+        })
+    return sorted(rows + kill_rows, key=lambda r: r["_secs"])
 
 
 def _fmt_time(clock: str) -> str:
@@ -186,6 +297,7 @@ def _fmt_time(clock: str) -> str:
 
 def render_chat_png(out_path: str, rows: list, player_meta: dict | None = None) -> str:
     player_meta = player_meta or {}
+    by_name = player_meta.get("by_name", {}) if isinstance(player_meta, dict) else {}
     fonts = {
         "title": _font(CJK_FONT, 22),
         "sub":   _font(CJK_FONT, 14),
@@ -203,6 +315,7 @@ def render_chat_png(out_path: str, rows: list, player_meta: dict | None = None) 
     chat_n_empty    = sum(1 for r in rows if _is_empty_chat(r))
     voice_n_known   = sum(1 for r in rows if r["kind"] == "voice" and not r["msg"].startswith("Unknown("))
     voice_n_unknown = sum(1 for r in rows if _is_unknown_voice(r))
+    kill_n          = sum(1 for r in rows if r["kind"] == "kill")
 
     n = len(visible)
     body_h = max(_ROW_H, n * _ROW_H + 12)
@@ -215,7 +328,8 @@ def render_chat_png(out_path: str, rows: list, player_meta: dict | None = None) 
     draw.rectangle([0, 0, W, _HEADER_H], fill=GAME_PANEL)
     draw.line([0, _HEADER_H, W, _HEADER_H], fill=GAME_GOLD, width=2)
     draw.text((PAD, 10), "聊天记录", GAME_TEXT, fonts["title"])
-    draw.text((PAD, 40), f"玩家发言 {chat_n}  ·  预设语音 {voice_n_known}",
+    kill_seg = f"  ·  击沉 {kill_n}" if kill_n else ""
+    draw.text((PAD, 40), f"玩家发言 {chat_n}  ·  预设语音 {voice_n_known}{kill_seg}",
               GAME_DIM, fonts["sub"])
     sub_y = 60
     if voice_n_unknown:
@@ -238,26 +352,29 @@ def render_chat_png(out_path: str, rows: list, player_meta: dict | None = None) 
         x = PAD
         draw.text((x, y), _fmt_time(r["time"]), GAME_DIM, fonts["time"])
         x += time_col_w
-        info = player_meta.get(r["user"], {})
-        relation = info.get("relation", "unknown")
-        ship = info.get("ship") or ""
-        user_color = _relation_color(relation, r["kind"])
-        user_text = f"{r['user']} [{ship}]" if ship else r["user"]
-        if fonts["user"].getlength(user_text) > user_col_w - 8:
-            while fonts["user"].getlength(user_text + "…") > user_col_w - 8 and len(user_text) > 1:
-                user_text = user_text[:-1]
-            user_text += "…"
-        draw.text((x, y), user_text, user_color, fonts["user"])
-        x += user_col_w
-        # 不用 emoji — CJK_FONT (Noto Sans CJK) 不带 emoji 字形,会变 □ 豆腐
-        prefix = "[F] " if r["kind"] == "voice" else ""
-        msg = prefix + r["msg"]
-        # 简单截断,不做 wrap(过长消息也几乎都在 100 字符内)
-        if fonts["msg"].getlength(msg) > W - x - PAD:
-            while fonts["msg"].getlength(msg + "…") > W - x - PAD and len(msg) > 1:
-                msg = msg[:-1]
-            msg += "…"
-        draw.text((x, y), msg, user_color, fonts["msg"])
+
+        if r["kind"] == "kill":
+            _draw_kill_row(draw, x, y, r, fonts)
+        else:
+            info = by_name.get(r["user"], {})
+            relation = info.get("relation", "unknown")
+            ship = info.get("ship") or ""
+            user_color = _relation_color(relation, r["kind"])
+            user_text = f"{r['user']} [{ship}]" if ship else r["user"]
+            if fonts["user"].getlength(user_text) > user_col_w - 8:
+                while fonts["user"].getlength(user_text + "…") > user_col_w - 8 and len(user_text) > 1:
+                    user_text = user_text[:-1]
+                user_text += "…"
+            draw.text((x, y), user_text, user_color, fonts["user"])
+            x += user_col_w
+            # 不用 emoji — CJK_FONT (Noto Sans CJK) 不带 emoji 字形,会变 □ 豆腐
+            prefix = "[F] " if r["kind"] == "voice" else ""
+            msg = prefix + r["msg"]
+            if fonts["msg"].getlength(msg) > W - x - PAD:
+                while fonts["msg"].getlength(msg + "…") > W - x - PAD and len(msg) > 1:
+                    msg = msg[:-1]
+                msg += "…"
+            draw.text((x, y), msg, user_color, fonts["msg"])
         y += _ROW_H
 
     _draw_footer(draw, 0, H - FOOTER_H, W, FOOTER_H)
@@ -307,6 +424,7 @@ def main():
             print("本局无聊天 / 预设语音 (replayshark 无输出)", file=sys.stderr)
         sys.exit(3)
     player_meta = load_player_meta(args.report_json)
+    rows = merge_kills_into_timeline(rows, player_meta.get("deaths", []))
     render_chat_png(args.out, rows, player_meta)
     print(args.out)
 
