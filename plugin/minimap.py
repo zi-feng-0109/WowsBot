@@ -978,10 +978,12 @@ async def process_queue(bot: Bot):
                 else:
                     logger.warning(f"未找到 JSON,跳过战犯: {json_path}")
 
-            # 聊天 PNG (本局玩家发言 + F 键预设语音,独立成图;不依赖 JSON,直接读 replay)
+            # 聊天 PNG (本局玩家发言 + F 键预设语音,独立成图;有战报 JSON 就
+            # 顺带带船中文名 + 敌友着色,没有则退化到纯用户名 + 中性色)
             if on["聊天"]:
                 try:
-                    chat_png = await run_chat(replay_path, user_dir)
+                    chat_png = await run_chat(replay_path, user_dir,
+                                              json_path if os.path.isfile(json_path) else None)
                     if chat_png:  # 空串 = 本局无聊天 + 无 F 键预设
                         msg = (MessageSegment.reply(message_id)
                                + MessageSegment.image(f"file://{chat_png}"))
@@ -1290,14 +1292,16 @@ async def run_criminals(json_path: str, work_dir: str) -> str:
         raise RuntimeError(f"找不到战犯渲染脚本: {RENDER_CRIMINALS_PY}")
 
 
-async def run_chat(replay_path: str, work_dir: str) -> str:
+async def run_chat(replay_path: str, work_dir: str, json_path: str | None = None) -> str:
     """跑 render_chat.py 出本局聊天 PNG。
-    rc=3 = 本局无任何聊天(replay 安静),返空串让上层降级静默。"""
+    json_path 给了 → 每行聊天带船中文名 + 敌友着色;None / 文件不存在 → 退化到
+    纯用户名 + 中性色。 rc=3 = 本局无任何聊天,返空串让上层降级静默。"""
     out_png = os.path.join(work_dir, f"{Path(replay_path).stem}.chat.png")
     py = os.environ.get("WOWS_PYTHON") or sys.executable
+    extra_args = ["--report-json", json_path] if json_path and os.path.isfile(json_path) else []
     try:
         proc = await asyncio.create_subprocess_exec(
-            py, RENDER_CHAT_PY, replay_path, out_png,
+            py, RENDER_CHAT_PY, replay_path, out_png, *extra_args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

@@ -1,24 +1,21 @@
 # report/bin/render_chat.py
 """render_chat.py — 本局聊天记录 PNG。
 
-库用法 (bot 直接 import 不实用,走 CLI):
 CLI 用法:
-    render_chat.py <replay.wowsreplay> <out.png>
+    render_chat.py <replay.wowsreplay> <out.png> [--report-json <path>]
 
 依赖 replayshark binary(WOWS_REPLAYSHARK_BIN env,默认
-/opt/wows-toolkit/target/release/replayshark)。replayshark chat 子命令
-只解 chat / voiceline packet,不需要 GameParams。
+/opt/wows-toolkit/target/release/replayshark)。可选 --report-json 是
+wows_full_report 写盘的战报 JSON,拿到 → 每行带船中文名 + 敌友着色。
+拿不到就退化到纯用户名 + 中性色。
 
 返回码:
   0 = 成功(渲了 PNG)
-  3 = 本局没任何聊天(replay 安静,故意不发图,minimap.py 静默跳过)
+  3 = 本局没任何聊天(replay 安静,minimap.py 静默跳过)
   其他 = 错误
-
-样式:
-  时间戳 (灰)   玩家名 (亮)   消息正文 (白)
-  voiceline 行带 📣 前缀,自动用浅蓝区分(WoWs 里 F 键预设/警告)。
 """
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -30,6 +27,7 @@ from render_query import (  # noqa: E402
     GAME_BG, GAME_PANEL, GAME_PANEL_ALT, GAME_TEXT, GAME_DIM, GAME_GOLD,
     CJK_FONT, MONO_FONT, W, PAD, FOOTER_H, _font, _draw_footer,
 )
+from render_battle_report import t as _translate  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
 REPLAYSHARK = os.environ.get(
@@ -59,8 +57,59 @@ def find_latest_extracted() -> str | None:
 
 _HEADER_H = 112  # 给副标题留三行 (玩家/语音统计 + upstream bug 提示 + 系统消息提示)
 _ROW_H    = 26
-_VOICE_COLOR  = (110, 195, 255)   # 浅蓝
-_CHAT_COLOR   = (250, 230, 170)   # 暖黄 玩家名
+# relation → 用户名+船名着色。self/friendly/enemy 三档,查不到走 _UNKNOWN_*。
+_COLOR_SELF     = (255, 220, 90)    # 亮金
+_COLOR_FRIENDLY = (120, 220, 140)   # 淡绿 (WoWs 队友色)
+_COLOR_ENEMY    = (255, 130, 110)   # 橙红 (WoWs 敌方色)
+_UNKNOWN_CHAT   = (250, 230, 170)   # 暖黄 — 战报 JSON 缺失时的 chat fallback
+_UNKNOWN_VOICE  = (110, 195, 255)   # 浅蓝 — 同上, voiceline fallback
+
+
+def load_player_meta(json_path: str | None) -> dict:
+    """从战报 JSON 建 name → {ship_zh, relation}。
+    JSON 缺失/损坏/无 players 段 → 返空 dict,render 时退化到中性色 + 纯用户名。
+    key 用玩家 username 字符串(replayshark 输出的也是 name 字段,亚服数字 ID
+    玩家两边都是 "348616720" 这种字符串,天然匹配)。"""
+    if not json_path or not Path(json_path).is_file():
+        return {}
+    try:
+        raw = json.load(open(json_path, encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    self_name = (raw.get("match") or {}).get("self_player_name") or ""
+    self_team = None
+    for p in raw.get("players", []) or []:
+        if p.get("name") == self_name:
+            self_team = p.get("team_id")
+            break
+    out = {}
+    for p in raw.get("players", []) or []:
+        name = p.get("name")
+        if not name:
+            continue
+        ship = p.get("ship") or {}
+        ship_idx = ship.get("index") or ""
+        ship_raw = ship.get("name") or ""
+        # 复用战报的 IDS_<index> → zh_sg.mo 翻译;查不到 fallback 原名。
+        ship_zh = _translate(f"IDS_{ship_idx}", ship_raw) if ship_idx else ship_raw
+        team = p.get("team_id")
+        if name == self_name:
+            relation = "self"
+        elif team is not None and self_team is not None and team == self_team:
+            relation = "friendly"
+        elif team is not None and self_team is not None:
+            relation = "enemy"
+        else:
+            relation = "unknown"
+        out[name] = {"ship": ship_zh, "relation": relation}
+    return out
+
+
+def _relation_color(relation: str, kind: str) -> tuple:
+    if relation == "self":     return _COLOR_SELF
+    if relation == "friendly": return _COLOR_FRIENDLY
+    if relation == "enemy":    return _COLOR_ENEMY
+    return _UNKNOWN_VOICE if kind == "voice" else _UNKNOWN_CHAT
 
 # replayshark chat 输出格式(见 wows-replays/src/analyzer/chat.rs):
 #   "{clock}: {username}: {audience} {message}"           # 玩家 chat
@@ -135,7 +184,8 @@ def _fmt_time(clock: str) -> str:
         return clock[:5]
 
 
-def render_chat_png(out_path: str, rows: list) -> str:
+def render_chat_png(out_path: str, rows: list, player_meta: dict | None = None) -> str:
+    player_meta = player_meta or {}
     fonts = {
         "title": _font(CJK_FONT, 22),
         "sub":   _font(CJK_FONT, 14),
@@ -181,20 +231,24 @@ def render_chat_png(out_path: str, rows: list) -> str:
     # Body
     y = _HEADER_H + 6
     time_col_w = 60
-    user_col_w = 200
+    user_col_w = 300   # 加宽 — 装得下 "英文长 ID · 中文长船名"
     for i, r in enumerate(visible):
         if i % 2 == 1:
             draw.rectangle([0, y - 2, W, y + _ROW_H - 4], fill=GAME_PANEL_ALT)
         x = PAD
         draw.text((x, y), _fmt_time(r["time"]), GAME_DIM, fonts["time"])
         x += time_col_w
-        user_color = _VOICE_COLOR if r["kind"] == "voice" else _CHAT_COLOR
-        user = r["user"]
-        if fonts["user"].getlength(user) > user_col_w - 8:
-            while fonts["user"].getlength(user + "…") > user_col_w - 8 and len(user) > 1:
-                user = user[:-1]
-            user += "…"
-        draw.text((x, y), user, user_color, fonts["user"])
+        info = player_meta.get(r["user"], {})
+        relation = info.get("relation", "unknown")
+        ship = info.get("ship") or ""
+        user_color = _relation_color(relation, r["kind"])
+        # user + · + ship,ship 用 dim(灰白降饱和,避免抢戏)。查不到船名就纯 user。
+        user_text = f"{r['user']} · {ship}" if ship else r["user"]
+        if fonts["user"].getlength(user_text) > user_col_w - 8:
+            while fonts["user"].getlength(user_text + "…") > user_col_w - 8 and len(user_text) > 1:
+                user_text = user_text[:-1]
+            user_text += "…"
+        draw.text((x, y), user_text, user_color, fonts["user"])
         x += user_col_w
         # 不用 emoji — CJK_FONT (Noto Sans CJK) 不带 emoji 字形,会变 □ 豆腐
         prefix = "[F] " if r["kind"] == "voice" else ""
@@ -216,6 +270,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("replay")
     ap.add_argument("out")
+    ap.add_argument("--report-json", default=None,
+                    help="可选:战报 JSON 路径,用来给每条聊天带船中文名 + 敌友着色")
     args = ap.parse_args()
     if not Path(args.replay).is_file():
         print(f"replay 不存在: {args.replay}", file=sys.stderr); sys.exit(2)
@@ -251,7 +307,8 @@ def main():
         else:
             print("本局无聊天 / 预设语音 (replayshark 无输出)", file=sys.stderr)
         sys.exit(3)
-    render_chat_png(args.out, rows)
+    player_meta = load_player_meta(args.report_json)
+    render_chat_png(args.out, rows, player_meta)
     print(args.out)
 
 
