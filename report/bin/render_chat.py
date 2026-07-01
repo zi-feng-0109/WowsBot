@@ -242,7 +242,7 @@ def render_chat_png(out_path: str, rows: list, player_meta: dict | None = None) 
         relation = info.get("relation", "unknown")
         ship = info.get("ship") or ""
         user_color = _relation_color(relation, r["kind"])
-        user_text = f"{r['user']}[{ship}]" if ship else r["user"]
+        user_text = f"{r['user']} [{ship}]" if ship else r["user"]
         if fonts["user"].getlength(user_text) > user_col_w - 8:
             while fonts["user"].getlength(user_text + "…") > user_col_w - 8 and len(user_text) > 1:
                 user_text = user_text[:-1]
