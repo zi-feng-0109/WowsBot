@@ -17,3 +17,18 @@ __pycache__/
 .vscode/
 *.swp
 *.bak
+
+# 内部工作文档 (本地留档,不进远端);每条显式路径,
+# 不用 docs/superpowers/** 通配,免得挡住以后新写的 spec
+docs/PROGRESS_2026-05-20.md
+docs/superpowers/plans/2026-05-20-consumables-chart.md
+docs/superpowers/plans/2026-05-21-bot-function-menu.md
+docs/superpowers/plans/2026-06-11-ship-armor-card.md
+docs/superpowers/specs/2026-05-20-consumables-chart-design.md
+docs/superpowers/specs/2026-05-21-bot-function-menu-design.md
+docs/superpowers/specs/2026-06-10-tech-tree-line-design.md
+docs/superpowers/specs/2026-06-11-ship-armor-card-design.md
+docs/superpowers/specs/2026-06-11-ap-penetration-command-design.md
+docs/superpowers/specs/2026-06-11-armor-3d-model-design.md
+docs/superpowers/specs/2026-06-11-win-followups.md
+docs/superpowers/specs/2026-06-12-bili-subscription-design.md
