@@ -243,12 +243,15 @@ nb create   # 选 simple / onebot-v11
 cp /opt/wows-bot/plugin/*.py ~/my-bot/src/plugins/
 ```
 
-当前包含 8 个文件:
-- `minimap.py` — 主入口 (replay → MP4 + 战报 + 复盘 + 分析)
-- `permissions.py` — 群级开关 / 全局黑名单
-- `query_index.py` — `/查询` 索引 (战报 → 玩家)
+当前包含 11 个文件:
+- `minimap.py` — 主入口 (replay → 全套渲染;所有命令 handler)
+- `permissions.py` — 群级开关 / 全局黑名单 / 超管识别
+- `query_index.py` — `/查询` 索引 (战报 msg_id → 玩家列表)
 - `ship_index.py` — `/船` 战舰名 → 数值查找/消歧 (读 ships.json)
+- `tech_tree.py` — `/线` 科技树重建 (从 ships.json 的 next_ships)
 - `render_mode.py` — `/sa` 渲染模式 (普通/极简/详细)
+- `render_backend.py` — `/渲染模式` MP4 渲染后端切换 (CPU/GPU)
+- `user_stats.py` — `/用户统计` 数据层 (排除超管)
 - `version.py` — 版本号工具,菜单/战报 footer 共用
 - `wg_api.py` — vortex 接口封装 (`/查询` 拉生涯数据)
 - `announcement.py` — 超管 `/全群公告` `/定向公告` (见 §5.2.1)
@@ -336,8 +339,11 @@ export WOWS_REPORT_FULL_CMD=/your/path/report/bin/wows_full_report     # 战报+
 export WOWS_REPORT_BATTLE_CMD=/your/path/report/bin/wows_report        # 仅战报 PNG
 export WOWS_REPORT_DAMAGE_CMD=/your/path/report/bin/wows_damage_report # 仅复盘 PNG
 export WOWS_ANALYZE_CMD=/your/path/report/bin/wows_analyze
+export WOWS_RENDER_CRIMINALS=/your/path/report/bin/render_criminals.py  # 战犯榜 (subprocess)
+export WOWS_RENDER_CHAT=/your/path/report/bin/render_chat.py            # 聊天记录 (subprocess)
 export WOWS_REPLAY_BASEDIR=~/wows-bot-replay   # 中转目录,bot 自动建/删
-export WOWS_SHIPS_JSON=                        # /船 数值字典路径,默认 report/data/ships.json
+export WOWS_SHIPS_JSON=                        # /船 /装甲分析 /线 用,默认 report/data/ships.json
+export WOWS_ARMOR_JSON=                        # /船 装甲 /装甲分析 用,默认 report/data/armor.json
 export WOWS_TOGGLE_FILE=                       # toggle_state.json 路径,默认 $WOWS_REPLAY_BASEDIR/
 export WOWS_MP4_TIMEOUT=600                    # MP4 超时秒数
 export WOWS_PNG_TIMEOUT=300                    # PNG 超时秒数
@@ -377,38 +383,46 @@ SUPERUSERS=["你的QQ号"]
 同样在 `EssexBot/.env` 里:
 
 ```
-WOWS_BOT_VERSION=1.0.1
+WOWS_BOT_VERSION=1.3.0
 ```
 
 NoneBot 启动时 dotenv 会把 .env 里的键全部塞进 `os.environ`,所以这个变量
 同时被 **菜单 footer** (`plugin/version.py` → `version_str()`) 和
 **战报 / 复盘 PNG footer** (`report/bin/render_*.py` 读 `WOWS_BOT_VERSION`) 共用,
-不会出现菜单 v1.0.1、战报 v1.0.0 之类的不一致。
+不会出现菜单 v1.3.0、战报 v1.2.0 之类的不一致。
 
 没设这一行时,`plugin/version.py` 兜底用 `_DEFAULT_VERSION` (代码里最新发布号),
 战报 footer 直接不显示版本字段。日常发版只改这一行 + `sudo systemctl restart wows-bot` 即可,
 不必动代码。
 
-### 7.2 4 个 feature 开关
+### 7.2 6 个 feature 开关
 
-每个聊天 (群 / 私聊) 默认 4 个 feature 都开:
+每个聊天 (群 / 私聊) 独立开关,默认值见 `plugin/permissions.DEFAULT_ENABLED`:
 
-- `视频` —— MP4 战斗回放
-- `战报` —— 全队成绩单 PNG
-- `复盘` —— 主角伤害分布 PNG
-- `分析` —— DeepSeek 文字复盘 (需 §5.3 配 key)
+- `视频` (默认开) —— MP4 战斗回放
+- `战报` (默认开) —— 全队成绩单 PNG
+- `复盘` (默认开) —— 主角伤害分布 PNG
+- `分析` (默认关) —— DeepSeek 文字复盘 (需 §5.3 配 key)
+- `战犯` (默认关) —— 败方战犯榜 PNG
+- `聊天` (默认关) —— 本局聊天记录 + 击杀时间轴 PNG
 
 群管 / 群主 / 超管可用 `/视频 开|关|状态`、`/战报 开|关|状态` 等命令切换本群。
-丢一份 `.wowsreplay` 进群时,bot 只跑当前**开着的**输出 —— 4 个全关就静默跳过。
+丢一份 `.wowsreplay` 进群时,bot 只跑当前**开着的**输出 —— 全关就静默跳过。
 
-### 7.3 超管命令 `/sa`
+### 7.3 超管命令 `/sa` + 其它超管命令
 
 ```
-/sa list                          # 看全局黑名单
-/sa ban <视频|战报|复盘|分析>      # 全局禁用某 feature (所有群都开不了)
-/sa unban <feature>               # 解禁
-/sa stats                         # 各 feature 在所有群里的开关分布
+/sa list                                # 看全局黑名单
+/sa ban <视频|战报|复盘|分析|战犯|聊天>  # 全局禁用某 feature (所有群都开不了)
+/sa unban <feature>                     # 解禁
+/sa stats                               # 各 feature 在所有群里的开关分布
 ```
+
+其它仅超管可见的命令:
+
+- `/渲染模式 cpu|gpu|状态` —— 切换 MP4 渲染后端 (默认 CPU;有 GPU 且驱动装好切 gpu 更快)
+- `/用户统计` —— 触发过非菜单功能的用户榜 PNG (**已排除超管自身**,避免调试污染指标)
+- `/全群公告 <文本>` / `/定向公告 <群号> <文本>` —— 广播 (见 §5.2.1 白名单配置)
 
 ### 7.4 状态文件
 
