@@ -35,6 +35,7 @@ from . import query_index
 from . import render_backend
 from . import render_mode
 from . import wg_api
+from . import wg_online
 from . import ship_index
 from . import tech_tree
 from . import user_stats
@@ -707,6 +708,47 @@ def _render_line_sync(out_path: str, tree: dict):
         _sys.path.insert(0, bin_path)
     from render_line import render_line_png
     render_line_png(out_path, tree)
+
+
+# ====== /在线 —— WG 三服在线人数 ==============================================
+# WGN cross-product /wgn/servers/info/;RU (Lesta) 和 CN (360) 都独立不覆盖。
+
+online_cmd = on_command("在线", aliases={"online", "人数"},
+                        priority=5, block=True)
+
+
+@online_cmd.handle()
+async def _online(bot: Bot, event: MessageEvent):
+    if not wg_online.is_configured():
+        await online_cmd.finish("未配置 WG application_id (WOWS_WG_APP_ID)")
+
+    try:
+        data = await wg_online.fetch_all(timeout=6.0)
+    except Exception as e:
+        logger.error(f"/在线 查询失败: {e}")
+        await online_cmd.finish(f"⚠️ 查询失败: {e}")
+
+    lines = ["🌍 WoWs 在线人数"]
+    total = 0
+    ok_count = 0
+    # 按值降序显示 (人多的在前),失败的在后
+    ordered = sorted(data.items(), key=lambda kv: (kv[1] is None, -(kv[1] or 0)))
+    for realm, n in ordered:
+        name = wg_online.display_name(realm)
+        if n is None:
+            lines.append(f"  {name}  查询失败")
+        else:
+            lines.append(f"  {name}  {n:,}")
+            total += n
+            ok_count += 1
+    if ok_count > 1:
+        lines.append(f"  ─────────")
+        lines.append(f"  合计     {total:,}")
+    lines.append("")
+    lines.append("(CN 360 服 / RU Lesta 独立运营,不含在内)")
+
+    user_stats.record(event.get_user_id(), "online")
+    await online_cmd.finish("\n".join(lines))
 
 
 @replay_handler.handle()

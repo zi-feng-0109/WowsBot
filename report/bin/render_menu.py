@@ -224,7 +224,7 @@ def render_menu_png(out_path: str, *, scope: str, ident: str,
         + 30 + 22 + (n_features + n_guess_row) * ROW_H + SECTION_GAP  # 当前功能 (含列头 22px)
         + 30 + 2 * ROW_H + SECTION_GAP                           # 使用方法
         + 30 + 22 + n_games * 28 + SECTION_GAP                   # 游戏 (含表头 22px)
-        + 30 + 22 + (8 if sa_visible else 7) * 28 + SECTION_GAP  # 全部指令 (含表头 22px)
+        + 30 + 22 + (9 if sa_visible else 8) * 28 + SECTION_GAP  # 全部指令 (含表头 22px)
         + 30 + max(1, n_planned) * 24 + SECTION_GAP              # 规划中
         + FOOTER_H + PAD
     )
@@ -315,6 +315,7 @@ def render_menu_png(out_path: str, *, scope: str, ident: str,
         ("/查询 <编号>",         "引用战报查玩家生涯水平", "任何人"),
         ("/船 <中文舰名>",        "查战舰数值卡 + 装甲分面",  "任何人"),
         ("/线 <国家> <舰种>",     "查整条科技树线路",       "任何人"),
+        ("/在线",                "WG 三服 (亚/欧/美) 当前在线人数", "任何人"),
         ("/装甲分析 <中文舰名>",   "防御视角:各板被多少口径击穿", "任何人"),
     ]
     if sa_visible:
