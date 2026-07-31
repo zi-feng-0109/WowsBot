@@ -47,27 +47,36 @@ def is_configured() -> bool:
 
 
 async def _fetch_one(session: aiohttp.ClientSession,
-                     realm: str, timeout: float) -> tuple[str, Optional[int]]:
+                     realm: str, timeout: float,
+                     retries: int = 2, retry_delay: float = 0.6
+                     ) -> tuple[str, Optional[int]]:
     host, _ = _WGN_HOSTS[realm]
     url = f"https://{host}/wgn/servers/info/"
     app = _app_id()
     if not app:
         return realm, None
-    try:
-        async with session.get(url,
-                                params={"application_id": app, "game": "wows"},
-                                timeout=aiohttp.ClientTimeout(total=timeout)) as r:
-            data = await r.json(content_type=None)
-        if data.get("status") != "ok":
-            logger.warning(f"WGN {realm} 返回 error: {data.get('error')}")
-            return realm, None
-        arr = (data.get("data") or {}).get("wows") or []
-        if not arr:
-            return realm, None
-        return realm, int(arr[0].get("players_online") or 0)
-    except Exception as e:
-        logger.warning(f"WGN {realm} 请求失败: {e}")
-        return realm, None
+    # WGN 聚合接口偶发 SOURCE_NOT_AVAILABLE (某服数据源那一刻拉不到) —— 瞬时抖动,
+    # 每次哪个服挂是随机的,重试几次基本就能拿到。
+    last = None
+    for attempt in range(retries + 1):
+        try:
+            async with session.get(url,
+                                    params={"application_id": app, "game": "wows"},
+                                    timeout=aiohttp.ClientTimeout(total=timeout)) as r:
+                data = await r.json(content_type=None)
+            if data.get("status") == "ok":
+                arr = (data.get("data") or {}).get("wows") or []
+                if arr:
+                    return realm, int(arr[0].get("players_online") or 0)
+                last = "empty data"
+            else:
+                last = data.get("error")
+        except Exception as e:
+            last = repr(e)
+        if attempt < retries:
+            await asyncio.sleep(retry_delay)
+    logger.warning(f"WGN {realm} {retries + 1} 次均失败: {last}")
+    return realm, None
 
 
 async def fetch_all(timeout: float = 6.0) -> dict[str, Optional[int]]:
