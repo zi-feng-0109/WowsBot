@@ -26,8 +26,20 @@ _WGN_HOSTS = {
 
 
 def _app_id() -> Optional[str]:
-    """WG application_id。跟 build_ships_json 复用同一 env。"""
-    return os.environ.get("WOWS_WG_APP_ID") or None
+    """WG application_id。
+
+    优先 os.environ (构建期脚本 / 显式 export 的场景),
+    兜底 nonebot Config —— nonebot 2.4 只把 .env 读进 Config,不注入 os.environ,
+    所以运行时得从 get_driver().config.wows_wg_app_id 拿。
+    """
+    env = os.environ.get("WOWS_WG_APP_ID")
+    if env:
+        return env
+    try:
+        from nonebot import get_driver
+        return getattr(get_driver().config, "wows_wg_app_id", None) or None
+    except Exception:
+        return None
 
 
 def is_configured() -> bool:
