@@ -728,27 +728,46 @@ async def _online(bot: Bot, event: MessageEvent):
         logger.error(f"/在线 查询失败: {e}")
         await online_cmd.finish(f"⚠️ 查询失败: {e}")
 
-    lines = ["🌍 WoWs 在线人数"]
-    total = 0
-    ok_count = 0
-    # 按值降序显示 (人多的在前),失败的在后
+    # 按值降序 (人多的在前),失败的在后
     ordered = sorted(data.items(), key=lambda kv: (kv[1] is None, -(kv[1] or 0)))
-    for realm, n in ordered:
-        name = wg_online.display_name(realm)
-        if n is None:
-            lines.append(f"  {name}  查询失败")
-        else:
-            lines.append(f"  {name}  {n:,}")
-            total += n
-            ok_count += 1
-    if ok_count > 1:
-        lines.append(f"  ─────────")
-        lines.append(f"  合计     {total:,}")
-    lines.append("")
-    lines.append("(CN 360 服 / RU Lesta 独立运营,不含在内)")
+    rows = [{"code": realm, "name": wg_online.display_name(realm), "online": n}
+            for realm, n in ordered]
+    note = "CN 360 服 / RU Lesta 独立运营,不含在内"
 
     user_stats.record(event.get_user_id(), "online")
-    await online_cmd.finish("\n".join(lines))
+
+    out_dir = Path(BASE_DIR) / "_online_cache"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_png = out_dir / "online.png"
+    try:
+        await asyncio.to_thread(_render_online_sync, str(out_png), rows, note)
+    except Exception as e:
+        logger.error(f"渲染 /在线 失败,兜底纯文本: {e}")
+        lines = ["WoWs 在线人数"]
+        total = sum(r["online"] for r in rows if r["online"] is not None)
+        ok = 0
+        for r in rows:
+            if r["online"] is None:
+                lines.append(f"  {r['name']}  查询失败")
+            else:
+                lines.append(f"  {r['name']}  {r['online']:,}")
+                ok += 1
+        if ok > 1:
+            lines.append(f"  合计  {total:,}")
+        lines.append("")
+        lines.append(f"({note})")
+        await online_cmd.finish("\n".join(lines))
+    await online_cmd.finish(MessageSegment.image(f"file://{out_png}"))
+
+
+def _render_online_sync(out_path: str, rows: list, note: str):
+    """thread wrapper — render_online 没 async 接口。"""
+    import sys as _sys
+    bin_path = str(Path(REPORT_FULL_CMD).parent)  # /opt/wows-bot/report/bin
+    if bin_path not in _sys.path:
+        _sys.path.insert(0, bin_path)
+    from render_online import render_online_png
+    render_online_png(out_path, rows=rows, note=note)
 
 
 @replay_handler.handle()
