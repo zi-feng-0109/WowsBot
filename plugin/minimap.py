@@ -80,6 +80,9 @@ MP4_TIMEOUT      = int(os.environ.get("WOWS_MP4_TIMEOUT", "600"))
 PNG_TIMEOUT      = int(os.environ.get("WOWS_PNG_TIMEOUT", "300"))
 ANALYZE_TIMEOUT  = int(os.environ.get("WOWS_ANALYZE_TIMEOUT", "120"))
 
+# 战报 / 战犯 数据免责声明 —— 回放只含玩家个人视野内的数据,视野外不下发
+_DATA_DISCLAIMER = "由于 WG 不下发个人视野之外的数据,本数据仅供参考。"
+
 replay_handler = on_message(priority=5, block=False)
 
 task_queue: asyncio.Queue = asyncio.Queue()
@@ -1025,7 +1028,8 @@ async def process_queue(bot: Bot):
                         crim_png = await run_criminals(json_path, user_dir)
                         if crim_png:  # 空串 = 没战犯
                             msg = (MessageSegment.reply(message_id)
-                                   + MessageSegment.image(f"file://{crim_png}"))
+                                   + MessageSegment.image(f"file://{crim_png}")
+                                   + f"\n{_DATA_DISCLAIMER}")
                             if group_id:
                                 await bot.call_api("send_group_msg",
                                                     group_id=group_id, message=msg)
@@ -1459,6 +1463,7 @@ async def upload_and_notify(bot: Bot, user_id: str, group_id: Optional[int],
     message = MessageSegment.reply(message_id) + text
     if png_path and os.path.exists(png_path):
         message = message + MessageSegment.image(f"file://{png_path}")
+        message = message + f"\n{_DATA_DISCLAIMER}"
 
     try:
         if group_id:
