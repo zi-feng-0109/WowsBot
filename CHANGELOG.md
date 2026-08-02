@@ -15,6 +15,26 @@ bot 实际跑哪个版本由 NoneBot `.env` 里的 `WOWS_BOT_VERSION=...` 决定
 
 ---
 
+## [1.4.0] - 2026-08-02
+
+### 新增
+
+- **莱斯塔(Lesta,«Мир кораблей»)服务器 replay 渲染上线** —— bot 现在收 `.korablireplay`,
+  按扩展名自动分流,支持 **视频(MP4 小地图)/ 战报 / 复盘 / 聊天** 四项;WG(`.wowsreplay`)一切不变。
+  - 战报/复盘走新的 `battle-results --format normalized` 管线(专用 `replayshark-lesta`),
+    含全员裸经验/击落飞机(来自回放文件结算块 block 1)、扁平勋带、中文死因、潜在/侦察仅主角。
+  - 小地图 MP4:中文船名(泽刻汉化)、舰种/飞机中队图标、self 阵亡图标;离线数据按回放 build 自动选版本
+    (WG 15.x / Lesta 26.x 共存于同一 extracted root)。
+  - 聊天图:文本聊天(`onChatMessageRegular`)+ 发送者名;**俄语自动翻译成中文**
+    (DeepSeek 优先、百度兜底;中/英不译;脏话如实)。
+  - 暂不支持(仍仅 WG):`/分析`、`/战犯`、`/查询`、`/船`、`/线`、猜船。
+
+### 修复
+
+- 死因表按 WG 默认修正 —— Lesta 客户端死因枚举错位会把 SAP 命中致死误标成 "Fel"。
+- Lesta 战报免责声明改为"由于 Lesta 下发的数据有限,本数据仅供参考"(WG 文案不变)。
+- 菜单:莱斯塔渲染从【规划中】移除,使用方法标注 `.korablireplay` 与 Lesta 支持范围。
+
 ## [1.1.0] - 2026-05-27
 
 ### 新增
