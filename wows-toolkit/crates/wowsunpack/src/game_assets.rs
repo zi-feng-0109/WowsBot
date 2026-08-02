@@ -125,6 +125,11 @@ impl GuiAsset<'_> {
                 vec![
                     format!("gui/fla/minimap/ship_icons_self/minimap_self_{life}_{s}.svg"),
                     format!("gui/fla/minimap/ship_icons_self/minimap_self_{life}.svg"),
+                    // Lesta («Мир кораблей») self-ship minimap icons: `<life>_<species>.svg`
+                    // (+ generic `<life>.svg`) under a different dir. Without these the
+                    // recorder's own marker never switches to the dead state after death.
+                    format!("gui/battle_hud/markers/minimap/ship/ship_self_svg/{life}_{s}.svg"),
+                    format!("gui/battle_hud/markers/minimap/ship/ship_self_svg/{life}.svg"),
                 ]
             }
             GuiAsset::Consumable(pcy) => vec![format!("gui/consumables/consumable_{pcy}.png")],
