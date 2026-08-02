@@ -126,31 +126,41 @@ def render(json_path: str, out_path: str):
     if not ribbons:
         draw.text((PAD + 20, ry + 56), "本场无勋带数据", GAME_DIM, f_h3)
     else:
-        # Clean 8-per-row grid: banner + xN overlaid (white w/ black outline) on
-        # the banner, label below — same layout as the legacy render_damage_chart.
+        # 8-per-row grid. Scale each icon to a fixed HEIGHT (not width): WG/Lesta
+        # main ribbons are wide flat banners (~2.6:1) while Lesta subribbons are
+        # near-square angled icons — a fixed width would blow the square ones up
+        # and break the grid. Count goes to the right of the icon, label below.
+        from PIL import Image as _Image
+        icon_h = 64
         inner_w = W - 2 * PAD - 32
         item_w = inner_w // RIBBON_PER_ROW
         row_y0 = ry + RIBBON_TITLE_BAND
-        f_cnt = fm(22)
+        f_cnt = fm(20)
         f_lbl = f(16)
+
+        def _ribbon_img(basename):
+            p = Path(dc.RIBBON_ICON_DIR) / f"{basename}.png"
+            try:
+                src = _Image.open(p).convert("RGBA")
+                w, h = src.size
+                tw = max(1, round(icon_h * w / h))
+                return src.resize((min(tw, RIBBON_BANNER_W), icon_h), _Image.LANCZOS)
+            except Exception:
+                return None
+
         for i, r in enumerate(ribbons):
             row, col = divmod(i, RIBBON_PER_ROW)
             ax = PAD + 16 + col * item_w
             ay = row_y0 + row * RIBBON_ROW_H + 6
-            icon = dc.load_ribbon_icon(_ribbon_basename(r), RIBBON_BANNER_W)
+            icon = _ribbon_img(_ribbon_basename(r))
             if icon:
                 img.paste(icon, (ax, ay), icon)
-                bw, bh = icon.size
+                bw = icon.width
             else:
-                bw, bh = RIBBON_BANNER_W, int(RIBBON_BANNER_W * 51 / 133)
+                bw = int(icon_h * 133 / 51)
             cnt = f"x{r.get('count', 0)}"
-            cb = f_cnt.getbbox(cnt)
-            cw, chh = cb[2] - cb[0], cb[3] - cb[1]
-            cx, cy = ax + bw - cw - 12, ay + (bh - chh) // 2 - 2
-            for ox, oy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                draw.text((cx + ox, cy + oy), cnt, (0, 0, 0), f_cnt)
-            draw.text((cx, cy), cnt, (255, 255, 255), f_cnt)
-            draw.text((ax + 4, ay + bh + 4), r.get("display_name", "")[:8], GAME_TEXT, f_lbl)
+            draw.text((ax + bw + 8, ay + icon_h // 2 - 12), cnt, GAME_GOLD, f_cnt)
+            draw.text((ax, ay + icon_h + 6), r.get("display_name", "")[:8], GAME_TEXT, f_lbl)
 
     dc._draw_footer(draw, PAD, H - 34, W - 2 * PAD, 28)
     img.save(out_path)
