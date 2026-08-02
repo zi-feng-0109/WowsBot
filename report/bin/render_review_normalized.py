@@ -135,12 +135,27 @@ def render(json_path: str, out_path: str):
     draw.text((cx - r + 10, cy - 20), f"{total:,}".replace(",", " "), GAME_GOLD, f_h2)
     dc.draw_legend(draw, PAD + 420, y0 + 90, half - 440, slices, total, f_lab, f_num)
 
-    # ── received-damage panel (right): unavailable for Lesta ──────────────────
+    # ── received-damage panel (right): by SOURCE ship (packet-derived) ────────
+    # Lesta carries no server damage-TYPE breakdown, but DamageReceived gives who
+    # dealt the damage, so we show 受伤来源 by attacker ship instead.
     rx = PAD + half + PAD
     draw.rectangle([rx, y0, rx + half, y0 + pie_block_h], fill=GAME_PANEL, outline=GAME_BORDER)
     draw.text((rx + 20, y0 + 14), "受伤来源分布", GAME_TEXT, f_h2)
-    note = "Lesta 回放不含服务端承伤明细,无法拆分来源。"
-    draw.text((rx + 20, y0 + pie_block_h // 2 - 10), note, GAME_DIM, f_h3)
+    _SRC_COLORS = [
+        (74, 144, 226), (226, 86, 86), (240, 180, 90), (120, 200, 130), (180, 120, 220),
+        (90, 200, 210), (230, 130, 180), (200, 180, 100), (150, 160, 180), (200, 120, 90),
+    ]
+    recv = selfp.get("self_received_by_source") or []
+    recv_slices = [(lbl, _SRC_COLORS[i % len(_SRC_COLORS)], int(val)) for i, (lbl, val) in enumerate(recv)]
+    recv_total = sum(v for _, _, v in recv_slices)
+    if recv_slices:
+        draw.text((rx + 20, y0 + 50), f"累计承伤 {recv_total:,}".replace(",", " ") + "  (按来源舰船)", GAME_DIM, f_h3)
+        rcx, rcy, rr = rx + 200, y0 + 260, 150
+        dc.draw_pie(img, draw, (rcx, rcy), rr, recv_slices)
+        draw.text((rcx - rr + 10, rcy - 20), f"{recv_total:,}".replace(",", " "), GAME_GOLD, f_h2)
+        dc.draw_legend(draw, rx + 420, y0 + 90, half - 440, recv_slices, recv_total, f_lab, f_num)
+    else:
+        draw.text((rx + 20, y0 + pie_block_h // 2 - 10), "本场无承伤记录。", GAME_DIM, f_h3)
 
     # ── ribbons row ───────────────────────────────────────────────────────────
     ry = y0 + pie_block_h + 20
