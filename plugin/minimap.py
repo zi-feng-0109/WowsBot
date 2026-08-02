@@ -1398,11 +1398,17 @@ async def run_chat(replay_path: str, work_dir: str, json_path: str | None = None
     out_png = os.path.join(work_dir, f"{Path(replay_path).stem}.chat.png")
     py = os.environ.get("WOWS_PYTHON") or sys.executable
     extra_args = ["--report-json", json_path] if json_path and os.path.isfile(json_path) else []
+    # 聊天统一用 Lesta replayshark(WG/Lesta 通吃 + 按回放 build 从 root 选数据),
+    # 并显式给 extracted root — 免得依赖 bot 启动环境额外 export(EssexBot 的 .env
+    # 走 nonebot config、不进 os.environ)。翻译 key(WOWS_DEEPSEEK_KEY 等)仍从
+    # bot 进程环境继承。
+    env = {**os.environ, "WOWS_REPLAYSHARK_BIN": REPLAYSHARK_LESTA, "WOWS_DATA_DIR": WOWS_DATA_DIR}
     try:
         proc = await asyncio.create_subprocess_exec(
             py, RENDER_CHAT_PY, replay_path, out_png, *extra_args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         try:
             _, stderr = await asyncio.wait_for(proc.communicate(), timeout=PNG_TIMEOUT)
