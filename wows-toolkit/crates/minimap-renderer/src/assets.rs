@@ -250,6 +250,48 @@ pub fn load_ship_icons(vfs: &VfsPath, version: Option<&Version>) -> HashMap<Stri
 
 /// Load all plane icons from game files into a HashMap keyed by name (e.g. "fighter_ally").
 pub fn load_plane_icons(vfs: &VfsPath, version: Option<&Version>) -> HashMap<String, RgbaImage> {
+    // Lesta («Мир кораблей») keeps plane minimap markers flat under
+    // `gui/battle_hud/markers/minimap/plane_svg/` as SVGs, with the kind baked into
+    // the filename prefix (`consumables_*` / `airsupport_*`; controllable has no
+    // prefix) — unlike WG's per-kind PNG subdirs (`markers_minimap/plane/<kind>/`).
+    // Load that dir flat, deriving the same namespaced key the draw code expects
+    // (e.g. `bomber_ap_ally.svg` -> "controllable/bomber_ap_ally"). No-op for WG
+    // (the dir is absent), which then falls through to the per-kind PNG loader.
+    let mut lesta_icons = HashMap::new();
+    if let Ok(lesta_dir) = vfs.join("gui/battle_hud/markers/minimap/plane_svg")
+        && let Ok(entries) = lesta_dir.read_dir()
+    {
+        for entry in entries {
+            let filename = entry.filename();
+            let Some(stem) = filename.strip_suffix(".svg") else { continue };
+            let key = if let Some(rest) = stem.strip_prefix("consumables_") {
+                format!("consumables/{rest}")
+            } else if let Some(rest) = stem.strip_prefix("airsupport_") {
+                format!("airsupport/{rest}")
+            } else {
+                format!("controllable/{stem}")
+            };
+            if let Some(buf) = read_vfs_entry(&entry)
+                && let Some(img) = rasterize_svg(&buf, ICON_SIZE)
+            {
+                lesta_icons.insert(key, img);
+            }
+        }
+        // Lesta ships no air-support fighter marker (its air-support set is
+        // bomber/minebomber/scout); an air-support fighter is still a fighter, so
+        // alias the consumables fighter icon to that key — avoids an iconless
+        // squadron + per-frame "missing icon" warnings.
+        for suffix in ["ally", "enemy", "own", "division", "teamkiller"] {
+            if let Some(img) = lesta_icons.get(&format!("consumables/fighter_{suffix}")).cloned() {
+                lesta_icons.entry(format!("airsupport/fighter_{suffix}")).or_insert(img);
+            }
+        }
+    }
+    if !lesta_icons.is_empty() {
+        debug!(count = lesta_icons.len(), "Loaded Lesta plane icons");
+        return lesta_icons;
+    }
+
     let kinds = [PlaneMarkerKind::Consumables, PlaneMarkerKind::Controllable, PlaneMarkerKind::AirSupport];
     let suffixes = ["ally", "enemy", "own", "division", "teamkiller"];
     let base_names = [
