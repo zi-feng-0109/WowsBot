@@ -52,6 +52,14 @@ RENDER_CRIMINALS_PY = os.environ.get("WOWS_RENDER_CRIMINALS",
                                       "/opt/wows-bot/report/bin/render_criminals.py")
 RENDER_CHAT_PY = os.environ.get("WOWS_RENDER_CHAT",
                                  "/opt/wows-bot/report/bin/render_chat.py")
+# Lesta(«Мир кораблей», .korablireplay)分流:normalized 战报管线(战报+复盘拼一张)
+# + 专用 Lesta replayshark(旧 replayshark 无 battle-results/聊天 Lesta 修复)。
+# extracted root 由 replayshark 按回放 build 自动选版本(WG 15.x / Lesta 26.x 共存)。
+REPORT_FULL_LESTA_CMD = os.environ.get("WOWS_REPORT_FULL_LESTA_CMD",
+                                        "/opt/wows-bot/report/bin/wows_full_report_normalized")
+REPLAYSHARK_LESTA = os.environ.get("WOWS_REPLAYSHARK_LESTA",
+                                    "/opt/wows-bot/report/replayshark-lesta")
+WOWS_DATA_DIR = os.environ.get("WOWS_DATA_DIR", "/var/lib/wows-data/extracted")
 # 旧 alias 暂留兼容(.env 里可能还有);后续清理
 REPORT_CMD       = os.environ.get("WOWS_REPORT_CMD", REPORT_FULL_CMD)
 ANALYZE_CMD      = os.environ.get("WOWS_ANALYZE_CMD", "/opt/wows-bot/report/bin/wows_analyze")
@@ -783,7 +791,8 @@ async def handle_replay_file(bot: Bot, event: Event, state: T_State):
             continue
 
         file_name = seg.data.get("name") or seg.data.get("file") or ""
-        if not file_name.endswith(".wowsreplay"):
+        # WG = .wowsreplay;Lesta(«Мир кораблей»)= .korablireplay。下游按扩展名分流。
+        if not file_name.endswith((".wowsreplay", ".korablireplay")):
             continue
 
         user_id = str(event.get_user_id())
@@ -890,6 +899,8 @@ async def process_queue(bot: Bot):
         user_id, message_id, group_id, user_dir, replay_path = await task_queue.get()
         scope = "group" if group_id else "private"
         ident = str(group_id) if group_id else user_id
+        # Lesta 回放走 normalized 管线;分析/战犯/查询索引(吃旧 schema JSON)对 Lesta 暂跳过。
+        is_lesta = replay_path.endswith(".korablireplay")
 
         try:
             on = {f: permissions.feature_enabled(scope, ident, f)
@@ -912,7 +923,8 @@ async def process_queue(bot: Bot):
                 raise RuntimeError("replay 文件不存在")
 
             # 决定走哪条报告路径(产 JSON 的子进程只跑一次)
-            needs_json = on["分析"] or on["战犯"]
+            # Lesta 不上 分析/战犯,故不为它们强产 JSON。
+            needs_json = (on["分析"] or on["战犯"]) and not is_lesta
             if on["战报"] and on["复盘"]:
                 report_kind = "full"
             elif on["战报"]:
@@ -928,6 +940,9 @@ async def process_queue(bot: Bot):
             # 并行: MP4 + 报告 同时跑,快但峰值 ~8 GB
             # 串行: 先跑报告 (5-15s) 再跑 MP4,峰值腰斩,4 核 8G VM 友好
             def _mk_report_coro():
+                if is_lesta:
+                    # Lesta 只有 normalized 全报告(战报+复盘拼一张);战报/复盘任一开启都出这张。
+                    return run_full_report_lesta(replay_path, user_dir) if report_kind else None
                 if report_kind == "full":
                     return run_full_report(replay_path, user_dir)
                 if report_kind == "battle":
@@ -940,7 +955,7 @@ async def process_queue(bot: Bot):
             if render_mode.is_parallel():
                 tasks: dict[str, asyncio.Future] = {}
                 if on["视频"]:
-                    tasks["mp4"] = asyncio.create_task(render_mp4(replay_path, user_dir))
+                    tasks["mp4"] = asyncio.create_task(render_mp4(replay_path, user_dir, is_lesta))
                 report_coro = _mk_report_coro()
                 if report_coro is not None:
                     tasks["report"] = asyncio.create_task(report_coro)
@@ -956,7 +971,7 @@ async def process_queue(bot: Bot):
                         result_map["report"] = e
                 if on["视频"]:
                     try:
-                        result_map["mp4"] = await render_mp4(replay_path, user_dir)
+                        result_map["mp4"] = await render_mp4(replay_path, user_dir, is_lesta)
                     except Exception as e:
                         result_map["mp4"] = e
 
@@ -996,7 +1011,8 @@ async def process_queue(bot: Bot):
             # 供 /查询 反查。报告失败 / kind=damage(无 # 列) / kind=None 不记。
             if (sent_report_msg_id is not None
                     and report_png
-                    and report_kind in ("full", "battle")):
+                    and report_kind in ("full", "battle")
+                    and not is_lesta):   # Lesta normalized 图无 # 列 + JSON 是新 schema,不入索引
                 json_path_for_idx = os.path.join(user_dir, f"{Path(replay_path).stem}.json")
                 if os.path.isfile(json_path_for_idx):
                     try:
@@ -1006,9 +1022,9 @@ async def process_queue(bot: Bot):
                     except Exception as e:
                         logger.warning(f"query_index 入库失败 (不影响主流程): {e}")
 
-            # 分析:从 user_dir 里找 .json
+            # 分析:从 user_dir 里找 .json（Lesta 暂不支持:normalized JSON 结构不同）
             json_path = os.path.join(user_dir, f"{Path(replay_path).stem}.json")
-            if on["分析"]:
+            if on["分析"] and not is_lesta:
                 if os.path.isfile(json_path):
                     try:
                         analysis = await run_analyze(json_path)
@@ -1021,8 +1037,8 @@ async def process_queue(bot: Bot):
                 else:
                     logger.warning(f"未找到战报 JSON,跳过分析: {json_path}")
 
-            # 战犯卡 (独立 PNG,跟战报/复盘合并版互不重复)
-            if on["战犯"]:
+            # 战犯卡 (独立 PNG,跟战报/复盘合并版互不重复;Lesta 暂不支持)
+            if on["战犯"] and not is_lesta:
                 if os.path.isfile(json_path):
                     try:
                         crim_png = await run_criminals(json_path, user_dir)
@@ -1104,7 +1120,7 @@ def _mp4_progress_bar(stage: str, frame: int, total: int) -> str:
     return f"{stage:8s} {bar} {pct*100:5.1f}% ({frame:>{width}}/{total})"
 
 
-async def render_mp4(replay_path: str, work_dir: str):
+async def render_mp4(replay_path: str, work_dir: str, is_lesta: bool = False):
     """调用 WOWS_RENDER_SH 渲染 MP4。
 
     流式读 subprocess stdout/stderr 喂给 logger:
@@ -1119,7 +1135,11 @@ async def render_mp4(replay_path: str, work_dir: str):
     # 带着这份 env,后续 /渲染模式 切换不影响正在跑的渲染,只影响下一次新 spawn。
     backend = render_backend.get_backend()
     env = {**os.environ, "WOWS_RENDER_BACKEND": backend}
-    logger.info(f"[mp4:{name}] 启动渲染 backend={backend}")
+    # Lesta 客户端只有 ru 本地化槽,泽刻汉化把中文写进 ru;提取数据后中文也在
+    # translations/ru。故 Lesta MP4 用 --lang ru(WG 用默认 zh_sg)才能出中文船名。
+    if is_lesta:
+        env["WOWS_RENDER_LANG"] = "ru"
+    logger.info(f"[mp4:{name}] 启动渲染 backend={backend}{' lesta' if is_lesta else ''}")
     try:
         proc = await asyncio.create_subprocess_exec(
             RENDER_SH, replay_path, output_path,
@@ -1326,6 +1346,20 @@ async def run_full_report(replay_path: str, work_dir: str) -> str:
     bot 调用恒带 WOWS_SKIP_CRIMINALS=1 — 战犯走独立 PNG 路径,避免重复。"""
     return await _run_report_like(REPORT_FULL_CMD, replay_path, work_dir, "全报告",
                                    extra_env={"WOWS_SKIP_CRIMINALS": "1"})
+
+
+async def run_full_report_lesta(replay_path: str, work_dir: str) -> str:
+    """Lesta:跑 wows_full_report_normalized(normalized 管线,战报+复盘拼一张)。
+    用 Lesta 专用 replayshark + extracted root(replayshark 按回放 build 自动选版本);
+    显式清空 WOWS_GAME_DIR 强制走 -e。同样在 work_dir 留 {stem}.json。"""
+    return await _run_report_like(
+        REPORT_FULL_LESTA_CMD, replay_path, work_dir, "全报告(Lesta)",
+        extra_env={
+            "WOWS_REPLAYSHARK": REPLAYSHARK_LESTA,
+            "WOWS_EXTRACTED": WOWS_DATA_DIR,
+            "WOWS_GAME_DIR": "",
+        },
+    )
 
 
 async def run_criminals(json_path: str, work_dir: str) -> str:

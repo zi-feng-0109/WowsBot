@@ -63,6 +63,22 @@ def main():
     print("[1/4] replayshark battle-results (normalized) ...", file=sys.stderr)
     subprocess.run(cmd, check=True, stdout=sys.stderr)
 
+    # Lesta: recover per-player base XP / planes / received-damage from the replay
+    # file's results block (block 1) — the packet stream carries no server results,
+    # but the file does. No-op for WG replays. Self-validates before merging.
+    try:
+        import json as _json
+        sys.path.insert(0, str(BIN))
+        import lesta_public_results as lpr  # noqa: E402
+        with open(json_path, encoding="utf-8") as _fh:
+            _norm = _json.load(_fh)
+        if lpr.enrich(_norm, str(replay)):
+            with open(json_path, "w", encoding="utf-8") as _fh:
+                _json.dump(_norm, _fh, ensure_ascii=False)
+            print("      + Lesta 公开结算已合并 (基础经验/飞机)", file=sys.stderr)
+    except Exception as _e:
+        print(f"      (Lesta 结算合并跳过: {_e})", file=sys.stderr)
+
     py = find_python()
     print("[2/4] 战报 ...", file=sys.stderr)
     # When stitching, skip the battle report's own 个人战绩 band + footer — the

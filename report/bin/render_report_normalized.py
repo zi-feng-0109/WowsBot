@@ -19,8 +19,14 @@ Only the self player carries ribbons/achievements (packet stream is
 self-scoped); other players show none — same as WG's own report.
 """
 import json
+import os
 import sys
 from pathlib import Path
+
+# This renderer never wires non-self potential damage (packet stream is self-scoped),
+# so blank that column for others instead of the HP-lost fallback (see
+# render_battle_report's 潜在 block). Set before importing/calling rb.render.
+os.environ["WOWS_NO_POTENTIAL_FALLBACK"] = "1"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import render_battle_report as rb  # noqa: E402
@@ -105,6 +111,17 @@ def load_normalized(json_path: str) -> "rb.MatchReport":
         for a in (p.get("achievements") or []):
             achievements.append((_ach_id_for(a.get("icon_key", ""), rev, synth), int(a.get("count", 1))))
 
+        # Base XP + planes shot down for ALL players come from the replay file's
+        # results block (see lesta_public_results.enrich), merged upstream. Fall
+        # back to the self-only RIBBON_PLANE count for planes if that merge didn't
+        # run (e.g. render_report called standalone without enrichment).
+        base_xp = p.get("lesta_base_xp")
+        planes_killed = p.get("lesta_planes")
+        if planes_killed is None and is_self:
+            pk = sum(int(r.get("count", 0) or 0)
+                     for r in (p.get("ribbons") or []) if r.get("name") == "RIBBON_PLANE")
+            planes_killed = pk if pk > 0 else None
+
         ship_zh = p.get("ship_name", "")  # already localized by the Rust side
         players.append(rb.PlayerStats(
             account_id=int(p.get("db_id") or 0),
@@ -125,11 +142,11 @@ def load_normalized(json_path: str) -> "rb.MatchReport":
             time_lived_secs=tl,
             killer_entity_id=None,  # filled in pass 2
             death_cause=p.get("death_cause"),
-            raw_exp=None,
-            exp=None,
+            raw_exp=base_xp,
+            exp=base_xp,
             scouting_damage=(p.get("controller_spotting_damage") if is_self else None),
             potential_damage=(p.get("controller_potential_damage") if is_self else None),
-            planes_killed=None,
+            planes_killed=planes_killed,
             achievements=achievements,
         ))
 

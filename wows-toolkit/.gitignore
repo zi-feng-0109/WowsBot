@@ -1,0 +1,26 @@
+target/
+dist/
+.cargo/config.toml
+wows_toolkit.log.*
+.claude/
+*.glb
+dump_out/
+game_data/
+.steam-user
+.wix
+wix/banner.bmp
+wix/license.rtf
+scratch/
+.scratch/
+.tooling/
+__pycache__/
+*.tmp
+strings.csv
+# Steam depot manifest dumps
+/55299*.txt
+# Superpowers planning docs and scratch (local only, not source-controlled)
+docs/superpowers/
+.superpowers/
+
+dhat-heap.json
+extracted/

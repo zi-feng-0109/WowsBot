@@ -59,26 +59,46 @@ def _output_slices(self_damage_by_type):
     return slices
 
 
-def _ribbon_display(r, is_lesta):
-    """(label, icon basename).
+# Canonical label per flat banner: the RIBBON_DISPLAY entry whose own key maps to
+# that basename (MAIN_CALIBER→主炮命中), so a collapsed group isn't labeled by a
+# child that merely folds into it (BULGE→主炮命中鱼雷防护).
+_FLAT_LABEL = {
+    bn: lab for k, (lab, bn) in dc.RIBBON_DISPLAY.items() if "ribbon_" + k.lower() == bn
+}
 
-    Lesta ships a full per-ribbon "detailed" set (`subribbon_*`, its post-battle
-    art) covering every ribbon type. For a Lesta report use that set for EVERY
-    ribbon so the source is uniform (all Lesta post-battle art), keying by the
-    ribbon name (`RIBBON_FRAG` → `subribbon_frag`). For WG, keep the legacy
-    behaviour: collapse via RIBBON_DISPLAY onto the flat parent banner.
-    """
-    raw = r.get("name", "")
-    if raw.startswith("RIBBON_"):
-        raw = raw[len("RIBBON_"):]
-    label = r.get("display_name") or (dc.RIBBON_DISPLAY.get(raw, (raw,))[0])
-    if is_lesta:
-        return label, "subribbon_" + raw.lower()
-    entry = dc.RIBBON_DISPLAY.get(raw)
-    if entry:
-        return label, entry[1]
-    key = r.get("icon_key", "")
-    return label, (f"sub{key}" if r.get("is_subribbon") else key)
+
+def _collapse_ribbons(ribbons):
+    """Fold detailed ribbons onto their flat parent banner, exactly like the
+    in-battle HUD: MAIN_CALIBER_PENETRATION/OVER/NO/RICOCHET and BULGE all become
+    one 主炮命中 x{sum}; secondary/plane/frag/burn/citadel stay themselves. Returns
+    [(label, flat_basename, count)] in first-seen order.
+
+    Same collapse for WG and Lesta — the flat `ribbon_*` naming is shared, only the
+    icon directory differs (Lesta pulls its own flat set first, see _ribbon_dirs).
+    This is the Lesta "扁平款": the flat in-battle ribbon art, counts summed to match
+    the HUD (e.g. 主炮命中 x58 = 21+15+8+11 pen/over/no/ricochet + 3 bulge)."""
+    order, agg = [], {}
+    for r in ribbons:
+        raw = r.get("name", "")
+        if raw.startswith("RIBBON_"):
+            raw = raw[len("RIBBON_"):]
+        entry = dc.RIBBON_DISPLAY.get(raw)
+        if entry:
+            label, basename = entry[0], entry[1]
+        else:
+            # Unknown ribbon: keep it standalone under its own flat name + its
+            # translated label — no fabricated collapse.
+            basename = "ribbon_" + raw.lower()
+            label = r.get("display_name") or raw
+        cnt = int(r.get("count", 0) or 0)
+        if cnt <= 0:
+            continue
+        label = _FLAT_LABEL.get(basename, label)  # canonical parent label
+        if basename not in agg:
+            agg[basename] = [label, 0]
+            order.append(basename)
+        agg[basename][1] += cnt
+    return [(agg[b][0], b, agg[b][1]) for b in order]
 
 
 def _is_lesta(raw_json):
@@ -114,7 +134,7 @@ def render(json_path: str, out_path: str):
 
     slices = _output_slices(selfp.get("self_damage_by_type"))
     total = sum(v for _, _, v in slices)
-    ribbons = selfp.get("ribbons") or []
+    ribbons = _collapse_ribbons(selfp.get("ribbons") or [])
 
     f = lambda s: rb.font(rb.CJK_FONT, s)
     fm = lambda s: rb.font(rb.MONO_FONT, s)
@@ -201,19 +221,17 @@ def render(json_path: str, out_path: str):
                     continue
             return None
 
-        for i, r in enumerate(ribbons):
+        for i, (label, basename, count) in enumerate(ribbons):
             row, col = divmod(i, RIBBON_PER_ROW)
             ax = PAD + 16 + col * item_w
             ay = row_y0 + row * RIBBON_ROW_H + 6
-            label, basename = _ribbon_display(r, is_lesta)
             icon = _ribbon_img(basename)
             if icon:
                 img.paste(icon, (ax, ay), icon)
                 bw = icon.width
             else:
                 bw = int(icon_h * 133 / 51)
-            cnt = f"x{r.get('count', 0)}"
-            draw.text((ax + bw + 8, ay + icon_h // 2 - 12), cnt, GAME_GOLD, f_cnt)
+            draw.text((ax + bw + 8, ay + icon_h // 2 - 12), f"x{count}", GAME_GOLD, f_cnt)
             draw.text((ax, ay + icon_h + 6), label[:8], GAME_TEXT, f_lbl)
 
     dc._draw_footer(draw, PAD, H - 34, W - 2 * PAD, 28)

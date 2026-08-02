@@ -1,0 +1,291 @@
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  # ── Create the release the build jobs attach to ───────────────────────
+  create-release:
+    name: Create release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract release notes for this tag
+        id: notes
+        # Pull the RELEASE_NOTES.md section for the tag (## x.y.z - <date> ...
+        # up to the next ## heading) and use it as the release body. Fall back
+        # to auto-generated notes if the tag has no release-notes entry.
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # Match "## <version> " by prefix (trailing space disambiguates
+          # 0.1.6 from 0.1.69); stop at the next "## " section heading.
+          awk -v ver="$version" '
+            index($0, "## " ver " ") == 1 { flag = 1; next }
+            flag && index($0, "## ") == 1 { exit }
+            flag { print }
+          ' RELEASE_NOTES.md | sed -e '/./,$!d' > release_notes.md
+          if grep -q '[^[:space:]]' release_notes.md; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release_notes.md
+          generate_release_notes: ${{ steps.notes.outputs.found == 'false' }}
+
+  # ── Windows (signed) ──────────────────────────────────────────────────
+  windows:
+    name: Windows
+    needs: create-release
+    runs-on: windows-latest
+    environment: release-signing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install NASM
+        # rav1e's `asm` feature needs nasm. Avoid third-party JS actions.
+        shell: pwsh
+        run: ./scripts/install-nasm-windows.ps1
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-pc-windows-msvc -p wows_toolkit --features av1-asm
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign executable
+        uses: azure/trusted-signing-action@v1
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: wows-toolkit
+          certificate-profile-name: wows-toolkit
+          files: ${{ github.workspace }}\target\x86_64-pc-windows-msvc\release\wows_toolkit.exe
+          file-digest: SHA256
+
+      - name: Build MSI installer
+        run: ./scripts/build-msi.ps1 -SkipBuild
+
+      - name: Sign MSI
+        uses: azure/trusted-signing-action@v1
+        with:
+          endpoint: https://eus.codesigning.azure.net/
+          signing-account-name: wows-toolkit
+          certificate-profile-name: wows-toolkit
+          files: ${{ github.workspace }}\target\wix\*.msi
+          file-digest: SHA256
+
+      - name: Create zip archive
+        run: |
+          Copy-Item -Recurse "crates/wt-translations/translations" "translations"
+          Compress-Archive -Path "target/x86_64-pc-windows-msvc/release/wows_toolkit.exe","target/x86_64-pc-windows-msvc/release/wows_toolkit.pdb","README.md","translations" -DestinationPath "wows_toolkit_${{ github.ref_name }}_windows.zip"
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            wows_toolkit_${{ github.ref_name }}_windows.zip
+            target/x86_64-pc-windows-msvc/release/wows_toolkit.pdb
+            target/wix/*.msi
+
+  # ── Linux (Flatpak) ───────────────────────────────────────────────────
+  linux:
+    name: Linux Flatpak
+    needs: create-release
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libgl-dev \
+            libfontconfig-dev \
+            libssl-dev \
+            libvulkan-dev \
+            pkg-config \
+            nasm \
+            flatpak
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-unknown-linux-gnu -p wows_toolkit --features av1-asm
+
+      - name: Set up Flatpak
+        run: |
+          flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08
+
+      - name: Build Flatpak bundle
+        run: |
+          APP_ID="io.github.landaire.WoWsToolkit"
+
+          # Initialise build directory against the runtime
+          flatpak build-init build-dir "$APP_ID" org.freedesktop.Sdk org.freedesktop.Platform 24.08
+
+          # Install binary and data
+          mkdir -p build-dir/files/bin
+          cp target/x86_64-unknown-linux-gnu/release/wows_toolkit build-dir/files/bin/
+          cp -r crates/wt-translations/translations build-dir/files/bin/translations
+
+          # Desktop entry (renamed to match app ID)
+          mkdir -p build-dir/files/share/applications
+          cp assets/wows-toolkit.desktop "build-dir/files/share/applications/${APP_ID}.desktop"
+
+          # Icon
+          mkdir -p build-dir/files/share/icons/hicolor/256x256/apps
+          cp assets/icon-256.png "build-dir/files/share/icons/hicolor/256x256/apps/${APP_ID}.png"
+
+          # AppStream metainfo
+          mkdir -p build-dir/files/share/metainfo
+          cp "assets/${APP_ID}.metainfo.xml" build-dir/files/share/metainfo/
+
+          # Finish build with sandbox permissions
+          flatpak build-finish build-dir \
+            --share=ipc \
+            --share=network \
+            --socket=x11 \
+            --socket=wayland \
+            --socket=fallback-x11 \
+            --device=dri \
+            --filesystem=host:ro \
+            --command=wows_toolkit
+
+          # Export to a local repo and create a single-file bundle
+          flatpak build-export repo build-dir
+          flatpak build-bundle repo "WoWs_Toolkit-x86_64.flatpak" "$APP_ID"
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: WoWs_Toolkit-x86_64.flatpak
+
+  # ── macOS (universal .app in .dmg) ────────────────────────────────────
+  macos:
+    name: macOS
+    needs: create-release
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Install NASM
+        run: brew install nasm
+
+      - name: Build release binaries
+        run: |
+          cargo build --release --target aarch64-apple-darwin -p wows_toolkit --features av1-asm
+          cargo build --release --target x86_64-apple-darwin -p wows_toolkit --features av1-asm
+
+      - name: Create universal binary
+        run: |
+          lipo -create \
+            target/aarch64-apple-darwin/release/wows_toolkit \
+            target/x86_64-apple-darwin/release/wows_toolkit \
+            -output wows_toolkit_universal
+
+      - name: Generate .icns icon
+        run: |
+          mkdir -p wows_toolkit.iconset
+          sips -z 16 16     assets/icon-1024.png --out wows_toolkit.iconset/icon_16x16.png
+          sips -z 32 32     assets/icon-1024.png --out wows_toolkit.iconset/icon_16x16@2x.png
+          sips -z 32 32     assets/icon-1024.png --out wows_toolkit.iconset/icon_32x32.png
+          sips -z 64 64     assets/icon-1024.png --out wows_toolkit.iconset/icon_32x32@2x.png
+          sips -z 128 128   assets/icon-1024.png --out wows_toolkit.iconset/icon_128x128.png
+          sips -z 256 256   assets/icon-1024.png --out wows_toolkit.iconset/icon_128x128@2x.png
+          sips -z 256 256   assets/icon-1024.png --out wows_toolkit.iconset/icon_256x256.png
+          sips -z 512 512   assets/icon-1024.png --out wows_toolkit.iconset/icon_256x256@2x.png
+          sips -z 512 512   assets/icon-1024.png --out wows_toolkit.iconset/icon_512x512.png
+          sips -z 1024 1024 assets/icon-1024.png --out wows_toolkit.iconset/icon_512x512@2x.png
+          iconutil -c icns wows_toolkit.iconset
+
+      - name: Create .app bundle
+        run: |
+          APP="WoWs Toolkit.app"
+          VERSION="${{ github.ref_name }}"
+
+          mkdir -p "$APP/Contents/MacOS"
+          mkdir -p "$APP/Contents/Resources"
+
+          cp wows_toolkit_universal "$APP/Contents/MacOS/wows_toolkit"
+          chmod +x "$APP/Contents/MacOS/wows_toolkit"
+          cp wows_toolkit.icns "$APP/Contents/Resources/"
+          cp -r crates/wt-translations/translations "$APP/Contents/MacOS/translations"
+
+          cat > "$APP/Contents/Info.plist" << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleName</key>
+              <string>WoWs Toolkit</string>
+              <key>CFBundleDisplayName</key>
+              <string>WoWs Toolkit</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.github.landaire.wows-toolkit</string>
+              <key>CFBundleVersion</key>
+              <string>${VERSION}</string>
+              <key>CFBundleShortVersionString</key>
+              <string>${VERSION}</string>
+              <key>CFBundleExecutable</key>
+              <string>wows_toolkit</string>
+              <key>CFBundleIconFile</key>
+              <string>wows_toolkit</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Create .dmg
+        run: |
+          hdiutil create -volname "WoWs Toolkit" \
+            -srcfolder "WoWs Toolkit.app" \
+            -ov -format UDZO \
+            "wows_toolkit_${{ github.ref_name }}_macos.dmg"
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: wows_toolkit_${{ github.ref_name }}_macos.dmg

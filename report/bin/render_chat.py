@@ -15,11 +15,15 @@ wows_full_report 写盘的战报 JSON,拿到 → 每行带船中文名 + 敌友�
   其他 = 错误
 """
 import argparse
+import hashlib
 import json
 import os
+import random
 import re
 import subprocess
 import sys
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -34,26 +38,6 @@ REPLAYSHARK = os.environ.get(
     "WOWS_REPLAYSHARK_BIN", "/opt/wows-toolkit/target/release/replayshark"
 )
 WOWS_DATA_DIR = os.environ.get("WOWS_DATA_DIR", "/var/lib/wows-data/extracted")
-
-
-def find_latest_extracted() -> str | None:
-    """从 WOWS_DATA_DIR 下挑版本号最大的 <ver>_<build>/ 子目录,给
-    replayshark -e 用。新版 replayshark chat 也要 GameParams 解 entity。"""
-    base = Path(WOWS_DATA_DIR)
-    if not base.is_dir():
-        return None
-    pat = re.compile(r"^(\d+)\.(\d+)\.(\d+)_(\d+)$")
-    cands = []
-    for p in base.iterdir():
-        if not p.is_dir():
-            continue
-        m = pat.match(p.name)
-        if m:
-            cands.append((tuple(int(x) for x in m.groups()), p))
-    if not cands:
-        return None
-    cands.sort()
-    return str(cands[-1][1])
 
 _HEADER_H = 112  # 给副标题留三行 (玩家/语音统计 + upstream bug 提示 + 系统消息提示)
 _ROW_H    = 26
@@ -104,6 +88,10 @@ def load_player_meta(json_path: str | None) -> dict:
         raw = json.load(open(json_path, encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return empty
+    # New `battle-results --format normalized` schema (WG + Lesta) vs the legacy
+    # `battle-report` schema. Detect by the normalized envelope and branch.
+    if isinstance(raw, dict) and "metadata" in raw and "players" in raw:
+        return _load_normalized(raw)
     self_name = (raw.get("match") or {}).get("self_player_name") or ""
     self_team = None
     for p in raw.get("players", []) or []:
@@ -154,6 +142,180 @@ def load_player_meta(json_path: str | None) -> dict:
             "killer": killer, "victim": victim, "cause": cause,
         })
     return {"by_name": by_name, "by_eid": by_eid, "deaths": deaths}
+
+
+def _load_normalized(raw: dict) -> dict:
+    """Build player_meta from the `battle-results --format normalized` schema
+    (WG + Lesta): name→{name, ship(zh), relation} for chat coloring, plus a deaths
+    list synthesized from each player's death_cause / killer_name / time_lived."""
+    players = raw.get("players") or []
+    self_team = next((p.get("team_id") for p in players if p.get("is_self")), None)
+    by_name = {}
+    for p in players:
+        name = p.get("name")
+        if not name:
+            continue
+        team = p.get("team_id")
+        if p.get("is_self"):
+            relation = "self"
+        elif self_team is not None and team == self_team:
+            relation = "friendly"
+        elif self_team is not None:
+            relation = "enemy"
+        else:
+            relation = "unknown"
+        # ship_name is already localized (zh) on the Rust side.
+        by_name[name] = {"name": name, "ship": p.get("ship_name") or "", "relation": relation}
+
+    # Kill timeline: normalized carries no entity-keyed deaths array, but each dead
+    # player has death_cause + killer_name + time_lived (≈ absolute clock, since
+    # spawn is at clock ~0), enough to rebuild kill rows. Self-inflicted (no killer)
+    # falls back to 环境/自损 in _draw_kill_row.
+    deaths = []
+    for p in players:
+        cause_raw = p.get("death_cause")
+        secs = p.get("time_lived_secs")
+        if not cause_raw or secs is None:
+            continue
+        killer = by_name.get(p.get("killer_name")) if p.get("killer_name") else None
+        victim = by_name.get(p["name"])
+        if not victim:
+            continue
+        deaths.append({
+            "time_secs": float(secs),
+            "killer": killer,
+            "victim": victim,
+            "cause": _DEATH_CAUSE_CN.get(cause_raw, cause_raw),
+        })
+    return {"by_name": by_name, "by_eid": {}, "deaths": deaths}
+
+
+def _needs_translation(s: str) -> bool:
+    """True if the message should be translated: it contains a letter that is
+    neither ASCII (English) nor CJK (Chinese). I.e. translate Russian/other foreign
+    scripts, but leave pure Chinese, pure English, and Chinese+English mixes alone.
+    Numbers/symbols-only messages are skipped too."""
+    for ch in s:
+        if not ch.isalpha():
+            continue
+        if ord(ch) < 128:
+            continue  # ASCII letter → English, don't translate
+        if "一" <= ch <= "鿿":
+            continue  # CJK ideograph → Chinese, don't translate
+        return True  # some other script (Cyrillic, etc.) → translate
+    return False
+
+
+def _baidu_translate(texts: list) -> dict:
+    """{src: dst} translating each text to Chinese via the Baidu Translate API
+    (auto→zh), batched into a single request. Returns {} when credentials are
+    absent (BAIDU_TRANSLATE_APPID / BAIDU_TRANSLATE_KEY) or on ANY failure — the
+    caller then shows originals untranslated, so a translation outage never breaks
+    image generation."""
+    appid = os.environ.get("BAIDU_TRANSLATE_APPID")
+    key = os.environ.get("BAIDU_TRANSLATE_KEY")
+    texts = [t for t in texts if t.strip()]
+    if not appid or not key or not texts:
+        return {}
+    # Baidu batches multiple queries as newline-joined `q`; trans_result comes back
+    # one entry per line, in order.
+    q = "\n".join(texts)
+    salt = str(random.randint(10000, 9999999))
+    sign = hashlib.md5(f"{appid}{q}{salt}{key}".encode("utf-8")).hexdigest()
+    params = urllib.parse.urlencode(
+        {"q": q, "from": "auto", "to": "zh", "appid": appid, "salt": salt, "sign": sign}
+    )
+    url = "https://fanyi-api.baidu.com/api/trans/vip/translate?" + params
+    try:
+        with urllib.request.urlopen(url, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:  # network / json / anything — degrade to no-translation
+        print(f"百度翻译失败,显示原文: {e}", file=sys.stderr)
+        return {}
+    if data.get("error_code"):
+        print(f"百度翻译错误 {data.get('error_code')}: {data.get('error_msg')}", file=sys.stderr)
+        return {}
+    out = {}
+    for item in data.get("trans_result") or []:
+        src, dst = item.get("src"), item.get("dst")
+        if src is not None and dst is not None:
+            out[src] = dst
+    return out
+
+
+def _deepseek_translate(texts: list) -> dict:
+    """{src: dst} translating game-chat lines to Chinese via DeepSeek (an LLM, so
+    it handles slang/context far better than a phrase MT — e.g. it won't confuse
+    демотивации 'demotivation' with демобилизации 'demobilization'). One batched
+    request; returns {} on missing key or ANY failure so the caller degrades to
+    Baidu / originals."""
+    # Reuse the bot's existing DeepSeek env (same as report/bin/wows_analyze), so a
+    # key already configured for the /分析 feature works here too with no new setup.
+    key = os.environ.get("WOWS_DEEPSEEK_KEY") or os.environ.get("DEEPSEEK_API_KEY")
+    texts = [t for t in texts if t.strip()]
+    if not key or not texts:
+        return {}
+    system = (
+        "你把《战舰世界》游戏内聊天（可能是俄语、英语或其他外语）翻成中文，只输出译文，不要解释。"
+        "要求按重要性排列："
+        "1)【游戏圈口语，带情绪】——用中国玩家在游戏里真会说的话，保留原话的语气：吐槽、"
+        "嘲讽、阴阳怪气、骂人就要有火药味，别翻得正经、书面、和蔼。比如嘲讽队友消极摆烂的"
+        "‘акция демотивации?’要译成‘都在这摆烂呢？’‘集体搞心态？’这种阴阳口吻，"
+        "绝不能译成‘打击士气活动？’这种公文腔。常用词就用玩家的：摆烂、送、搞心态、菜、坑、"
+        "秀、上啊、别浪。"
+        "2)【一眼看懂】——直白、贴近本意，别为地道而绕到看不懂。"
+        "3)【脏话如实】——俄语/英语脏话（如 блять、сука、пидор、нахуй；fuck、shit、noob、"
+        "retard、trash 等）直接译成对应中文粗口（妈的、操、傻逼、菜逼、滚等），不许星号、"
+        "不许和谐、不许省略、不许写成‘脏话’二字。"
+    )
+    user = (
+        "把下面 JSON 数组里的每条聊天翻成中文，只返回一个等长、同顺序的 JSON 字符串数组，"
+        "不要任何多余文字或代码块围栏：\n" + json.dumps(texts, ensure_ascii=False)
+    )
+    body = json.dumps({
+        "model": os.environ.get("WOWS_DEEPSEEK_MODEL", os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")),
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "temperature": 0,
+        "stream": False,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        os.environ.get("WOWS_DEEPSEEK_URL", os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions")),
+        data=body,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        content = data["choices"][0]["message"]["content"].strip()
+        # Tolerate ```json fences the model might add despite instructions.
+        if content.startswith("```"):
+            content = content.strip("`")
+            content = content[content.find("["):content.rfind("]") + 1]
+        out_list = json.loads(content)
+    except Exception as e:
+        print(f"DeepSeek 翻译失败: {e}", file=sys.stderr)
+        return {}
+    if not isinstance(out_list, list) or len(out_list) != len(texts):
+        print("DeepSeek 返回条数不匹配,放弃 LLM 翻译", file=sys.stderr)
+        return {}
+    return {src: str(dst) for src, dst in zip(texts, out_list)}
+
+
+def translate_chat_rows(rows: list) -> None:
+    """Append a Chinese translation in （full-width parens） after each Russian chat
+    message, in place. Prefers DeepSeek (better on slang/context); falls back to
+    Baidu, then to originals. Only foreign (non-Chinese, non-English) messages are
+    sent; no-op when there are none or no key is set."""
+    need = list(dict.fromkeys(r["msg"] for r in rows if r["kind"] == "chat" and _needs_translation(r["msg"])))
+    if not need:
+        return
+    tr = _deepseek_translate(need) or _baidu_translate(need)
+    for r in rows:
+        if r["kind"] != "chat":
+            continue
+        dst = tr.get(r["msg"])
+        if dst and dst.strip() and dst.strip() != r["msg"].strip():
+            r["msg"] = f"{r['msg']}（{dst.strip()}）"
 
 
 def _relation_color(relation: str, kind: str = "chat") -> tuple:
@@ -395,9 +557,16 @@ def main():
         print(f"replayshark binary 不存在: {REPLAYSHARK} "
               "(设 WOWS_REPLAYSHARK_BIN 覆盖)", file=sys.stderr); sys.exit(2)
     cmd = [REPLAYSHARK]
-    extracted = find_latest_extracted()
-    if extracted:
-        cmd += ["-e", extracted]
+    # Prefer an explicit game dir (WOWS_GAME_DIR, e.g. a Korabli install for Lesta),
+    # else pass the extracted-data ROOT. replayshark resolves the matching
+    # <version>_<build>/ subdir by the replay's own build number, so WG (15.x) and
+    # Lesta (26.x) data can coexist under one root and each replay picks its own —
+    # no "latest version wins" clash (which would feed WG chats Lesta GameParams).
+    game_dir = os.environ.get("WOWS_GAME_DIR")
+    if game_dir and Path(game_dir).is_dir():
+        cmd += ["-g", game_dir]
+    elif Path(WOWS_DATA_DIR).is_dir():
+        cmd += ["-e", WOWS_DATA_DIR]
     cmd += ["chat", args.replay]
     try:
         proc = subprocess.run(
@@ -423,6 +592,7 @@ def main():
         else:
             print("本局无聊天 / 预设语音 (replayshark 无输出)", file=sys.stderr)
         sys.exit(3)
+    translate_chat_rows(rows)  # append （中文） after Russian messages, if API key set
     player_meta = load_player_meta(args.report_json)
     rows = merge_kills_into_timeline(rows, player_meta.get("deaths", []))
     render_chat_png(args.out, rows, player_meta)

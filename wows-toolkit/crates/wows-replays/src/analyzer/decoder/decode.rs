@@ -1,0 +1,2929 @@
+use std::time::Duration;
+
+use crate::packet2::EntityMethodPacket;
+use crate::packet2::Packet;
+use crate::packet2::PacketType;
+use crate::types::AccountId;
+use crate::types::AngularVelocity;
+use crate::types::AvatarId;
+use crate::types::Direction;
+use crate::types::EntityId;
+use crate::types::GameParamId;
+use crate::types::GunBits;
+use crate::types::NormalizedPos;
+use crate::types::PlaneId;
+use crate::types::ShotId;
+use crate::types::Vec3;
+use crate::types::Velocity;
+use crate::types::WorldPos;
+use crate::types::WorldPos2D;
+use kinded::Kinded;
+use pickled::Value;
+
+/// Deserialize a pickle blob, transparently zlib-inflating first when it carries
+/// a zlib header (0x78). WG replays store raw pickle; Lesta («Мир кораблей»)
+/// zlib-compresses every pickle blob, so this makes both realms parse.
+pub(crate) fn depickle(blob: &[u8]) -> Result<Value, ()> {
+    if blob.first() == Some(&0x78) {
+        // Lesta («Мир кораблей»): RPC blob = zlib + msgpack (WG 用裸 pickle)。
+        let mut out = Vec::new();
+        std::io::Read::read_to_end(&mut flate2::read::ZlibDecoder::new(blob), &mut out)
+            .map_err(|_| ())?;
+        let mv = rmpv::decode::read_value(&mut out.as_slice()).map_err(|_| ())?;
+        Ok(msgpack_to_value(mv))
+    } else {
+        pickled::de::value_from_slice(blob, pickled::de::DeOptions::new()).map_err(|_| ())
+    }
+}
+
+/// msgpack → pickled `Value`。映射沿用 WG pickle 的类型约定,好让下游 match 不用改:
+/// msgpack string 当 Python2 str(=Bytes),array 当 List,map 当 Dict。
+fn msgpack_to_value(v: rmpv::Value) -> Value {
+    use pickled::value::{Dict, Shared, SharedFrozen};
+    match v {
+        rmpv::Value::Nil => Value::None,
+        rmpv::Value::Boolean(b) => Value::Bool(b),
+        rmpv::Value::Integer(i) => {
+            Value::I64(i.as_i64().unwrap_or_else(|| i.as_u64().unwrap_or(0) as i64))
+        }
+        rmpv::Value::F32(f) => Value::F64(f as f64),
+        rmpv::Value::F64(f) => Value::F64(f),
+        rmpv::Value::String(s) => Value::Bytes(SharedFrozen::new(s.into_bytes())),
+        rmpv::Value::Binary(b) => Value::Bytes(SharedFrozen::new(b)),
+        rmpv::Value::Array(a) => {
+            Value::List(Shared::new(a.into_iter().map(msgpack_to_value).collect()))
+        }
+        rmpv::Value::Map(m) => {
+            let mut d = Dict::new();
+            for (k, val) in m {
+                d.insert(msgpack_to_hashable(k), msgpack_to_value(val));
+            }
+            Value::Dict(Shared::new(d))
+        }
+        rmpv::Value::Ext(_, _) => Value::None,
+    }
+}
+
+fn msgpack_to_hashable(v: rmpv::Value) -> pickled::value::HashableValue {
+    use pickled::value::{HashableValue as HV, SharedFrozen};
+    match v {
+        rmpv::Value::Nil => HV::None,
+        rmpv::Value::Boolean(b) => HV::Bool(b),
+        rmpv::Value::Integer(i) => {
+            HV::I64(i.as_i64().unwrap_or_else(|| i.as_u64().unwrap_or(0) as i64))
+        }
+        rmpv::Value::F32(f) => HV::F64(f as f64),
+        rmpv::Value::F64(f) => HV::F64(f),
+        rmpv::Value::String(s) => HV::Bytes(SharedFrozen::new(s.into_bytes())),
+        rmpv::Value::Binary(b) => HV::Bytes(SharedFrozen::new(b)),
+        rmpv::Value::Array(a) => {
+            HV::Tuple(SharedFrozen::new(a.into_iter().map(msgpack_to_hashable).collect()))
+        }
+        rmpv::Value::Map(_) | rmpv::Value::Ext(_, _) => HV::None,
+    }
+}
+use serde::Deserialize;
+use serde::Serialize;
+use std::collections::BTreeSet;
+use std::collections::HashMap;
+use std::convert::TryInto;
+use std::iter::FromIterator;
+use tracing::error;
+use wowsunpack::data::Version;
+use wowsunpack::game_constants::DEFAULT_BATTLE_CONSTANTS;
+use wowsunpack::game_constants::DEFAULT_COMMON_CONSTANTS;
+use wowsunpack::game_constants::DEFAULT_SHIPS_CONSTANTS;
+use wowsunpack::game_params::convert::pickle_to_json;
+use wowsunpack::game_params::types::BigWorldDistance;
+use wowsunpack::game_types::DamageStatCategory;
+use wowsunpack::game_types::DamageStatWeapon;
+use wowsunpack::game_types::WeaponType;
+use wowsunpack::rpc::typedefs::ArgValue;
+use wowsunpack::unpack_rpc_args;
+
+use super::super::analyzer::Analyzer;
+
+pub struct DecoderBuilder {
+    silent: bool,
+    no_meta: bool,
+    path: Option<String>,
+    game_constants: Option<&'static crate::game_constants::GameConstants>,
+}
+
+impl DecoderBuilder {
+    pub fn new(silent: bool, no_meta: bool, output: Option<&str>) -> Self {
+        Self { silent, no_meta, path: output.map(|s| s.to_string()), game_constants: None }
+    }
+
+    /// Override the game constants used for decoding (consumable IDs, battle stages, etc.).
+    pub fn game_constants(mut self, gc: &'static crate::game_constants::GameConstants) -> Self {
+        self.game_constants = Some(gc);
+        self
+    }
+
+    pub fn build(self, meta: &crate::ReplayMeta) -> Box<dyn Analyzer> {
+        let version = Version::from_client_exe(&meta.clientVersionFromExe);
+        let gc = self.game_constants.unwrap_or(&*crate::game_constants::DEFAULT_GAME_CONSTANTS);
+        let mut decoder = Decoder {
+            silent: self.silent,
+            output: self
+                .path
+                .as_ref()
+                .map(|path| Box::new(std::fs::File::create(path).unwrap()) as Box<dyn std::io::Write>),
+            packet_decoder: PacketDecoder::builder()
+                .version(version)
+                .battle_constants(gc.battle())
+                .common_constants(gc.common())
+                .ships_constants(gc.ships())
+                .build(),
+        };
+        if !self.no_meta {
+            decoder.write(&serde_json::to_string(&meta).unwrap());
+        }
+        Box::new(decoder)
+    }
+}
+// Types that are also re-exported from the parent module (decoder/mod.rs).
+// Imported here (non-pub) for internal use within this file.
+use wowsunpack::game_types::CameraMode;
+use wowsunpack::game_types::CollisionType;
+use wowsunpack::game_types::Consumable;
+use wowsunpack::game_types::ConsumableUsageParams;
+use wowsunpack::game_types::DeathCause;
+use wowsunpack::game_types::FinishType;
+use wowsunpack::game_types::Ribbon;
+use wowsunpack::game_types::ShellHitType;
+use wowsunpack::game_types::VoiceLine;
+use wowsunpack::recognized::Recognized;
+
+/// Properties only present for human players (not bots)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HumanPlayerProperties {
+    /// Their avatar entity ID in the game
+    pub(crate) avatar_id: AvatarId,
+    /// Division ID
+    pub(crate) prebattle_id: i64,
+    /// Has the client loaded into the game
+    pub(crate) is_client_loaded: bool,
+    /// Is the client connected into the game
+    pub(crate) is_connected: bool,
+}
+
+/// Contains the information describing a player
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlayerStateData {
+    /// The username of this player
+    pub(crate) username: String,
+    /// The player's clan
+    pub(crate) clan: String,
+    /// The player's clan DB id
+    pub(crate) clan_id: i64,
+    /// The color of the player's clan tag as an RGB integer
+    pub(crate) clan_color: i64,
+    /// The player's DB ID (unique player ID)
+    pub(crate) db_id: AccountId,
+    /// The realm this player belongs to
+    pub(crate) realm: Option<String>,
+    /// Their meta ID in the game (account-level identifier)
+    pub(crate) meta_ship_id: AccountId,
+    /// This player's entity created by a CreateEntity packet
+    pub(crate) entity_id: EntityId,
+    /// Which team they're on.
+    pub(crate) team_id: i64,
+    /// Their starting health
+    pub(crate) max_health: i64,
+    /// ????
+    pub(crate) is_abuser: bool,
+    /// Has hidden stats
+    pub(crate) is_hidden: bool,
+    /// Is this player a bot (AI-controlled)
+    pub(crate) is_bot: bool,
+    /// Properties only present for human players
+    pub(crate) human_properties: Option<HumanPlayerProperties>,
+
+    /// This is a raw dump (with the values converted to strings) of every key for the player.
+    // TODO: Replace String with the actual pickle value (which is cleanly serializable)
+    #[serde(skip_deserializing)]
+    pub(crate) raw: HashMap<i64, String>,
+    #[serde(skip_deserializing)]
+    pub(crate) raw_with_names: HashMap<&'static str, serde_json::Value>,
+}
+
+impl PlayerStateData {
+    // Key string constants for player data fields
+    pub(crate) const KEY_ACCOUNT_DBID: &'static str = "accountDBID";
+    pub(crate) const KEY_ANTI_ABUSE_ENABLED: &'static str = "antiAbuseEnabled";
+    pub(crate) const KEY_AVATAR_ID: &'static str = "avatarId";
+    pub(crate) const KEY_CAMOUFLAGE_INFO: &'static str = "camouflageInfo";
+    pub(crate) const KEY_CLAN_COLOR: &'static str = "clanColor";
+    pub(crate) const KEY_CLAN_ID: &'static str = "clanID";
+    pub(crate) const KEY_CLAN_TAG: &'static str = "clanTag";
+    pub(crate) const KEY_CREW_PARAMS: &'static str = "crewParams";
+    pub(crate) const KEY_DOG_TAG: &'static str = "dogTag";
+    pub(crate) const KEY_FRAGS_COUNT: &'static str = "fragsCount";
+    pub(crate) const KEY_FRIENDLY_FIRE_ENABLED: &'static str = "friendlyFireEnabled";
+    pub const KEY_ID: &'static str = "id";
+    pub(crate) const KEY_INVITATIONS_ENABLED: &'static str = "invitationsEnabled";
+    pub(crate) const KEY_IS_ABUSER: &'static str = "isAbuser";
+    pub(crate) const KEY_IS_ALIVE: &'static str = "isAlive";
+    pub(crate) const KEY_IS_BOT: &'static str = "isBot";
+    pub(crate) const KEY_IS_CLIENT_LOADED: &'static str = "isClientLoaded";
+    pub(crate) const KEY_IS_CONNECTED: &'static str = "isConnected";
+    pub(crate) const KEY_IS_HIDDEN: &'static str = "isHidden";
+    pub(crate) const KEY_IS_LEAVER: &'static str = "isLeaver";
+    pub(crate) const KEY_IS_PRE_BATTLE_OWNER: &'static str = "isPreBattleOwner";
+    pub(crate) const KEY_IS_T_SHOOTER: &'static str = "isTShooter";
+    pub(crate) const KEY_KEY_TARGET_MARKERS: &'static str = "keyTargetMarkers";
+    pub(crate) const KEY_KILLED_BUILDINGS_COUNT: &'static str = "killedBuildingsCount";
+    pub(crate) const KEY_MAX_HEALTH: &'static str = "maxHealth";
+    pub(crate) const KEY_NAME: &'static str = "name";
+    pub(crate) const KEY_PLAYER_MODE: &'static str = "playerMode";
+    pub(crate) const KEY_PRE_BATTLE_ID_ON_START: &'static str = "preBattleIdOnStart";
+    pub(crate) const KEY_PRE_BATTLE_SIGN: &'static str = "preBattleSign";
+    pub(crate) const KEY_PREBATTLE_ID: &'static str = "prebattleId";
+    pub(crate) const KEY_REALM: &'static str = "realm";
+    pub(crate) const KEY_SHIP_COMPONENTS: &'static str = "shipComponents";
+    pub(crate) const KEY_SHIP_CONFIG_DUMP: &'static str = "shipConfigDump";
+    pub(crate) const KEY_SHIP_ID: &'static str = "shipId";
+    pub(crate) const KEY_SHIP_PARAMS_ID: &'static str = "shipParamsId";
+    pub(crate) const KEY_SKIN_ID: &'static str = "skinId";
+    pub(crate) const KEY_TEAM_ID: &'static str = "teamId";
+    pub(crate) const KEY_TTK_STATUS: &'static str = "ttkStatus";
+
+    /// Construct a minimal PlayerStateData for realms (e.g. Lesta «Мир кораблей»)
+    /// that deliver the roster outside `onArenaStateReceived`. Only the identity
+    /// fields the report/minimap need are set; everything else defaults.
+    pub fn synthetic(
+        entity_id: EntityId,
+        account: AccountId,
+        username: String,
+        clan: String,
+        team_id: i64,
+    ) -> Self {
+        Self {
+            username,
+            clan,
+            clan_id: 0,
+            clan_color: 0,
+            db_id: account,
+            realm: None,
+            meta_ship_id: account,
+            entity_id,
+            team_id,
+            max_health: 0,
+            is_abuser: false,
+            is_hidden: false,
+            is_bot: false,
+            human_properties: None,
+            raw: HashMap::new(),
+            raw_with_names: HashMap::new(),
+        }
+    }
+
+    fn convert_raw_dict(values: &HashMap<i64, Value>, version: &Version, is_bot: bool) -> HashMap<&'static str, Value> {
+        let keys: HashMap<&'static str, i64> =
+            if is_bot { Self::bot_key_map(version) } else { Self::player_key_map(version) };
+
+        let mut raw_with_names = HashMap::new();
+        for (k, v) in values.iter() {
+            if let Some(name) = keys.iter().find_map(|(name, idx)| if *idx == *k { Some(*name) } else { None }) {
+                raw_with_names.insert(name, v.clone());
+            }
+        }
+
+        raw_with_names
+    }
+
+    fn player_key_map(version: &Version) -> HashMap<&'static str, i64> {
+        // This 38-field layout is stable from 0.11.11 onward: verified against real
+        // 0.11.11 replays, every field this code reads sits at the same index as it
+        // does at 0.12.8 (only keyTargetMarkers at 22 differs, which is unused here).
+        if version.is_at_least(&Version::from_client_exe("0,11,11,0")) {
+            let mut h = HashMap::new();
+            h.insert(Self::KEY_ACCOUNT_DBID, 0);
+            h.insert(Self::KEY_ANTI_ABUSE_ENABLED, 1);
+            h.insert(Self::KEY_AVATAR_ID, 2);
+            h.insert(Self::KEY_CAMOUFLAGE_INFO, 3);
+            h.insert(Self::KEY_CLAN_COLOR, 4);
+            h.insert(Self::KEY_CLAN_ID, 5);
+            h.insert(Self::KEY_CLAN_TAG, 6);
+            h.insert(Self::KEY_CREW_PARAMS, 7);
+            h.insert(Self::KEY_DOG_TAG, 8);
+            h.insert(Self::KEY_FRAGS_COUNT, 9);
+            h.insert(Self::KEY_FRIENDLY_FIRE_ENABLED, 10);
+            h.insert(Self::KEY_ID, 11);
+            h.insert(Self::KEY_INVITATIONS_ENABLED, 12);
+            h.insert(Self::KEY_IS_ABUSER, 13);
+            h.insert(Self::KEY_IS_ALIVE, 14);
+            h.insert(Self::KEY_IS_BOT, 15);
+            h.insert(Self::KEY_IS_CLIENT_LOADED, 16);
+            h.insert(Self::KEY_IS_CONNECTED, 17);
+            h.insert(Self::KEY_IS_HIDDEN, 18);
+            h.insert(Self::KEY_IS_LEAVER, 19);
+            h.insert(Self::KEY_IS_PRE_BATTLE_OWNER, 20);
+            h.insert(Self::KEY_IS_T_SHOOTER, 21);
+            h.insert(Self::KEY_KEY_TARGET_MARKERS, 22);
+            h.insert(Self::KEY_KILLED_BUILDINGS_COUNT, 23);
+            h.insert(Self::KEY_MAX_HEALTH, 24);
+            h.insert(Self::KEY_NAME, 25);
+            h.insert(Self::KEY_PLAYER_MODE, 26);
+            h.insert(Self::KEY_PRE_BATTLE_ID_ON_START, 27);
+            h.insert(Self::KEY_PRE_BATTLE_SIGN, 28);
+            h.insert(Self::KEY_PREBATTLE_ID, 29);
+            h.insert(Self::KEY_REALM, 30);
+            h.insert(Self::KEY_SHIP_COMPONENTS, 31);
+            h.insert(Self::KEY_SHIP_CONFIG_DUMP, 32);
+            h.insert(Self::KEY_SHIP_ID, 33);
+            h.insert(Self::KEY_SHIP_PARAMS_ID, 34);
+            h.insert(Self::KEY_SKIN_ID, 35);
+            h.insert(Self::KEY_TEAM_ID, 36);
+            h.insert(Self::KEY_TTK_STATUS, 37);
+            h
+        } else if version.is_at_least(&Version::from_client_exe("0,10,9,0")) {
+            // 0.10.9-0.11.10 (37 fields): 0.10.7 layout plus antiAbuseEnabled(1) and
+            // shipComponents(30); still predates keyTargetMarkers. Verified against
+            // real replays across this range.
+            let mut h = HashMap::new();
+            h.insert(Self::KEY_ACCOUNT_DBID, 0);
+            h.insert(Self::KEY_ANTI_ABUSE_ENABLED, 1);
+            h.insert(Self::KEY_AVATAR_ID, 2);
+            h.insert(Self::KEY_CAMOUFLAGE_INFO, 3);
+            h.insert(Self::KEY_CLAN_COLOR, 4);
+            h.insert(Self::KEY_CLAN_ID, 5);
+            h.insert(Self::KEY_CLAN_TAG, 6);
+            h.insert(Self::KEY_CREW_PARAMS, 7);
+            h.insert(Self::KEY_DOG_TAG, 8);
+            h.insert(Self::KEY_FRAGS_COUNT, 9);
+            h.insert(Self::KEY_FRIENDLY_FIRE_ENABLED, 10);
+            h.insert(Self::KEY_ID, 11);
+            h.insert(Self::KEY_INVITATIONS_ENABLED, 12);
+            h.insert(Self::KEY_IS_ABUSER, 13);
+            h.insert(Self::KEY_IS_ALIVE, 14);
+            h.insert(Self::KEY_IS_BOT, 15);
+            h.insert(Self::KEY_IS_CLIENT_LOADED, 16);
+            h.insert(Self::KEY_IS_CONNECTED, 17);
+            h.insert(Self::KEY_IS_HIDDEN, 18);
+            h.insert(Self::KEY_IS_LEAVER, 19);
+            h.insert(Self::KEY_IS_PRE_BATTLE_OWNER, 20);
+            h.insert(Self::KEY_IS_T_SHOOTER, 21);
+            h.insert(Self::KEY_KILLED_BUILDINGS_COUNT, 22);
+            h.insert(Self::KEY_MAX_HEALTH, 23);
+            h.insert(Self::KEY_NAME, 24);
+            h.insert(Self::KEY_PLAYER_MODE, 25);
+            h.insert(Self::KEY_PRE_BATTLE_ID_ON_START, 26);
+            h.insert(Self::KEY_PRE_BATTLE_SIGN, 27);
+            h.insert(Self::KEY_PREBATTLE_ID, 28);
+            h.insert(Self::KEY_REALM, 29);
+            h.insert(Self::KEY_SHIP_COMPONENTS, 30);
+            h.insert(Self::KEY_SHIP_CONFIG_DUMP, 31);
+            h.insert(Self::KEY_SHIP_ID, 32);
+            h.insert(Self::KEY_SHIP_PARAMS_ID, 33);
+            h.insert(Self::KEY_SKIN_ID, 34);
+            h.insert(Self::KEY_TEAM_ID, 35);
+            h.insert(Self::KEY_TTK_STATUS, 36);
+            h
+        } else if version.is_at_least(&Version::from_client_exe("0,10,7,0")) {
+            // 0.10.7-0.10.8 (35 fields): pre-0.10.7 layout plus isClientLoaded(15);
+            // still predates antiAbuseEnabled and shipComponents. Verified against a
+            // real 0.10.7 replay.
+            let mut h = HashMap::new();
+            h.insert(Self::KEY_ACCOUNT_DBID, 0);
+            h.insert(Self::KEY_AVATAR_ID, 1);
+            h.insert(Self::KEY_CAMOUFLAGE_INFO, 2);
+            h.insert(Self::KEY_CLAN_COLOR, 3);
+            h.insert(Self::KEY_CLAN_ID, 4);
+            h.insert(Self::KEY_CLAN_TAG, 5);
+            h.insert(Self::KEY_CREW_PARAMS, 6);
+            h.insert(Self::KEY_DOG_TAG, 7);
+            h.insert(Self::KEY_FRAGS_COUNT, 8);
+            h.insert(Self::KEY_FRIENDLY_FIRE_ENABLED, 9);
+            h.insert(Self::KEY_ID, 10);
+            h.insert(Self::KEY_INVITATIONS_ENABLED, 11);
+            h.insert(Self::KEY_IS_ABUSER, 12);
+            h.insert(Self::KEY_IS_ALIVE, 13);
+            h.insert(Self::KEY_IS_BOT, 14);
+            h.insert(Self::KEY_IS_CLIENT_LOADED, 15);
+            h.insert(Self::KEY_IS_CONNECTED, 16);
+            h.insert(Self::KEY_IS_HIDDEN, 17);
+            h.insert(Self::KEY_IS_LEAVER, 18);
+            h.insert(Self::KEY_IS_PRE_BATTLE_OWNER, 19);
+            h.insert(Self::KEY_IS_T_SHOOTER, 20);
+            h.insert(Self::KEY_KILLED_BUILDINGS_COUNT, 21);
+            h.insert(Self::KEY_MAX_HEALTH, 22);
+            h.insert(Self::KEY_NAME, 23);
+            h.insert(Self::KEY_PLAYER_MODE, 24);
+            h.insert(Self::KEY_PRE_BATTLE_ID_ON_START, 25);
+            h.insert(Self::KEY_PRE_BATTLE_SIGN, 26);
+            h.insert(Self::KEY_PREBATTLE_ID, 27);
+            h.insert(Self::KEY_REALM, 28);
+            h.insert(Self::KEY_SHIP_CONFIG_DUMP, 29);
+            h.insert(Self::KEY_SHIP_ID, 30);
+            h.insert(Self::KEY_SHIP_PARAMS_ID, 31);
+            h.insert(Self::KEY_SKIN_ID, 32);
+            h.insert(Self::KEY_TEAM_ID, 33);
+            h.insert(Self::KEY_TTK_STATUS, 34);
+            h
+        } else {
+            // Pre-0.10.7 layout (34 fields, indices 0-33), recovered from a 0.9.10
+            // replay's player FixedDict. BigWorld FixedDict keys are alphabetically
+            // ordered, so the index is the field's alphabetical position over the
+            // fields that existed then -- this era predates isClientLoaded,
+            // antiAbuseEnabled, keyTargetMarkers and shipComponents. Mapping the full
+            // set (not just the 8 fields older code needed) is what lets old replays
+            // resolve connection state and ship builds instead of defaulting to
+            // disconnected/empty.
+            let mut h = HashMap::new();
+            h.insert(Self::KEY_ACCOUNT_DBID, 0);
+            h.insert(Self::KEY_AVATAR_ID, 1);
+            h.insert(Self::KEY_CAMOUFLAGE_INFO, 2);
+            h.insert(Self::KEY_CLAN_COLOR, 3);
+            h.insert(Self::KEY_CLAN_ID, 4);
+            h.insert(Self::KEY_CLAN_TAG, 5);
+            h.insert(Self::KEY_CREW_PARAMS, 6);
+            h.insert(Self::KEY_DOG_TAG, 7);
+            h.insert(Self::KEY_FRAGS_COUNT, 8);
+            h.insert(Self::KEY_FRIENDLY_FIRE_ENABLED, 9);
+            h.insert(Self::KEY_ID, 10);
+            h.insert(Self::KEY_INVITATIONS_ENABLED, 11);
+            h.insert(Self::KEY_IS_ABUSER, 12);
+            h.insert(Self::KEY_IS_ALIVE, 13);
+            h.insert(Self::KEY_IS_BOT, 14);
+            h.insert(Self::KEY_IS_CONNECTED, 15);
+            h.insert(Self::KEY_IS_HIDDEN, 16);
+            h.insert(Self::KEY_IS_LEAVER, 17);
+            h.insert(Self::KEY_IS_PRE_BATTLE_OWNER, 18);
+            h.insert(Self::KEY_IS_T_SHOOTER, 19);
+            h.insert(Self::KEY_KILLED_BUILDINGS_COUNT, 20);
+            h.insert(Self::KEY_MAX_HEALTH, 21);
+            h.insert(Self::KEY_NAME, 22);
+            h.insert(Self::KEY_PLAYER_MODE, 23);
+            h.insert(Self::KEY_PRE_BATTLE_ID_ON_START, 24);
+            h.insert(Self::KEY_PRE_BATTLE_SIGN, 25);
+            h.insert(Self::KEY_PREBATTLE_ID, 26);
+            h.insert(Self::KEY_REALM, 27);
+            h.insert(Self::KEY_SHIP_CONFIG_DUMP, 28);
+            h.insert(Self::KEY_SHIP_ID, 29);
+            h.insert(Self::KEY_SHIP_PARAMS_ID, 30);
+            h.insert(Self::KEY_SKIN_ID, 31);
+            h.insert(Self::KEY_TEAM_ID, 32);
+            h.insert(Self::KEY_TTK_STATUS, 33);
+            h
+        }
+    }
+
+    /// Bot key mapping — bots have a different (smaller) set of fields with different indices.
+    fn bot_key_map(version: &Version) -> HashMap<&'static str, i64> {
+        if version.is_at_least(&Version::from_client_exe("0,12,8,0")) {
+            let mut h = HashMap::new();
+            h.insert(Self::KEY_ACCOUNT_DBID, 0);
+            h.insert(Self::KEY_ANTI_ABUSE_ENABLED, 1);
+            h.insert(Self::KEY_CAMOUFLAGE_INFO, 2);
+            h.insert(Self::KEY_CLAN_COLOR, 3);
+            h.insert(Self::KEY_CLAN_ID, 4);
+            h.insert(Self::KEY_CLAN_TAG, 5);
+            h.insert(Self::KEY_CREW_PARAMS, 6);
+            h.insert(Self::KEY_DOG_TAG, 7);
+            h.insert(Self::KEY_FRAGS_COUNT, 8);
+            h.insert(Self::KEY_FRIENDLY_FIRE_ENABLED, 9);
+            h.insert(Self::KEY_ID, 10);
+            h.insert(Self::KEY_IS_ABUSER, 11);
+            h.insert(Self::KEY_IS_ALIVE, 12);
+            h.insert(Self::KEY_IS_BOT, 13);
+            h.insert(Self::KEY_IS_HIDDEN, 14);
+            h.insert(Self::KEY_IS_T_SHOOTER, 15);
+            // Fields are indexed by alphabetical sort position of their names
+            // (the client serializes the shared-data dict via `enumerate(sorted(...))`),
+            // and "keyTargetMarkers" sorts before "killedBuildingsCount".
+            h.insert(Self::KEY_KEY_TARGET_MARKERS, 16);
+            h.insert(Self::KEY_KILLED_BUILDINGS_COUNT, 17);
+            h.insert(Self::KEY_MAX_HEALTH, 18);
+            h.insert(Self::KEY_NAME, 19);
+            h.insert(Self::KEY_REALM, 20);
+            h.insert(Self::KEY_SHIP_COMPONENTS, 21);
+            h.insert(Self::KEY_SHIP_CONFIG_DUMP, 22);
+            h.insert(Self::KEY_SHIP_ID, 23);
+            h.insert(Self::KEY_SHIP_PARAMS_ID, 24);
+            h.insert(Self::KEY_SKIN_ID, 25);
+            h.insert(Self::KEY_TEAM_ID, 26);
+            h.insert(Self::KEY_TTK_STATUS, 27);
+            h
+        } else {
+            // For older versions, bots weren't separately tracked or had
+            // the same layout as players. Fall back to player key map.
+            Self::player_key_map(version)
+        }
+    }
+
+    fn from_pickle(value: &pickled::Value, version: &Version, is_bot: bool) -> Self {
+        let raw_values = convert_flat_dict_to_real_dict(value);
+
+        let mapped_values = Self::convert_raw_dict(&raw_values, version, is_bot);
+        Self::from_values(raw_values, mapped_values, version)
+    }
+
+    fn from_values(
+        raw_values: HashMap<i64, pickled::Value>,
+        mut mapped_values: HashMap<&'static str, pickled::Value>,
+        _version: &Version,
+    ) -> Self {
+        // Older arena-state layouts (pre-0.10.7) only provide a subset of these
+        // fields, so every lookup must tolerate a missing key rather than unwrap.
+        let get_str =
+            |key| mapped_values.get(key).and_then(|v: &pickled::Value| v.string_ref()).map(|s| s.inner().clone());
+        let get_i64 = |key| mapped_values.get(key).and_then(|v: &pickled::Value| v.i64_ref().copied());
+
+        let username = get_str(Self::KEY_NAME).unwrap_or_default();
+        let clan = get_str(Self::KEY_CLAN_TAG).unwrap_or_default();
+        let clan_id = get_i64(Self::KEY_CLAN_ID).unwrap_or(0);
+
+        let shipid = get_i64(Self::KEY_SHIP_ID).unwrap_or(0);
+        let meta_ship_id = get_i64(Self::KEY_ID).unwrap_or(0);
+        let team = get_i64(Self::KEY_TEAM_ID).unwrap_or(0);
+        let health = get_i64(Self::KEY_MAX_HEALTH).unwrap_or(0);
+
+        let realm = get_str(Self::KEY_REALM);
+
+        let db_id = get_i64(Self::KEY_ACCOUNT_DBID).unwrap_or(0);
+
+        let is_abuser = mapped_values
+            .get(Self::KEY_IS_ABUSER)
+            .and_then(|v| v.bool_ref().cloned().or_else(|| v.i64_ref().map(|i| *i != 0)))
+            .unwrap_or(false);
+
+        let is_hidden = mapped_values
+            .get(Self::KEY_IS_HIDDEN)
+            .and_then(|v| v.bool_ref().cloned().or_else(|| v.i64_ref().map(|i| *i != 0)))
+            .unwrap_or(false);
+
+        let is_bot = mapped_values.get(Self::KEY_IS_BOT).and_then(|v| v.bool_ref().cloned()).unwrap_or(false);
+
+        let clan_color = get_i64(Self::KEY_CLAN_COLOR).unwrap_or(0);
+
+        // Human-only properties (not present for bots)
+        let human_properties =
+            mapped_values.get(Self::KEY_AVATAR_ID).and_then(|v| v.i64_ref().copied()).map(|avatar_id| {
+                let prebattle_id =
+                    mapped_values.get(Self::KEY_PREBATTLE_ID).and_then(|v| v.i64_ref().copied()).unwrap_or(0);
+                let is_connected =
+                    mapped_values.get(Self::KEY_IS_CONNECTED).and_then(|v| v.bool_ref().copied()).unwrap_or(false);
+                let is_client_loaded =
+                    mapped_values.get(Self::KEY_IS_CLIENT_LOADED).and_then(|v| v.bool_ref().copied()).unwrap_or(false);
+                HumanPlayerProperties {
+                    avatar_id: AvatarId::from(avatar_id as u32),
+                    prebattle_id,
+                    is_connected,
+                    is_client_loaded,
+                }
+            });
+
+        let mut raw = HashMap::new();
+        for (k, v) in raw_values.iter() {
+            raw.insert(*k, format!("{:?}", v));
+        }
+
+        PlayerStateData {
+            username,
+            clan,
+            clan_id,
+            clan_color,
+            realm,
+            db_id: AccountId::from(db_id),
+            meta_ship_id: AccountId::from(meta_ship_id),
+            entity_id: EntityId::from(shipid),
+            team_id: team,
+            max_health: health,
+            is_abuser,
+            is_hidden,
+            is_bot,
+            human_properties,
+            raw,
+            raw_with_names: HashMap::from_iter(mapped_values.drain().map(|(k, v)| (k, pickle_to_json(v)))),
+        }
+    }
+
+    /// Updates the PlayerStateData from a dictionary of values.
+    /// Only fields present in the dictionary will be updated.
+    pub fn update_from_dict(&mut self, values: &HashMap<&'static str, pickled::Value>) {
+        if let Some(v) = values.get(Self::KEY_AVATAR_ID)
+            && let Some(id) = v.i64_ref()
+            && let Some(ref mut hp) = self.human_properties
+        {
+            hp.avatar_id = AvatarId::from(*id);
+        }
+        if let Some(v) = values.get(Self::KEY_NAME)
+            && let Some(s) = v.string_ref()
+        {
+            self.username = s.inner().clone();
+        }
+        if let Some(v) = values.get(Self::KEY_CLAN_TAG)
+            && let Some(s) = v.string_ref()
+        {
+            self.clan = s.inner().clone();
+        }
+        if let Some(v) = values.get(Self::KEY_CLAN_ID)
+            && let Some(id) = v.i64_ref()
+        {
+            self.clan_id = *id;
+        }
+        if let Some(v) = values.get(Self::KEY_CLAN_COLOR)
+            && let Some(id) = v.i64_ref()
+        {
+            self.clan_color = *id;
+        }
+        if let Some(v) = values.get(Self::KEY_SHIP_ID)
+            && let Some(id) = v.i64_ref()
+        {
+            self.entity_id = EntityId::from(*id);
+        }
+        if let Some(v) = values.get(Self::KEY_ID)
+            && let Some(id) = v.i64_ref()
+        {
+            self.meta_ship_id = AccountId::from(*id);
+        }
+        if let Some(v) = values.get(Self::KEY_TEAM_ID)
+            && let Some(id) = v.i64_ref()
+        {
+            self.team_id = *id;
+        }
+        if let Some(v) = values.get(Self::KEY_MAX_HEALTH)
+            && let Some(id) = v.i64_ref()
+        {
+            self.max_health = *id;
+        }
+        if let Some(v) = values.get(Self::KEY_REALM)
+            && let Some(s) = v.string_ref()
+        {
+            self.realm = Some(s.inner().clone());
+        }
+        if let Some(v) = values.get(Self::KEY_ACCOUNT_DBID)
+            && let Some(id) = v.i64_ref()
+        {
+            self.db_id = AccountId::from(*id);
+        }
+        if let Some(v) = values.get(Self::KEY_PREBATTLE_ID)
+            && let Some(id) = v.i64_ref()
+            && let Some(ref mut hp) = self.human_properties
+        {
+            hp.prebattle_id = *id;
+        }
+        if let Some(v) = values.get(Self::KEY_IS_ABUSER)
+            && let Some(b) = v.bool_ref()
+        {
+            self.is_abuser = *b;
+        }
+        if let Some(v) = values.get(Self::KEY_IS_HIDDEN)
+            && let Some(b) = v.bool_ref()
+        {
+            self.is_hidden = *b;
+        }
+        if let Some(v) = values.get(Self::KEY_IS_CONNECTED)
+            && let Some(b) = v.bool_ref()
+            && let Some(ref mut hp) = self.human_properties
+        {
+            hp.is_connected = *b;
+        }
+        if let Some(v) = values.get(Self::KEY_IS_CLIENT_LOADED)
+            && let Some(b) = v.bool_ref()
+            && let Some(ref mut hp) = self.human_properties
+        {
+            hp.is_client_loaded = *b;
+        }
+        if let Some(v) = values.get(Self::KEY_IS_BOT)
+            && let Some(b) = v.bool_ref()
+        {
+            self.is_bot = *b;
+        }
+
+        // Update raw_with_names with any new values
+        for (k, v) in values.iter() {
+            self.raw_with_names.insert(k, pickle_to_json(v.clone()));
+        }
+    }
+
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+
+    pub fn clan(&self) -> &str {
+        &self.clan
+    }
+
+    pub fn clan_id(&self) -> i64 {
+        self.clan_id
+    }
+
+    pub fn clan_color(&self) -> i64 {
+        self.clan_color
+    }
+
+    pub fn db_id(&self) -> AccountId {
+        self.db_id
+    }
+
+    pub fn realm(&self) -> Option<&str> {
+        self.realm.as_deref()
+    }
+
+    pub fn avatar_id(&self) -> Option<AvatarId> {
+        self.human_properties.as_ref().map(|hp| hp.avatar_id)
+    }
+
+    pub fn meta_ship_id(&self) -> AccountId {
+        self.meta_ship_id
+    }
+
+    pub fn entity_id(&self) -> EntityId {
+        self.entity_id
+    }
+
+    pub fn team_id(&self) -> i64 {
+        self.team_id
+    }
+
+    pub fn division_id(&self) -> i64 {
+        self.human_properties.as_ref().map(|hp| hp.prebattle_id).unwrap_or(0)
+    }
+
+    /// Returns true if `other` is in the same division as `self` (and is not `self`).
+    pub fn is_division_mate(&self, other: &PlayerStateData) -> bool {
+        self.db_id() != other.db_id() && self.division_id() > 0 && other.division_id() == self.division_id()
+    }
+
+    pub fn max_health(&self) -> i64 {
+        self.max_health
+    }
+
+    pub fn is_abuser(&self) -> bool {
+        self.is_abuser
+    }
+
+    pub fn is_alive(&self) -> bool {
+        self.raw_with_names.get(Self::KEY_IS_ALIVE).and_then(|v| v.as_bool()).unwrap_or(true)
+    }
+
+    pub fn is_hidden(&self) -> bool {
+        self.is_hidden
+    }
+
+    pub fn is_client_loaded(&self) -> bool {
+        self.human_properties.as_ref().map(|hp| hp.is_client_loaded).unwrap_or_else(|| self.is_bot())
+    }
+
+    pub fn is_connected(&self) -> bool {
+        self.human_properties.as_ref().map(|hp| hp.is_connected).unwrap_or_else(|| self.is_bot())
+    }
+
+    pub fn human_properties(&self) -> Option<&HumanPlayerProperties> {
+        self.human_properties.as_ref()
+    }
+
+    pub fn is_bot(&self) -> bool {
+        self.is_bot
+    }
+
+    /// The ship's GameParamId, if present in the decoded data.
+    pub fn ship_params_id(&self) -> Option<GameParamId> {
+        self.raw_with_names
+            .get(Self::KEY_SHIP_PARAMS_ID)
+            .and_then(|v| v.as_u64())
+            .map(|id| GameParamId::from(id as u32))
+    }
+
+    /// Encoded ship configuration blob (modules, upgrades, signals, etc.).
+    /// Same format as the `shipConfig` arg on a Vehicle `EntityCreate` packet,
+    /// so `wowsunpack::data::ship_config::parse_ship_config` accepts it directly.
+    /// Lets callers reconstruct a ship's build for players never seen via
+    /// `EntityCreate` (i.e. enemies that stay outside detection all match).
+    pub fn ship_config_dump(&self) -> Option<Vec<u8>> {
+        self.raw_with_names
+            .get(Self::KEY_SHIP_CONFIG_DUMP)
+            .and_then(|v| v.as_array().map(|arr| arr.iter().filter_map(|n| n.as_u64().map(|u| u as u8)).collect()))
+    }
+
+    pub fn raw(&self) -> &HashMap<i64, String> {
+        &self.raw
+    }
+
+    pub fn raw_with_names(&self) -> &HashMap<&'static str, serde_json::Value> {
+        &self.raw_with_names
+    }
+}
+
+/// Converts a list of key-value pairs to a real dictionary
+fn convert_flat_dict_to_real_dict(value: &Value) -> HashMap<i64, Value> {
+    let mut raw_values = HashMap::new();
+    if let pickled::value::Value::List(elements) = value {
+        for elem in elements.inner().iter() {
+            // WG: 每个字段对是 Tuple(k,v);Lesta 的 msgpack array → List(k,v)。两者都收。
+            let kv: Vec<Value> = match elem {
+                pickled::value::Value::Tuple(t) => t.inner().clone(),
+                pickled::value::Value::List(l) => l.inner().clone(),
+                _ => continue,
+            };
+            if kv.len() == 2
+                && let Some(key) = kv[0].i64_ref()
+            {
+                raw_values.insert(*key, kv[1].clone());
+            }
+        }
+    }
+
+    raw_values
+}
+
+/// Indicates that the given attacker has dealt damage
+#[derive(Debug, Clone, Serialize)]
+pub struct DamageReceived {
+    /// Ship ID of the aggressor
+    pub aggressor: EntityId,
+    /// Amount of damage dealt
+    pub damage: f32,
+}
+
+/// Sent to update the minimap display
+#[derive(Debug, Clone, Serialize)]
+pub struct MinimapUpdate {
+    /// The ship ID of the ship to update
+    pub entity_id: EntityId,
+    /// True when the raw packed position is (0, 0), indicating the ship is not
+    /// visible on the minimap. Checked on raw 11-bit integer values before float
+    /// conversion to avoid floating-point precision issues.
+    pub is_sentinel: bool,
+    /// Set to true if the ship should disappear from the minimap (false otherwise)
+    pub disappearing: bool,
+    /// The heading of the ship. Unit is degrees, 0 is up, positive is clockwise
+    /// (so 90.0 is East)
+    pub heading: f32,
+    /// Normalized position on the minimap
+    pub position: NormalizedPos,
+    /// Unknown, but this appears to be something related to the big hunt
+    pub unknown: bool,
+}
+
+impl MinimapUpdate {
+    /// Returns true if this is a hydrophone-style minimap ping: a one-shot
+    /// position flash from minimap-only detection (e.g. submarine hydrophone).
+    ///
+    /// These updates have `disappearing=true` with a valid (non-sentinel)
+    /// position. They are always isolated — never preceded by active tracking
+    /// and never followed by a sentinel. The position is valid at the instant
+    /// of the ping but should not be treated as sustained detection.
+    pub fn is_minimap_ping(&self) -> bool {
+        self.disappearing && !self.is_sentinel
+    }
+}
+
+/// One surface contact reported by a submarine's hydrophone. Carries a coarse
+/// minimap position only, not a full detection: the contact never enters the
+/// client as a Vehicle entity.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct HydrophoneZoneContact {
+    /// Minimap zone the contact sits in. `SURFACE_BROADCAST_ZONE_INFO`, used by
+    /// the team-shared channel, carries no zone.
+    pub zone_id: Option<u8>,
+    pub entity_id: EntityId,
+    pub position: WorldPos2D,
+}
+
+/// One contact from `SUBMARINE_HYDROPHONE_TARGET_INFO`, which carries a full
+/// pose and ship identity rather than just a zone.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SubmarineHydrophoneContact {
+    pub entity_id: EntityId,
+    pub params_id: GameParamId,
+    pub position: WorldPos,
+    pub yaw: f32,
+    pub pitch: f32,
+}
+
+/// A single shell in an artillery salvo (from SHOT in alias.xml)
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ArtilleryShotData {
+    pub origin: WorldPos,
+    /// Gun barrel pitch angle at fire time (radians).
+    pub pitch: f32,
+    pub speed: f32,
+    pub target: WorldPos,
+    pub shot_id: ShotId,
+    /// Which barrel within the turret fired this shell.
+    pub gun_barrel_id: u16,
+    /// Server-side time remaining for the shell to reach the target (seconds).
+    pub server_time_left: f32,
+    /// Height of the shooter above sea level at fire time.
+    pub shooter_height: f32,
+    /// Distance from the gun to the aimed target point.
+    pub hit_distance: f32,
+}
+
+/// A salvo of artillery shells from one ship
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ArtillerySalvo {
+    pub owner_id: EntityId,
+    pub params_id: GameParamId,
+    pub salvo_id: u32,
+    pub shots: Vec<ArtilleryShotData>,
+}
+
+/// Homing torpedo maneuver state (from TORPEDO_MANEUVER_DUMP in alias.xml).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TorpedoManeuverDump {
+    pub target_yaw: f32,
+    pub change_time: f32,
+    pub stop_time: f32,
+    pub current_time: f32,
+    pub yaw_speed: f32,
+    pub arm_pos: WorldPos,
+    pub final_pos: WorldPos,
+}
+
+/// Acoustic torpedo guidance state (from TORPEDO_ACOUSTIC_DUMP in alias.xml).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TorpedoAcousticDump {
+    pub is_chasing_target: bool,
+    pub prediction_lost: bool,
+    pub modificators_level: u8,
+    pub activation_time: f32,
+    pub degradation_time: f32,
+    pub speed_coef: f32,
+    pub rotation_yaw: f32,
+    pub vertical_speed: f32,
+    pub target_yaw: f32,
+    pub target_depth: f32,
+}
+
+/// A single torpedo launch (from TORPEDO in alias.xml)
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TorpedoData {
+    pub owner_id: EntityId,
+    pub params_id: GameParamId,
+    pub salvo_id: u32,
+    /// Torpedo skin (cosmetic variant).
+    pub skin_id: GameParamId,
+    pub shot_id: ShotId,
+    pub origin: WorldPos,
+    /// Direction vector whose magnitude is the torpedo speed in m/s.
+    pub direction: Direction,
+    /// Whether the torpedo warhead is armed (can detonate on contact).
+    pub armed: bool,
+    /// Homing torpedo maneuver state. None for straight-running torpedoes.
+    pub maneuver_dump: Option<TorpedoManeuverDump>,
+    /// Acoustic torpedo guidance state. None for non-acoustic torpedoes.
+    pub acoustic_dump: Option<TorpedoAcousticDump>,
+}
+
+/// Physics body state for a ship hull fragment after cracking apart on death.
+/// Serialized as a 72-byte (0x48) raw binary blob by the engine's `dumpState()`.
+/// Used by `syncShipCracks` to synchronize sinking animation between server and client.
+#[derive(Debug, Clone, Serialize)]
+pub struct PhysicsBodyState {
+    /// Elasticity/friction coefficient (body struct offset +0x88, next to mass at +0x84)
+    pub elasticity: f32,
+    /// World position (x, y, z)
+    pub position: WorldPos,
+    /// Orientation as a quaternion (x, y, z, w)
+    pub orientation: [f32; 4],
+    /// Linear velocity in m/s (x, y, z)
+    pub linear_velocity: Velocity,
+    /// Angular velocity in rad/s (x, y, z)
+    pub angular_velocity: AngularVelocity,
+    /// Unknown physics parameters (likely buoyancy/damping state)
+    pub unknown1: [f32; 2],
+    /// Unknown physics parameter (likely water damping coefficient)
+    pub unknown2: f32,
+}
+
+impl PhysicsBodyState {
+    /// Parse a 72-byte physics body state blob.
+    /// Returns None if the blob is empty or not exactly 72 bytes.
+    pub fn parse(data: &[u8]) -> Option<Self> {
+        if data.len() != 72 {
+            return None;
+        }
+        let f = |offset: usize| -> f32 { f32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()) };
+        Some(PhysicsBodyState {
+            elasticity: f(0x00),
+            position: WorldPos::new(f(0x04), f(0x08), f(0x0C)),
+            orientation: [f(0x10), f(0x14), f(0x18), f(0x1C)],
+            linear_velocity: Velocity(Vec3::new(f(0x20), f(0x24), f(0x28))),
+            angular_velocity: AngularVelocity(Vec3::new(f(0x2C), f(0x30), f(0x34))),
+            unknown1: [f(0x38), f(0x3C)],
+            unknown2: f(0x40),
+        })
+    }
+}
+
+/// Packed hit type from SHOTKILL, encoding both collision type and shell hit type.
+/// Packed as `collision_type << 5 | shell_hit_type` by `IntPackerUnpacker`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct HitType {
+    pub collision: Recognized<CollisionType>,
+    pub shell_hit: Recognized<ShellHitType>,
+    /// The raw packed byte, preserved in case of unknown values.
+    pub raw: u8,
+}
+
+impl HitType {
+    pub fn from_raw(raw: u8, ships_constants: &wowsunpack::game_constants::ShipsConstants, version: &Version) -> Self {
+        let collision_id = ((raw >> 5) & 0x07) as i32;
+        let shell_hit_id = (raw & 0x1F) as i32;
+        let collision = CollisionType::from_id(collision_id, ships_constants, *version)
+            .unwrap_or(Recognized::Unknown(format!("{collision_id}")));
+        let shell_hit = ShellHitType::from_id(shell_hit_id, ships_constants, *version)
+            .unwrap_or(Recognized::Unknown(format!("{shell_hit_id}")));
+        Self { collision, shell_hit, raw }
+    }
+}
+
+/// Terminal ballistics state at the moment of shell impact (from TERMINAL_BALLISTICS_INFO).
+/// Contains the shell's position, velocity vector, detonator state, and the angle
+/// against the impacted armor material. Available in game version 14.8+.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TerminalBallisticsInfo {
+    /// Shell position at impact in world coordinates.
+    pub position: WorldPos,
+    /// Shell velocity vector after server-side impact processing (post-impact, not incoming).
+    /// Used by the game client to spawn a visual FakeShot showing the shell exiting/bouncing.
+    /// For ricochets this is the bounce direction; for overpens the exit direction.
+    pub velocity: Velocity,
+    /// Whether the AP detonator has been activated (fuse armed).
+    pub detonator_activated: bool,
+    /// Angle between the shell trajectory and the armor plate normal (radians).
+    pub material_angle: f32,
+}
+
+/// A single projectile hit (from receiveShotKills)
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ShotHit {
+    pub owner_id: EntityId,
+    pub hit_type: HitType,
+    pub shot_id: ShotId,
+    /// World-space position where the projectile impacted.
+    pub position: WorldPos,
+    /// Terminal ballistics info at impact (shell velocity, detonator state, armor angle).
+    /// Only present in game versions that include TERMINAL_BALLISTICS_INFO in SHOTKILL.
+    pub terminal_ballistics: Option<TerminalBallisticsInfo>,
+}
+
+/// Enumerates the "cruise states". See <https://github.com/lkolbly/wows-replays/issues/14#issuecomment-976784004>
+/// for more information.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub enum CruiseState {
+    /// Possible values for the throttle range from -1 for reverse to 4 for full power ahead.
+    Throttle,
+    /// Note that not all rudder changes are indicated via cruise states, only ones
+    /// set via the Q & E keys. Temporarily setting the rudder will not trigger this
+    /// packet.
+    ///
+    /// Possible associated values are:
+    /// - -2: Full rudder to port,
+    /// - -1: Half rudder to port,
+    /// - 0: Neutral
+    /// - 1: Half rudder to starboard,
+    /// - 2: Full rudder to starboard.
+    Rudder,
+    /// Sets the dive depth. Known values are:
+    /// - 0: 0m
+    /// - 1: -6m (periscope depth)
+    /// - 2: -18m
+    /// - 3: -30m
+    /// - 4: -42m
+    /// - 5: -54m
+    /// - 6: -66m
+    /// - 7: -80m
+    DiveDepth,
+    /// Indicates an unknown cruise state. Send me your replay!
+    Unknown(u32),
+}
+
+/// Whether `onChatMessage`'s sender argument is the account id (`PLAYER_ID`)
+/// rather than the sender's avatar entity id (`ENTITY_ID`). The game's entity
+/// definition for this RPC switched the argument from `ENTITY_ID` to `PLAYER_ID`
+/// in 0.11.4, so callers must match the sender against the corresponding player
+/// field (avatar id before, account id after). Voiceline senders are
+/// `PLAYER_ID` in every version and don't need this.
+pub fn chat_sender_is_account_id(version: Version) -> bool {
+    version.is_at_least(&Version::from_client_exe("0,11,4,0"))
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChatMessageExtra {
+    pre_battle_sign: i64,
+    pre_battle_id: i64,
+    player_clan_tag: String,
+    typ: i64,
+    player_avatar_id: EntityId,
+    player_name: String,
+}
+
+/// A single entry from a `receiveDamageStat` update.
+///
+/// The game server sends cumulative damage statistics as a pickled dict keyed by
+/// `(weapon_type: i64, category: i64)` with values `[count: i64, total: f64]`.
+/// Each entry represents cumulative totals (not incremental deltas) — later updates
+/// for the same key replace earlier values.
+#[derive(Debug, Clone, Serialize)]
+pub struct DamageStatEntry {
+    /// Which weapon/damage source this stat tracks.
+    pub weapon: Recognized<DamageStatWeapon>,
+    /// Which category of damage (enemy, ally, spotting, potential).
+    pub category: Recognized<DamageStatCategory>,
+    /// Cumulative hit count for this weapon+category combination.
+    pub count: i64,
+    /// Cumulative damage total for this weapon+category combination.
+    pub total: f64,
+}
+
+#[derive(Debug, Serialize, Kinded)]
+#[kinded(derive(Serialize))]
+pub enum DecodedPacketPayload<'replay, 'argtype, 'rawpacket> {
+    /// Represents a chat message. Note that this only includes text chats, voicelines
+    /// are represented by the VoiceLine variant.
+    Chat {
+        entity_id: EntityId,
+        /// Avatar ID of the sender
+        sender_id: AccountId,
+        /// Represents the audience for the chat: Division, team, or all.
+        audience: &'replay str,
+        /// The actual chat message.
+        message: &'replay str,
+        /// Extra data that may be present if sender_id is 0
+        extra_data: Option<ChatMessageExtra>,
+    },
+    /// Sent when a voice line is played (for example, "Wilco!")
+    VoiceLine {
+        /// Avatar ID of the player sending the voiceline
+        sender_id: AccountId,
+        /// True if the voiceline is visible in all chat, false if only in team chat
+        is_global: bool,
+        /// Which voiceline it is.
+        message: VoiceLine,
+    },
+    /// Sent when the player earns a ribbon
+    Ribbon(Ribbon),
+    /// Sent when the (self) player earns an achievement (`onAchievementEarned`).
+    /// `id` is the achievement's GameParams id; `count` is how many were earned.
+    /// Self-only: the event is scoped to the recording player's avatar.
+    Achievement { id: i64, count: i64 },
+    /// Indicates the position of the given object.
+    Position(crate::packet2::PositionPacket),
+    /// Indicates the position of the player's object or camera.
+    PlayerOrientation(crate::packet2::PlayerOrientationPacket),
+    /// Server-authoritative cumulative damage statistics from `receiveDamageStat`.
+    ///
+    /// Each entry represents cumulative totals for a (weapon, category) pair.
+    /// Only `DamageStatCategory::Enemy` entries represent actual damage dealt.
+    DamageStat(Vec<DamageStatEntry>),
+    /// Sent when a ship is destroyed.
+    ShipDestroyed {
+        /// The ship ID (note: Not the avatar ID) of the killer
+        killer: EntityId,
+        /// The ship ID (note: Not the avatar ID) of the victim
+        victim: EntityId,
+        /// Cause of death
+        cause: Recognized<DeathCause>,
+    },
+    EntityMethod(&'rawpacket EntityMethodPacket<'argtype>),
+    EntityProperty(&'rawpacket crate::packet2::EntityPropertyPacket<'argtype>),
+    BasePlayerCreate(&'rawpacket crate::packet2::BasePlayerCreatePacket<'argtype>),
+    CellPlayerCreate(&'rawpacket crate::packet2::CellPlayerCreatePacket<'argtype>),
+    EntityEnter(&'rawpacket crate::packet2::EntityEnterPacket),
+    EntityLeave(&'rawpacket crate::packet2::EntityLeavePacket),
+    EntityCreate(&'rawpacket crate::packet2::EntityCreatePacket<'argtype>),
+    /// Contains all of the info required to setup the arena state and show the initial loading screen.
+    OnArenaStateReceived {
+        /// Unknown
+        arena_id: i64,
+        /// Unknown
+        team_build_type_id: i8,
+        /// Unknown
+        pre_battles_info: HashMap<i64, Vec<Option<HashMap<String, String>>>>,
+        /// A list of the human players in this game
+        player_states: Vec<PlayerStateData>,
+        /// A list of the bot players in this game
+        bot_states: Vec<PlayerStateData>,
+    },
+    /// Contains info when the arena state changes
+    OnGameRoomStateChanged {
+        /// Updated player states
+        player_states: Vec<HashMap<&'static str, pickled::Value>>,
+    },
+    /// Sent when new players/bots spawn mid-battle (e.g. reinforcement waves in Operations).
+    /// Same format as OnArenaStateReceived player/bot lists.
+    NewPlayerSpawnedInBattle {
+        /// Human players that spawned
+        player_states: Vec<PlayerStateData>,
+        /// Bot players that spawned
+        bot_states: Vec<PlayerStateData>,
+    },
+    CheckPing(u64),
+    /// Indicates that the given victim has received damage from one or more attackers.
+    DamageReceived {
+        /// Ship ID of the ship being damaged
+        victim: EntityId,
+        /// List of damages happening to this ship
+        aggressors: Vec<DamageReceived>,
+    },
+    /// Contains data for a minimap update
+    MinimapUpdate {
+        /// A list of the updates to make to the minimap
+        updates: Vec<MinimapUpdate>,
+        /// Unknown
+        arg1: &'rawpacket Vec<ArgValue<'argtype>>,
+    },
+    /// Indicates a property update. Note that many properties contain a hierarchy of properties,
+    /// for example the "state" property on the battle manager contains nested dictionaries and
+    /// arrays. The top-level entity and property are specified by the `entity_id` and `property`
+    /// fields. The nesting structure and how to modify the leaves are indicated by the
+    /// `update_cmd` field.
+    ///
+    /// Within the `update_cmd` field is two fields, `levels` and `action`. `levels` indicates how
+    /// to traverse to the leaf property, for example by following a dictionary key or array index.
+    /// `action` indicates what action to perform once there, such as setting a subproperty to
+    /// a specific value.
+    ///
+    /// For example, to set the `state[controlPoints][0][hasInvaders]` property, you will see a
+    /// packet payload that looks like:
+    /// ```ignore
+    /// {
+    ///     "entity_id": 576258,
+    ///     "property": "state",
+    ///     "update_cmd": {
+    ///         "levels": [
+    ///             {"DictKey": "controlPoints"},
+    ///             {"ArrayIndex": 0}
+    ///         ],
+    ///         "action": {
+    ///             "SetKey":{"key":"hasInvaders","value":1}
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    /// This says to take the "state" property on entity 576258, navigate to `state["controlPoints"][0]`,
+    /// and set the sub-key `hasInvaders` there to 1.
+    ///
+    /// The following properties and values are known:
+    /// - `state["controlPoints"][N]["invaderTeam"]`: Indicates the team ID of the team currently
+    ///   contesting the control point. -1 if nobody is invading point.
+    /// - `state["controlPoints"][N]["hasInvaders"]`: 1 if the point is being contested, 0 otherwise.
+    /// - `state["controlPoints"][N]["progress"]`: A tuple of two elements. The first is the fraction
+    ///   captured, ranging from 0 to 1 as the point is captured, and the second is the amount of
+    ///   time remaining until the point is captured.
+    /// - `state["controlPoints"][N]["bothInside"]`: 1 if both teams are currently in point, 0 otherwise.
+    /// - `state["missions"]["teamsScore"][N]["score"]`: The value of team N's score.
+    PropertyUpdate(&'rawpacket crate::packet2::PropertyUpdatePacket<'argtype>),
+    /// Indicates that the battle has ended
+    BattleEnd {
+        /// The team ID of the winning team (corresponds to the teamid in [OnArenaStateReceivedPlayer])
+        winning_team: Option<i8>,
+        /// How the battle ended (from `FINISH_TYPE` in battle.xml)
+        finish_type: Option<Recognized<FinishType>>,
+    },
+    /// Sent when a consumable is activated
+    Consumable {
+        /// The ship ID of the ship using the consumable
+        entity: EntityId,
+        /// The consumable
+        consumable: Recognized<Consumable>,
+        /// How long the consumable will be active for
+        duration: f32,
+        /// Usage parameters (15.2+): how the consumable was targeted.
+        /// `None` for pre-15.2 replays.
+        usage_params: Option<ConsumableUsageParams>,
+    },
+    /// The recording player's ship is (or is no longer) held by a submarine's
+    /// hydrophone. Sent to the detected ship, not the submarine. The game client
+    /// receives this but surfaces nothing for it in the UI.
+    DetectedByHydrophone {
+        detected: bool,
+    },
+    /// Surface contacts the recording player's own hydrophone is holding.
+    /// `broadcast` distinguishes the team-shared variant
+    /// (`updateSurfaceHydrophoneBroadcast`) from the private one.
+    HydrophoneContacts {
+        contacts: Vec<HydrophoneZoneContact>,
+        broadcast: bool,
+    },
+    /// A contact the recording player's hydrophone stopped holding.
+    HydrophoneContactLost {
+        entity: EntityId,
+    },
+    /// Every hydrophone contact was dropped at once.
+    HydrophoneCleared,
+    /// Full-pose contacts reported to a submarine's hydrophone.
+    SubmarineHydrophoneContacts {
+        /// The submarine holding the contacts. This is a Vehicle method, so
+        /// merged multi-perspective sessions can see more than one holder.
+        holder: EntityId,
+        contacts: Vec<SubmarineHydrophoneContact>,
+        /// How long a contact stays held. `None` on builds whose
+        /// `addSubmarineHydrophoneTargets` carries no lifetime argument; those
+        /// contacts are dropped by an explicit clear instead of expiring.
+        zone_life_time: Option<Duration>,
+    },
+    /// Indicates a change to the "cruise state," which is the fixed settings for various controls
+    /// such as steering (using the Q & E keys), throttle, and dive planes.
+    CruiseState {
+        /// Which cruise state is being affected
+        state: CruiseState,
+        /// See [CruiseState] for what the values mean.
+        value: i32,
+    },
+    Map(&'rawpacket crate::packet2::MapPacket<'replay>),
+    /// A string representation of the game version this replay is from.
+    Version(String),
+    Camera(&'rawpacket crate::packet2::CameraPacket),
+    /// Indicates a change in the current camera mode
+    CameraMode(Recognized<CameraMode>),
+    /// If true, indicates that the player has enabled the "free look" camera (by holding right click)
+    CameraFreeLook(bool),
+    /// Artillery shells fired
+    ArtilleryShots {
+        avatar_id: AvatarId,
+        salvos: Vec<ArtillerySalvo>,
+    },
+    /// A ship fired a weapon group via shootOnClient / shootATBAGuns.
+    ///
+    /// `entity` is the firing vehicle (these are Vehicle entity methods, unlike
+    /// the Avatar RPC fire events). `weapon_type` comes from the first arg of
+    /// shootOnClient and is always Secondaries for shootATBAGuns. `gun_bits` is
+    /// the raw per-gun fire mask; expansion to gun indices and target lookup
+    /// happen in ingest where atbaTargets is known.
+    WeaponFired {
+        entity: EntityId,
+        weapon_type: Recognized<WeaponType, u32>,
+        gun_bits: GunBits,
+    },
+    /// Torpedoes launched
+    TorpedoesReceived {
+        avatar_id: AvatarId,
+        torpedoes: Vec<TorpedoData>,
+    },
+    /// Homing torpedo direction/position update
+    TorpedoDirection {
+        owner_id: EntityId,
+        shot_id: ShotId,
+        position: WorldPos,
+        target_yaw: f32,
+        speed_coef: f32,
+    },
+    /// Projectile hits (shells or torpedoes hitting targets)
+    ShotKills {
+        avatar_id: AvatarId,
+        hits: Vec<ShotHit>,
+    },
+    /// Turret rotation sync for a ship
+    GunSync {
+        entity_id: EntityId,
+        /// `WeaponType` (ARTILLERY = 0 = main battery, ATBA = 1, TORPEDO = 2, ...).
+        /// The enum is generated from `idGenerator(-1)`, so NONE = -1 and the
+        /// first real weapon, ARTILLERY, is 0.
+        weapon_type: u32,
+        /// Gun index within the weapon group.
+        gun_id: u32,
+        /// Turret yaw in radians relative to ship heading (0 = forward, PI = aft)
+        yaw: f32,
+        /// Barrel elevation in radians
+        pitch: f32,
+    },
+    /// A new squadron appears on the minimap
+    PlaneAdded {
+        entity_id: EntityId,
+        plane_id: PlaneId,
+        /// Team index: 0 = recording player's team, 1 = enemy team
+        team_id: u32,
+        params_id: GameParamId,
+        position: WorldPos2D,
+    },
+    /// A fighter patrol ward is placed (from receive_wardAdded).
+    /// This is the game's mechanism for marking patrol circle areas.
+    WardAdded {
+        entity_id: EntityId,
+        plane_id: PlaneId,
+        /// Patrol center position (world coordinates)
+        position: WorldPos,
+        /// Patrol radius in BigWorld units
+        radius: BigWorldDistance,
+        /// Owner ship entity ID
+        owner_id: EntityId,
+    },
+    /// A fighter patrol ward is removed (from receive_wardRemoved).
+    WardRemoved {
+        entity_id: EntityId,
+        plane_id: PlaneId,
+    },
+    /// A squadron is removed from the minimap
+    PlaneRemoved {
+        entity_id: EntityId,
+        plane_id: PlaneId,
+    },
+    /// Plane/squadron position update on the minimap
+    PlanePosition {
+        entity_id: EntityId,
+        plane_id: PlaneId,
+        position: WorldPos2D,
+    },
+    /// Ammo type selected for a weapon group
+    SetAmmoForWeapon {
+        entity_id: EntityId,
+        /// 0 = artillery, 2 = torpedo
+        weapon_type: u32,
+        /// GameParamId of the projectile (look up ammoType in GameParams)
+        ammo_param_id: GameParamId,
+        /// True if the player just switched ammo and is reloading
+        is_reload: bool,
+    },
+    /// EntityControl — transfers entity ownership to the client.
+    EntityControl(&'rawpacket crate::packet2::EntityControlPacket),
+    /// Non-volatile entity position update (no direction/dead-reckoning).
+    NonVolatilePosition(&'rawpacket crate::packet2::NonVolatilePositionPacket),
+    /// Player network stats: fps (u8), ping in ms (u16), isLaggingNow (bool).
+    PlayerNetStats(&'rawpacket crate::packet2::PlayerNetStatsPacket),
+    /// Server timestamp at session start.
+    ServerTimestamp(f64),
+    /// Links the Avatar to its owned ship entity.
+    OwnShip(&'rawpacket crate::packet2::OwnShipPacket),
+    /// `onSetWeaponLock` — weapon lock state change.
+    SetWeaponLock(&'rawpacket crate::packet2::SetWeaponLockPacket),
+    /// Server tick rate constant (observed as 1/7).
+    ServerTick(f64),
+    /// Submarine controller mode change (0/1 toggle, likely surface/dive).
+    SubController(&'rawpacket crate::packet2::SubControllerPacket),
+    /// Shot tracking change (entity_id + i64 value, fire control related).
+    ShotTracking(&'rawpacket crate::packet2::ShotTrackingPacket),
+    /// Gun marker / aiming state (target point, marker position/direction/diameter, etc.).
+    GunMarker(&'rawpacket crate::packet2::GunMarkerPacket),
+    /// Synchronizes physics state for the two hull fragments after a ship is destroyed
+    /// and cracks apart. The engine uses `correctBodyFromServer()` to smoothly interpolate
+    /// toward the server state rather than snapping. Purely visual — controls the sinking
+    /// animation of the two ship halves.
+    SyncShipCracks {
+        entity_id: EntityId,
+        /// Physics body state for crack part 1 (bow or stern half). None if blob is empty.
+        state1: Option<PhysicsBodyState>,
+        /// Physics body state for crack part 2 (the other half). None if blob is empty.
+        state2: Option<PhysicsBodyState>,
+    },
+    /// Packet 0x10: Init flag at clock=0.
+    InitFlag(u8),
+    /// Packet 0x13: Empty init marker at clock=0.
+    InitMarker,
+    /// This is a packet of unknown type
+    Unknown(&'replay [u8]),
+    /// This is a packet of known type, but which we were unable to parse
+    Invalid(&'rawpacket crate::packet2::InvalidPacket<'replay>),
+    /// If parsing with audits enabled, this indicates a packet that may be of special interest
+    /// for whoever is reading the audits.
+    Audit(String),
+    /// End of battle results (free xp, damage details, etc.)
+    BattleResults(&'replay str),
+    /*
+    ArtilleryHit(ArtilleryHitPacket<'a>),
+    */
+}
+
+fn try_convert_hashable_pickle_to_string(value: pickled::value::HashableValue) -> pickled::value::HashableValue {
+    match value {
+        pickled::value::HashableValue::Bytes(b) => {
+            if let Ok(s) = std::str::from_utf8(b.inner()) {
+                pickled::value::HashableValue::String(s.to_owned().into())
+            } else {
+                pickled::value::HashableValue::Bytes(b)
+            }
+        }
+        pickled::value::HashableValue::Tuple(t) => pickled::value::HashableValue::Tuple(
+            t.inner().iter().cloned().map(try_convert_hashable_pickle_to_string).collect::<Vec<_>>().into(),
+        ),
+        pickled::value::HashableValue::FrozenSet(s) => pickled::value::HashableValue::FrozenSet(
+            s.inner().iter().cloned().map(try_convert_hashable_pickle_to_string).collect::<BTreeSet<_>>().into(),
+        ),
+        value => value,
+    }
+}
+
+/// Helper function to recursively convert byte values to strings where possible.
+fn try_convert_pickle_to_string(value: pickled::value::Value) -> pickled::value::Value {
+    match value {
+        pickled::value::Value::Bytes(b) => {
+            if let Ok(s) = std::str::from_utf8(b.inner()) {
+                pickled::value::Value::String(s.to_owned().into())
+            } else {
+                pickled::value::Value::Bytes(b)
+            }
+        }
+        pickled::value::Value::List(l) => pickled::value::Value::List(
+            l.inner().iter().cloned().map(try_convert_pickle_to_string).collect::<Vec<_>>().into(),
+        ),
+        pickled::value::Value::Tuple(t) => pickled::value::Value::Tuple(
+            t.inner().iter().cloned().map(try_convert_pickle_to_string).collect::<Vec<_>>().into(),
+        ),
+        pickled::value::Value::Set(s) => pickled::value::Value::Set(
+            s.inner().iter().cloned().map(try_convert_hashable_pickle_to_string).collect::<BTreeSet<_>>().into(),
+        ),
+        pickled::value::Value::FrozenSet(s) => pickled::value::Value::FrozenSet(
+            s.inner().iter().cloned().map(try_convert_hashable_pickle_to_string).collect::<BTreeSet<_>>().into(),
+        ),
+        pickled::value::Value::Dict(d) => pickled::value::Value::Dict(
+            d.inner()
+                .iter()
+                .map(|(k, v)| {
+                    (try_convert_hashable_pickle_to_string(k.clone()), try_convert_pickle_to_string(v.clone()))
+                })
+                .collect::<pickled::Dict>()
+                .into(),
+        ),
+        value => value,
+    }
+}
+
+fn parse_receive_common_cmd_blob(blob: &[u8]) -> (VoiceLine, bool) {
+    // Since 12.7.0 the command rides as a channel-name string ("battle_team" /
+    // "battle_common"): the audience is the channel and the line content is no
+    // longer carried by this method. (The pre-12.7.0 binary line+audience record
+    // is decoded on the version-gated arg path in the caller.)
+    let is_global = std::str::from_utf8(blob).is_ok_and(|c| c.contains("common") || c.contains("all"));
+    (VoiceLine::Unknown(0), is_global)
+}
+
+impl<'replay, 'argtype, 'rawpacket> DecodedPacketPayload<'replay, 'argtype, 'rawpacket>
+where
+    'rawpacket: 'replay,
+    'rawpacket: 'argtype,
+{
+    fn from(
+        version: &Version,
+        audit: bool,
+        payload: &'rawpacket crate::packet2::PacketType<'replay, 'argtype>,
+        _packet_type: crate::packet2::PacketTypeId,
+        battle_constants: &wowsunpack::game_constants::BattleConstants,
+        common_constants: &wowsunpack::game_constants::CommonConstants,
+        ships_constants: &wowsunpack::game_constants::ShipsConstants,
+    ) -> Self {
+        match payload {
+            PacketType::EntityMethod(em) => DecodedPacketPayload::from_entity_method(
+                version,
+                audit,
+                em,
+                battle_constants,
+                common_constants,
+                ships_constants,
+            ),
+            PacketType::Camera(camera) => DecodedPacketPayload::Camera(camera),
+            PacketType::CameraMode(mode) => {
+                if let Some(cm) = CameraMode::from_id(*mode as i32, battle_constants, *version) {
+                    DecodedPacketPayload::CameraMode(cm)
+                } else if audit {
+                    DecodedPacketPayload::Audit(format!("CameraMode({})", mode))
+                } else {
+                    DecodedPacketPayload::CameraMode(Recognized::Unknown(format!("{}", mode)))
+                }
+            }
+            PacketType::CameraFreeLook(freelook) => match freelook {
+                0 => DecodedPacketPayload::CameraFreeLook(false),
+                1 => DecodedPacketPayload::CameraFreeLook(true),
+                _ => {
+                    if audit {
+                        DecodedPacketPayload::Audit(format!("CameraFreeLook({})", freelook))
+                    } else {
+                        DecodedPacketPayload::CameraFreeLook(true)
+                    }
+                }
+            },
+            PacketType::CruiseState(cs) => match cs.key {
+                0 => DecodedPacketPayload::CruiseState { state: CruiseState::Throttle, value: cs.value },
+                1 => DecodedPacketPayload::CruiseState { state: CruiseState::Rudder, value: cs.value },
+                2 => DecodedPacketPayload::CruiseState { state: CruiseState::DiveDepth, value: cs.value },
+                _ => {
+                    if audit {
+                        DecodedPacketPayload::Audit(format!("CruiseState(unknown={}, {})", cs.key, cs.value))
+                    } else {
+                        DecodedPacketPayload::CruiseState { state: CruiseState::Unknown(cs.key), value: cs.value }
+                    }
+                }
+            },
+            PacketType::Map(map) => {
+                if audit && map.unknown != 0 && map.unknown != 1 {
+                    DecodedPacketPayload::Audit(format!("Map: Unknown bool is not a bool (is {})", map.unknown))
+                } else if audit
+                    && map.matrix
+                        != [
+                            0, 0, 128, 63, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 63, 0, 0, 0, 0,
+                            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 63, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                            0, 0, 0, 0, 0, 128, 63,
+                        ]
+                {
+                    DecodedPacketPayload::Audit(format!("Map: Unit matrix is not a unit matrix (is {:?})", map.matrix))
+                } else {
+                    DecodedPacketPayload::Map(map)
+                }
+            }
+            PacketType::EntityProperty(p) => DecodedPacketPayload::EntityProperty(p),
+            PacketType::Position(pos) => DecodedPacketPayload::Position((*pos).clone()),
+            PacketType::PlayerOrientation(pos) => DecodedPacketPayload::PlayerOrientation((*pos).clone()),
+            PacketType::BasePlayerCreate(b) => DecodedPacketPayload::BasePlayerCreate(b),
+            PacketType::CellPlayerCreate(c) => DecodedPacketPayload::CellPlayerCreate(c),
+            PacketType::EntityEnter(e) => DecodedPacketPayload::EntityEnter(e),
+            PacketType::EntityLeave(e) => DecodedPacketPayload::EntityLeave(e),
+            PacketType::EntityCreate(e) => DecodedPacketPayload::EntityCreate(e),
+            PacketType::PropertyUpdate(update) => DecodedPacketPayload::PropertyUpdate(update),
+            PacketType::Version(version) => DecodedPacketPayload::Version(version.clone()),
+            PacketType::Unknown(u) => DecodedPacketPayload::Unknown(u),
+            PacketType::Invalid(u) => DecodedPacketPayload::Invalid(u),
+            PacketType::BattleResults(results) => DecodedPacketPayload::BattleResults(results),
+            PacketType::EntityControl(ec) => DecodedPacketPayload::EntityControl(ec),
+            PacketType::NonVolatilePosition(sd) => DecodedPacketPayload::NonVolatilePosition(sd),
+            PacketType::PlayerNetStats(ns) => DecodedPacketPayload::PlayerNetStats(ns),
+            PacketType::ServerTimestamp(st) => DecodedPacketPayload::ServerTimestamp(st.timestamp),
+            PacketType::OwnShip(os) => DecodedPacketPayload::OwnShip(os),
+            PacketType::SetWeaponLock(wl) => DecodedPacketPayload::SetWeaponLock(wl),
+            PacketType::ServerTick(tick) => DecodedPacketPayload::ServerTick(*tick),
+            PacketType::SubController(sc) => DecodedPacketPayload::SubController(sc),
+            PacketType::ShotTracking(st) => DecodedPacketPayload::ShotTracking(st),
+            PacketType::GunMarker(gm) => DecodedPacketPayload::GunMarker(gm),
+            PacketType::InitFlag(flag) => DecodedPacketPayload::InitFlag(*flag),
+            PacketType::InitMarker => DecodedPacketPayload::InitMarker,
+        }
+    }
+
+    fn extract_vec3(val: Option<&ArgValue>) -> Vec3 {
+        match val {
+            Some(ArgValue::Vector3((x, y, z))) => Vec3::new(*x, *y, *z),
+            Some(ArgValue::Array(a)) if a.len() >= 3 => {
+                let x: f32 = (&a[0]).try_into().unwrap_or(0.0);
+                let y: f32 = (&a[1]).try_into().unwrap_or(0.0);
+                let z: f32 = (&a[2]).try_into().unwrap_or(0.0);
+                Vec3::new(x, y, z)
+            }
+            _ => Vec3::default(),
+        }
+    }
+
+    /// Extract a world-space position from a packet argument.
+    fn extract_world_pos(val: Option<&ArgValue>) -> WorldPos {
+        WorldPos(Self::extract_vec3(val))
+    }
+
+    fn from_entity_method(
+        version: &Version,
+        audit: bool,
+        packet: &'rawpacket EntityMethodPacket<'argtype>,
+        battle_constants: &wowsunpack::game_constants::BattleConstants,
+        common_constants: &wowsunpack::game_constants::CommonConstants,
+        ships_constants: &wowsunpack::game_constants::ShipsConstants,
+    ) -> Self {
+        let entity_id = &packet.entity_id;
+        let method = &packet.method;
+        let args = &packet.args;
+        if *method == "onChatMessage" {
+            let target = match &args[1] {
+                ArgValue::String(s) => s,
+                _ => panic!("foo"),
+            };
+            let message = match &args[2] {
+                ArgValue::String(s) => s,
+                _ => panic!("foo"),
+            };
+            let sender_id = match &args[0] {
+                ArgValue::Int32(i) => i,
+                _ => panic!("foo"),
+            };
+            let mut extra_data = None;
+            if *sender_id == 0 && args.len() >= 4 {
+                let extra =
+                    depickle(args[3].string_ref().expect("failed"))
+                        .expect("value is not pickled");
+                let mut extra_dict: HashMap<String, Value> = HashMap::from_iter(
+                    extra.dict().expect("value is not a dictionary").inner().iter().map(|(key, value)| {
+                        let key = match key {
+                            pickled::HashableValue::Bytes(bytes) => {
+                                String::from_utf8(bytes.inner().clone()).expect("key is not a valid utf-8 sequence")
+                            }
+                            pickled::HashableValue::String(string) => string.inner().clone(),
+                            other => {
+                                panic!("unexpected key type {:?}", other)
+                            }
+                        };
+
+                        let value = match value {
+                            Value::Bytes(bytes) => {
+                                if let Ok(result) = String::from_utf8(bytes.inner().clone()) {
+                                    Value::String(result.into())
+                                } else {
+                                    Value::Bytes(bytes.clone())
+                                }
+                            }
+                            other => other.clone(),
+                        };
+
+                        (key, value)
+                    }),
+                );
+
+                let extra = ChatMessageExtra {
+                    pre_battle_sign: extra_dict
+                        .remove("preBattleSign")
+                        .unwrap()
+                        .i64()
+                        .expect("preBattleSign is not an i64"),
+                    pre_battle_id: extra_dict.remove("prebattleId").unwrap().i64().expect("preBattleId is not an i64"),
+                    player_clan_tag: extra_dict
+                        .remove("playerClanTag")
+                        .unwrap()
+                        .string()
+                        .expect("playerClanTag is not a string")
+                        .inner()
+                        .clone(),
+                    typ: extra_dict.remove("type").unwrap().i64().expect("type is not an i64"),
+                    player_avatar_id: EntityId::from(
+                        extra_dict.remove("playerAvatarId").unwrap().i64().expect("playerAvatarId is not an i64"),
+                    ),
+                    player_name: extra_dict
+                        .remove("playerName")
+                        .unwrap()
+                        .string()
+                        .expect("playerName is not a string")
+                        .inner()
+                        .clone(),
+                };
+
+                assert!(extra_dict.is_empty());
+
+                extra_data = Some(extra);
+            }
+            DecodedPacketPayload::Chat {
+                entity_id: *entity_id,
+                // Account ids are unsigned 32-bit on the wire; sign-extending
+                // ids >= 2^31 would never match the positive id from arena
+                // state / replay metadata, leaving senders unresolved.
+                sender_id: AccountId::from(*sender_id as u32),
+                audience: std::str::from_utf8(target).unwrap_or(""),
+                message: std::str::from_utf8(message).unwrap_or(""),
+                extra_data,
+            }
+        } else if *method == "onChatMessageRegular" {
+            // Lesta («Мир кораблей») split text chat out of `onChatMessage` into
+            // `onChatMessageRegular`; args are `[sender accountId, channel bytes
+            // ("battle_common"=all / "battle_team"=team), message utf-8 bytes]`.
+            // (`onChatMessagePraise` is a reaction with no text and
+            // `receiveChatHistory` a compact ref — both intentionally unhandled.)
+            // The sender is the roster's `accountId` (idx13), resolved to a name by
+            // `ChatLogger` via the Lesta roster.
+            let sender = args.first().and_then(|a| a.as_i32()).unwrap_or(0);
+            let audience =
+                args.get(1).and_then(|a| a.string_ref()).and_then(|s| std::str::from_utf8(s).ok()).unwrap_or("");
+            let message =
+                args.get(2).and_then(|a| a.string_ref()).and_then(|s| std::str::from_utf8(s).ok()).unwrap_or("");
+            DecodedPacketPayload::Chat {
+                entity_id: *entity_id,
+                sender_id: AccountId::from(sender as u32),
+                audience,
+                message,
+                extra_data: None,
+            }
+        } else if *method == "receive_CommonCMD" {
+            // The method signature changed at 12.7.0: older clients send a
+            // binary `(audience, sender, line, a, b)` arg tuple; 12.7.0+ send
+            // `(sender, command)` where `command` is a channel-name blob.
+            let (sender_id, message, is_global) = if version.is_at_least(&Version::from_client_exe("12,7,0,0")) {
+                // The sender is an unsigned account id, so it arrives as a Uint32
+                // (not Int32); `as_i32` accepts any integer variant. Tolerate
+                // arg-layout drift across versions rather than panicking, which
+                // would abort the whole replay parse.
+                let sender = args.first().and_then(|a| a.as_i32()).unwrap_or(0);
+                let (message_type, is_global) = match args.get(1).and_then(|a| a.blob_ref()) {
+                    Some(blob) => parse_receive_common_cmd_blob(blob.as_ref()),
+                    None => {
+                        tracing::warn!("receive_CommonCMD: second argument is not a blob");
+                        (VoiceLine::Unknown(0), false)
+                    }
+                };
+
+                (sender, message_type, is_global)
+            } else {
+                let (audience, sender_id, line, a, b) = unpack_rpc_args!(args, u8, i32, u8, u32, u64);
+                // Audience is team(0)/all(1); default unknown values to team
+                // rather than aborting the whole replay.
+                let is_global = audience == 1;
+                let message = match line {
+                    1 => VoiceLine::AttentionToSquare(a, b as u32),
+                    2 => VoiceLine::QuickTactic(a as u16, b),
+                    3 => VoiceLine::RequestingSupport(None),
+                    5 => VoiceLine::Wilco,
+                    6 => VoiceLine::Negative,
+                    7 => VoiceLine::WellDone, // TODO: Find the corresponding field
+                    8 => VoiceLine::FairWinds,
+                    9 => VoiceLine::Curses,
+                    10 => VoiceLine::DefendTheBase,
+                    11 => VoiceLine::ProvideAntiAircraft,
+                    12 => VoiceLine::Retreat(if b != 0 { Some(b as i32) } else { None }),
+                    13 => VoiceLine::IntelRequired,
+                    14 => VoiceLine::SetSmokeScreen,
+                    15 => VoiceLine::UsingRadar,
+                    16 => VoiceLine::UsingHydroSearch,
+                    17 => VoiceLine::FollowMe,
+                    18 => VoiceLine::MapPointAttention(a as f32, b as f32),
+                    19 => VoiceLine::UsingSubmarineLocator,
+                    _ => {
+                        eprintln!("Warning: Unknown voice line {} a={:x} b={:x}!", line, a, b);
+                        VoiceLine::Unknown(line as i64)
+                    }
+                };
+
+                (sender_id, message, is_global)
+            };
+
+            // let (audience, sender_id, line, a, b) = unpack_rpc_args!(args, u8, i32, u8, u32, u64);
+
+            // Account ids are unsigned 32-bit on the wire (see onChatMessage).
+            DecodedPacketPayload::VoiceLine { sender_id: AccountId::from(sender_id as u32), is_global, message }
+        } else if *method == "onGameRoomStateChanged" {
+            let player_states = depickle(
+                args[0].blob_ref().expect("player_states arg is not a blob"),
+            )
+            .expect("failed to deserialize player_states");
+
+            let player_states = try_convert_pickle_to_string(player_states);
+
+            let mut players_out = vec![];
+            if let pickled::value::Value::List(players) = &player_states {
+                for player in players.inner().iter() {
+                    let raw_values = convert_flat_dict_to_real_dict(player);
+
+                    let mapped_values = PlayerStateData::convert_raw_dict(&raw_values, version, false);
+                    players_out.push(mapped_values);
+                }
+            }
+            DecodedPacketPayload::OnGameRoomStateChanged { player_states: players_out }
+        } else if *method == "onNewPlayerSpawnedInBattle" {
+            // Args: playersData (BLOB), botsData (BLOB), observersData (BLOB)
+            // Same pickle format as onArenaStateReceived player/bot lists.
+            let mut players_out = vec![];
+            if let Some(ArgValue::Blob(blob)) = args.first()
+                && let Ok(value) = depickle(blob)
+            {
+                let value = try_convert_pickle_to_string(value);
+                if let pickled::value::Value::List(players) = &value {
+                    for player in players.inner().iter() {
+                        players_out.push(PlayerStateData::from_pickle(player, version, false));
+                    }
+                }
+            }
+
+            let mut bots_out = vec![];
+            if let Some(ArgValue::Blob(blob)) = args.get(1)
+                && let Ok(value) = depickle(blob)
+            {
+                let value = try_convert_pickle_to_string(value);
+                if let pickled::value::Value::List(bots) = &value {
+                    for bot in bots.inner().iter() {
+                        bots_out.push(PlayerStateData::from_pickle(bot, version, true));
+                    }
+                }
+            }
+
+            DecodedPacketPayload::NewPlayerSpawnedInBattle { player_states: players_out, bot_states: bots_out }
+        } else if *method == "onArenaStateReceived" {
+            let (arg0, arg1) = unpack_rpc_args!(args, i64, i8);
+
+            let value = depickle(match &args[2] {
+                ArgValue::Blob(x) => x,
+                _ => panic!("foo"),
+            })
+            .unwrap();
+
+            let value = match value {
+                pickled::value::Value::Dict(d) => d,
+                _ => panic!(),
+            };
+            let mut arg2 = HashMap::new();
+            for (k, v) in value.inner().iter() {
+                let k = match k {
+                    pickled::value::HashableValue::I64(i) => *i,
+                    _ => panic!(),
+                };
+                let v = match v {
+                    pickled::value::Value::List(l) => l,
+                    _ => panic!(),
+                };
+                let v: Vec<_> = v
+                    .inner()
+                    .iter()
+                    .map(|elem| match elem {
+                        pickled::value::Value::Dict(d) => Some(
+                            d.inner()
+                                .iter()
+                                .map(|(k, v)| {
+                                    let k = match k {
+                                        pickled::value::HashableValue::Bytes(b) => {
+                                            std::str::from_utf8(b.inner()).unwrap().to_string()
+                                        }
+                                        _ => panic!(),
+                                    };
+                                    let v = format!("{:?}", v);
+                                    (k, v)
+                                })
+                                .collect(),
+                        ),
+                        pickled::value::Value::None => None,
+                        _ => panic!(),
+                    })
+                    .collect();
+                arg2.insert(k, v);
+            }
+
+            let value = depickle(match &args[3] {
+                ArgValue::Blob(x) => x,
+                _ => panic!("foo"),
+            })
+            .unwrap();
+            let value = try_convert_pickle_to_string(value);
+
+            let mut players_out = vec![];
+            if let pickled::value::Value::List(players) = &value {
+                for player in players.inner().iter() {
+                    players_out.push(PlayerStateData::from_pickle(player, version, false));
+                }
+            }
+
+            let mut bots_out = vec![];
+            if let Some(ArgValue::Blob(blob)) = args.get(4)
+                && let Ok(value) = depickle(blob)
+            {
+                let value = try_convert_pickle_to_string(value);
+                if let pickled::value::Value::List(bots) = &value {
+                    for bot in bots.inner().iter() {
+                        bots_out.push(PlayerStateData::from_pickle(bot, version, true));
+                    }
+                }
+            }
+
+            DecodedPacketPayload::OnArenaStateReceived {
+                arena_id: arg0,
+                team_build_type_id: arg1,
+                pre_battles_info: arg2,
+                player_states: players_out,
+                bot_states: bots_out,
+            }
+        } else if *method == "receiveDamageStat" {
+            let value = depickle(match &args[0] {
+                ArgValue::Blob(x) => x,
+                _ => panic!("foo"),
+            })
+            .unwrap();
+
+            let mut stats = vec![];
+            match value {
+                pickled::value::Value::Dict(d) => {
+                    for (k, v) in d.inner().iter() {
+                        let (weapon_raw, category_raw) = match k {
+                            pickled::value::HashableValue::Tuple(t) => {
+                                let t = t.inner();
+                                assert!(t.len() == 2);
+                                (
+                                    match &t[0] {
+                                        pickled::value::HashableValue::I64(i) => *i,
+                                        _ => panic!("foo"),
+                                    },
+                                    match &t[1] {
+                                        pickled::value::HashableValue::I64(i) => *i,
+                                        _ => panic!("foo"),
+                                    },
+                                )
+                            }
+                            _ => panic!("foo"),
+                        };
+                        let (count, total) = match v {
+                            pickled::value::Value::List(t) => {
+                                let t = t.inner();
+                                assert!(t.len() == 2);
+                                (
+                                    match &t[0] {
+                                        pickled::value::Value::I64(i) => *i,
+                                        _ => panic!("foo"),
+                                    },
+                                    match &t[1] {
+                                        pickled::value::Value::F64(i) => *i,
+                                        // Spotting damage can be sent as integer 0
+                                        pickled::value::Value::I64(i) => *i as f64,
+                                        _ => panic!("foo"),
+                                    },
+                                )
+                            }
+                            _ => panic!("foo"),
+                        };
+
+                        let weapon = DamageStatWeapon::from_id(weapon_raw as i32, battle_constants, *version)
+                            .unwrap_or(Recognized::Unknown(format!("{weapon_raw}")));
+                        let category = DamageStatCategory::from_id(category_raw as i32, battle_constants, *version)
+                            .unwrap_or(Recognized::Unknown(format!("{category_raw}")));
+                        stats.push(DamageStatEntry { weapon, category, count, total });
+                    }
+                }
+                _ => panic!("foo"),
+            }
+            DecodedPacketPayload::DamageStat(stats)
+        } else if *method == "receiveVehicleDeath" {
+            let (victim, killer, cause) = unpack_rpc_args!(args, i32, i32, u32);
+            let cause = if let Some(dc) = DeathCause::from_id(cause as i32, battle_constants, *version) {
+                dc
+            } else if audit {
+                return DecodedPacketPayload::Audit(format!(
+                    "receiveVehicleDeath(victim={}, killer={}, unknown cause {})",
+                    victim, killer, cause
+                ));
+            } else {
+                Recognized::Unknown(format!("{}", cause))
+            };
+            DecodedPacketPayload::ShipDestroyed {
+                victim: EntityId::from(victim),
+                killer: EntityId::from(killer),
+                cause,
+            }
+        } else if *method == "onRibbon" {
+            let (ribbon_id,) = unpack_rpc_args!(args, i8);
+            let ribbon = match ribbon_id {
+                1 => Ribbon::TorpedoHit,
+                3 => Ribbon::PlaneShotDown,
+                4 => Ribbon::Incapacitation,
+                5 => Ribbon::Destroyed,
+                6 => Ribbon::SetFire,
+                7 => Ribbon::Flooding,
+                8 => Ribbon::Citadel,
+                9 => Ribbon::Defended,
+                10 => Ribbon::Captured,
+                11 => Ribbon::AssistedInCapture,
+                13 => Ribbon::SecondaryHit,
+                14 => Ribbon::OverPenetration,
+                15 => Ribbon::Penetration,
+                16 => Ribbon::NonPenetration,
+                17 => Ribbon::Ricochet,
+                19 => Ribbon::Spotted,
+                21 => Ribbon::DiveBombPenetration,
+                25 => Ribbon::RocketPenetration,
+                26 => Ribbon::RocketNonPenetration,
+                27 => Ribbon::ShotDownByAircraft,
+                28 => Ribbon::TorpedoProtectionHit,
+                30 => Ribbon::RocketTorpedoProtectionHit,
+                31 => Ribbon::DepthChargeHit,
+                33 => Ribbon::BuffSeized,
+                39 => Ribbon::SonarOneHit,
+                40 => Ribbon::SonarTwoHits,
+                41 => Ribbon::SonarNeutralized,
+                other => {
+                    if audit {
+                        return DecodedPacketPayload::Audit(format!("onRibbon(unknown ribbon {other})"));
+                    }
+                    Ribbon::Unknown(other)
+                }
+            };
+            DecodedPacketPayload::Ribbon(ribbon)
+        } else if *method == "onAchievementEarned" {
+            // args = [_, achievementParamId, [], 0, count]. args[1] is the
+            // achievement's GameParams id (a large ~u32::MAX value, e.g.
+            // 4277330864 = PCH016_FirstBlood); args[0] is a small unrelated id.
+            // The trailing int is how many were earned. Self-only (fired on the
+            // recording player's avatar).
+            let Some(id) = args.get(1).and_then(|a| a.as_i64()) else {
+                return DecodedPacketPayload::EntityMethod(packet);
+            };
+            let count = args.last().and_then(|a| a.as_i64()).unwrap_or(1);
+            DecodedPacketPayload::Achievement { id, count }
+        } else if *method == "receiveDamagesOnShip" {
+            // ARRAY<DAMAGES>, DAMAGES = { vehicleID: ENTITY_ID, damage: FLOAT }.
+            // Lesta («Мир кораблей») splits `damage` into `instantDamage` +
+            // `periodicDamage` (fire/flood); sum them for the total.
+            let Some(ArgValue::Array(elems)) = args.first() else {
+                return DecodedPacketPayload::EntityMethod(packet);
+            };
+            let mut v = vec![];
+            for elem in elems {
+                let ArgValue::FixedDict(map) = elem else {
+                    continue;
+                };
+                let Some(aggressor_raw) = map.get("vehicleID").and_then(|a| a.as_i32()) else {
+                    continue;
+                };
+                let damage = match map.get("damage").and_then(|a| a.as_f32()) {
+                    Some(d) => d,
+                    None => {
+                        let instant = map.get("instantDamage").and_then(|a| a.as_f32());
+                        let periodic = map.get("periodicDamage").and_then(|a| a.as_f32());
+                        if instant.is_none() && periodic.is_none() {
+                            continue;
+                        }
+                        instant.unwrap_or(0.0) + periodic.unwrap_or(0.0)
+                    }
+                };
+                v.push(DamageReceived { aggressor: EntityId::from(aggressor_raw), damage });
+            }
+            DecodedPacketPayload::DamageReceived { victim: *entity_id, aggressors: v }
+        } else if *method == "onCheckGamePing" {
+            let (ping,) = unpack_rpc_args!(args, u64);
+            DecodedPacketPayload::CheckPing(ping)
+        } else if *method == "updateMinimapVisionInfo" {
+            let v = match &args[0] {
+                ArgValue::Array(a) => a,
+                _ => panic!(),
+            };
+            let mut updates = vec![];
+            for minimap_update in v.iter() {
+                let minimap_update = match minimap_update {
+                    ArgValue::FixedDict(m) => m,
+                    _ => panic!(),
+                };
+                let vehicle_id = minimap_update.get("vehicleID").unwrap();
+
+                let packed_data: u32 = minimap_update.get("packedData").unwrap().try_into().unwrap();
+                let update = RawMinimapUpdate::from_bytes(packed_data.to_le_bytes());
+                let heading = update.heading() as f32 / 256. * 360. - 180.;
+
+                // Check raw 11-bit values for the sentinel (0, 0) before float
+                // conversion to avoid any floating-point precision issues.
+                // Raw 0 maps to -2500 in world coords (the Python renderer
+                // checks `x != -2500 or y != -2500`).
+                let is_sentinel = update.x() == 0 && update.y() == 0;
+
+                let x = update.x() as f32 / 512. - 1.5;
+                let y = update.y() as f32 / 512. - 1.5;
+
+                updates.push(MinimapUpdate {
+                    entity_id: match vehicle_id {
+                        ArgValue::Uint32(u) => EntityId::from(*u),
+                        _ => panic!(),
+                    },
+                    position: NormalizedPos::new(x, y),
+                    heading,
+                    is_sentinel,
+                    disappearing: update.is_disappearing(),
+                    unknown: update.unknown(),
+                })
+            }
+
+            let args1 = match &args[1] {
+                ArgValue::Array(a) => a,
+                _ => panic!(),
+            };
+
+            DecodedPacketPayload::MinimapUpdate { updates, arg1: args1 }
+        } else if *method == "onBattleEnd" {
+            let (winning_team, finish_type) = if args.len() >= 2 {
+                let (winning_team, raw_finish) = unpack_rpc_args!(args, i8, u8);
+                let ft = if let Some(ft) = FinishType::from_id(raw_finish as i32, battle_constants, *version) {
+                    ft
+                } else {
+                    Recognized::Unknown(format!("{}", raw_finish))
+                };
+                (Some(winning_team), Some(ft))
+            } else {
+                (None, None)
+            };
+            DecodedPacketPayload::BattleEnd { winning_team, finish_type }
+        } else if *method == "consumableUsed" || *method == "onConsumableUsed" {
+            // WG 15.2 changed the first arg from CONSUMABLE_ID (a plain integer) to
+            // CONSUMABLE_USAGE_PARAMS (a packed struct serialized as a Blob):
+            // b[0] = ConsumableUsageType: 0=None, 1=Default (<BB>), 2=Position (<BBff>), 3=Entity (<BBbQ>).
+            // b[1] = consumable type ID in all variants (except None).
+            // Lesta («Мир кораблей») forked before 15.2, so despite reporting version
+            // 26.x it still sends the old integer form. Dispatch on the actual arg
+            // type rather than the version number so both clients decode.
+            let (raw_consumable, usage_params): (i32, Option<ConsumableUsageParams>) = match &args[0] {
+                    ArgValue::Blob(b) => {
+                        // The blob is serialized by UsageConverter via struct.pack with the
+                        // format determined by ConsumableUsageType. Length checks guard against
+                        // truncated replay data (the game always writes the full struct).
+                        match b.first().copied() {
+                            Some(0) => {
+                                // NONE — no consumable ID or extra data
+                                (0, Some(ConsumableUsageParams::None))
+                            }
+                            Some(1) if b.len() >= 2 => {
+                                // DEFAULT: struct.pack('<BB', usage_type, consumable_id) = 2 bytes
+                                (b[1] as i32, Some(ConsumableUsageParams::Default))
+                            }
+                            Some(2) if b.len() >= 10 => {
+                                // POSITION: struct.pack('<BBff', usage_type, consumable_id, x, z) = 10 bytes
+                                let x = f32::from_le_bytes([b[2], b[3], b[4], b[5]]);
+                                let z = f32::from_le_bytes([b[6], b[7], b[8], b[9]]);
+                                (b[1] as i32, Some(ConsumableUsageParams::Position(WorldPos2D { x, z })))
+                            }
+                            Some(3) if b.len() >= 11 => {
+                                // ENTITY: struct.pack('<BBbQ', usage_type, consumable_id, target_type, target_id) = 11 bytes
+                                let target_type = b[2] as i8;
+                                let target_id = u64::from_le_bytes([b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10]]);
+                                (b[1] as i32, Some(ConsumableUsageParams::Entity { target_type, target_id }))
+                            }
+                            other => {
+                                error!("onConsumableUsed (15.2+): unexpected blob: {:?}", other);
+                                return DecodedPacketPayload::EntityMethod(packet);
+                            }
+                        }
+                    }
+                    // Old integer form (WG pre-15.2 and all Lesta builds): the arg is
+                    // the plain CONSUMABLE_ID with no usage params.
+                    ArgValue::Int8(v) => (*v as i32, None),
+                    ArgValue::Uint8(v) => (*v as i32, None),
+                    ArgValue::Int16(v) => (*v as i32, None),
+                    ArgValue::Uint16(v) => (*v as i32, None),
+                    ArgValue::Int32(v) => (*v, None),
+                    other => {
+                        error!("onConsumableUsed: unexpected first arg type: {:?}", other);
+                        return DecodedPacketPayload::EntityMethod(packet);
+                    }
+                };
+            let duration: f32 = match &args[1] {
+                ArgValue::Float32(v) => *v,
+                ArgValue::Float64(v) => *v as f32,
+                other => {
+                    error!("onConsumableUsed: unexpected duration arg type: {:?}", other);
+                    return DecodedPacketPayload::EntityMethod(packet);
+                }
+            };
+            // Try runtime-loaded consumable types from game data first
+            let consumable = if let Some(c) = Consumable::from_id(raw_consumable, common_constants, *version) {
+                c
+            } else if audit {
+                return DecodedPacketPayload::Audit(format!(
+                    "consumableUsed({},{},{})",
+                    entity_id, raw_consumable, duration
+                ));
+            } else {
+                Recognized::Unknown(format!("{}", raw_consumable))
+            };
+
+            DecodedPacketPayload::Consumable { entity: *entity_id, consumable, duration, usage_params }
+        } else if *method == "updateDetectionBySurfaceHydrophone" {
+            let detected = match args.first() {
+                Some(ArgValue::Uint8(v)) => *v != 0,
+                Some(ArgValue::Int8(v)) => *v != 0,
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            DecodedPacketPayload::DetectedByHydrophone { detected }
+        } else if *method == "updateSurfaceHydrophone" || *method == "updateSurfaceHydrophoneBroadcast" {
+            // The two channels carry different dicts: SURFACE_HYDROPHONE_ZONE_INFO
+            // has a zoneID, SURFACE_BROADCAST_ZONE_INFO does not.
+            let broadcast = *method == "updateSurfaceHydrophoneBroadcast";
+            let Some(ArgValue::Array(entries)) = args.first() else {
+                return DecodedPacketPayload::EntityMethod(packet);
+            };
+            let mut contacts = Vec::new();
+            for entry in entries.iter() {
+                let ArgValue::FixedDict(dict) = entry else { continue };
+                let (Some(entity), Some(ArgValue::Vector2((x, z)))) =
+                    (dict.get("entityID").and_then(ArgValue::as_i32), dict.get("position2D"))
+                else {
+                    continue;
+                };
+                contacts.push(HydrophoneZoneContact {
+                    zone_id: dict.get("zoneID").and_then(ArgValue::as_u32).map(|z| z as u8),
+                    entity_id: EntityId::from(entity),
+                    position: WorldPos2D { x: *x, z: *z },
+                });
+            }
+            DecodedPacketPayload::HydrophoneContacts { contacts, broadcast }
+        } else if *method == "surfaceHydrophoneRemoveTarget" {
+            let Some(entity) = args.first().and_then(ArgValue::as_i32) else {
+                return DecodedPacketPayload::EntityMethod(packet);
+            };
+            DecodedPacketPayload::HydrophoneContactLost { entity: EntityId::from(entity) }
+        } else if *method == "clearSubmarineHydrophone" || *method == "hideHydrophoneIndicator" {
+            DecodedPacketPayload::HydrophoneCleared
+        } else if *method == "addSubmarineHydrophoneTargets" {
+            let Some(ArgValue::Array(entries)) = args.first() else {
+                return DecodedPacketPayload::EntityMethod(packet);
+            };
+            let mut contacts = Vec::new();
+            for entry in entries.iter() {
+                let ArgValue::FixedDict(dict) = entry else { continue };
+                let (Some(entity), Some(params_id), Some(ArgValue::Vector3((x, y, z))), Some(yaw), Some(pitch)) = (
+                    dict.get("entityID").and_then(ArgValue::as_i32),
+                    dict.get("paramsID").and_then(ArgValue::as_u32),
+                    dict.get("position"),
+                    dict.get("yaw").and_then(ArgValue::as_f32),
+                    dict.get("pitch").and_then(ArgValue::as_f32),
+                ) else {
+                    continue;
+                };
+                contacts.push(SubmarineHydrophoneContact {
+                    entity_id: EntityId::from(entity),
+                    params_id: GameParamId::from(params_id),
+                    position: WorldPos::new(*x, *y, *z),
+                    yaw,
+                    pitch,
+                });
+            }
+            let zone_life_time = args.get(1).and_then(ArgValue::as_u32).map(|secs| Duration::from_secs(secs as u64));
+            DecodedPacketPayload::SubmarineHydrophoneContacts { holder: *entity_id, contacts, zone_life_time }
+        } else if *method == "receiveArtilleryShots" {
+            let salvos_array = match &args[0] {
+                ArgValue::Array(a) => a,
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            let mut salvos = Vec::new();
+            for salvo_val in salvos_array.iter() {
+                let salvo_dict = match salvo_val {
+                    ArgValue::FixedDict(m) => m,
+                    _ => continue,
+                };
+                let owner_id: i32 = salvo_dict.get("ownerID").and_then(ArgValue::as_i32).unwrap_or(0);
+                let params_id: u32 = salvo_dict.get("paramsID").and_then(ArgValue::as_u32).unwrap_or(0);
+                let salvo_id: u32 = salvo_dict.get("salvoID").and_then(ArgValue::as_u32).unwrap_or(0);
+                let shots_array = match salvo_dict.get("shots") {
+                    Some(ArgValue::Array(a)) => a,
+                    _ => continue,
+                };
+                let mut shots = Vec::new();
+                for shot_val in shots_array.iter() {
+                    let shot_dict = match shot_val {
+                        ArgValue::FixedDict(m) => m,
+                        _ => continue,
+                    };
+                    let pos = Self::extract_world_pos(shot_dict.get("pos"));
+                    let pitch: f32 = shot_dict.get("pitch").and_then(ArgValue::as_f32).unwrap_or(0.0);
+                    let speed: f32 = shot_dict.get("speed").and_then(ArgValue::as_f32).unwrap_or(0.0);
+                    let tar_pos = Self::extract_world_pos(shot_dict.get("tarPos"));
+                    let shot_id: u32 = shot_dict.get("shotID").and_then(ArgValue::as_u32).unwrap_or(0);
+                    let gun_barrel_id: u16 = match shot_dict.get("gunBarrelID") {
+                        Some(ArgValue::Uint16(v)) => *v,
+                        Some(ArgValue::Int16(v)) => *v as u16,
+                        Some(ArgValue::Uint8(v)) => *v as u16,
+                        _ => 0,
+                    };
+                    let server_time_left: f32 =
+                        shot_dict.get("serverTimeLeft").and_then(ArgValue::as_f32).unwrap_or(0.0);
+                    let shooter_height: f32 = shot_dict.get("shooterHeight").and_then(ArgValue::as_f32).unwrap_or(0.0);
+                    let hit_distance: f32 = shot_dict.get("hitDistance").and_then(ArgValue::as_f32).unwrap_or(0.0);
+                    shots.push(ArtilleryShotData {
+                        origin: pos,
+                        pitch,
+                        speed,
+                        target: tar_pos,
+                        shot_id: ShotId::from(shot_id),
+                        gun_barrel_id,
+                        server_time_left,
+                        shooter_height,
+                        hit_distance,
+                    });
+                }
+                salvos.push(ArtillerySalvo {
+                    owner_id: EntityId::from(owner_id),
+                    params_id: GameParamId::from(params_id),
+                    salvo_id,
+                    shots,
+                });
+            }
+            DecodedPacketPayload::ArtilleryShots { avatar_id: AvatarId::from(*entity_id), salvos }
+        } else if *method == "shootOnClient" {
+            let Some(weapon_type_raw) = args.first().and_then(ArgValue::as_u32) else {
+                return DecodedPacketPayload::EntityMethod(packet);
+            };
+            let gun_bits = GunBits::from(args.get(1).and_then(ArgValue::as_u32).unwrap_or(0));
+            DecodedPacketPayload::WeaponFired {
+                entity: *entity_id,
+                weapon_type: WeaponType::from_raw(weapon_type_raw),
+                gun_bits,
+            }
+        } else if *method == "shootATBAGuns" {
+            let Some(gun_bits_raw) = args.first().and_then(ArgValue::as_u32) else {
+                return DecodedPacketPayload::EntityMethod(packet);
+            };
+            DecodedPacketPayload::WeaponFired {
+                entity: *entity_id,
+                weapon_type: Recognized::Known(WeaponType::Secondaries),
+                gun_bits: GunBits::from(gun_bits_raw),
+            }
+        } else if *method == "receiveTorpedoes" {
+            let salvos_array = match &args[0] {
+                ArgValue::Array(a) => a,
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            let mut torpedoes = Vec::new();
+            for salvo_val in salvos_array.iter() {
+                let salvo_dict = match salvo_val {
+                    ArgValue::FixedDict(m) => m,
+                    _ => continue,
+                };
+                let owner_id: i32 = salvo_dict.get("ownerID").and_then(ArgValue::as_i32).unwrap_or(0);
+                let params_id: u32 = salvo_dict.get("paramsID").and_then(ArgValue::as_u32).unwrap_or(0);
+                let salvo_id: u32 = salvo_dict.get("salvoID").and_then(ArgValue::as_u32).unwrap_or(0);
+                let skin_id: u32 = salvo_dict.get("skinID").and_then(ArgValue::as_u32).unwrap_or(0);
+                let torps_array = match salvo_dict.get("torpedoes") {
+                    Some(ArgValue::Array(a)) => a,
+                    _ => continue,
+                };
+                for torp_val in torps_array.iter() {
+                    let torp_dict = match torp_val {
+                        ArgValue::FixedDict(m) => m,
+                        _ => continue,
+                    };
+                    let pos = Self::extract_world_pos(torp_dict.get("pos"));
+                    let dir = Direction(Self::extract_vec3(torp_dict.get("dir")));
+                    let shot_id: u32 = torp_dict.get("shotID").and_then(ArgValue::as_u32).unwrap_or(0);
+                    let armed = match torp_dict.get("armed") {
+                        Some(ArgValue::Uint8(v)) => *v != 0,
+                        Some(ArgValue::Int8(v)) => *v != 0,
+                        _ => false,
+                    };
+                    let maneuver_dump = torp_dict.get("maneuverDump").and_then(|v| {
+                        let d = match v {
+                            ArgValue::FixedDict(d) => d,
+                            ArgValue::NullableFixedDict(Some(d)) => d,
+                            _ => return None,
+                        };
+                        Some(TorpedoManeuverDump {
+                            target_yaw: d.get("targetYaw").and_then(ArgValue::as_f32).unwrap_or(0.0),
+                            change_time: d.get("changeTime").and_then(ArgValue::as_f32).unwrap_or(0.0),
+                            stop_time: d.get("stopTime").and_then(ArgValue::as_f32).unwrap_or(0.0),
+                            current_time: d.get("currentTime").and_then(ArgValue::as_f32).unwrap_or(0.0),
+                            yaw_speed: d.get("yawSpeed").and_then(ArgValue::as_f32).unwrap_or(0.0),
+                            arm_pos: Self::extract_world_pos(d.get("armPos")),
+                            final_pos: Self::extract_world_pos(d.get("finalPos")),
+                        })
+                    });
+                    let acoustic_dump = torp_dict.get("acousticDump").and_then(|v| {
+                        let d = match v {
+                            ArgValue::FixedDict(d) => d,
+                            ArgValue::NullableFixedDict(Some(d)) => d,
+                            _ => return None,
+                        };
+                        Some(TorpedoAcousticDump {
+                            is_chasing_target: match d.get("isChasingTarget") {
+                                Some(ArgValue::Uint8(v)) => *v != 0,
+                                Some(ArgValue::Int8(v)) => *v != 0,
+                                _ => false,
+                            },
+                            prediction_lost: match d.get("predictionLost") {
+                                Some(ArgValue::Uint8(v)) => *v != 0,
+                                Some(ArgValue::Int8(v)) => *v != 0,
+                                _ => false,
+                            },
+                            modificators_level: match d.get("modificatorsLevel") {
+                                Some(ArgValue::Uint8(v)) => *v,
+                                Some(ArgValue::Int8(v)) => *v as u8,
+                                _ => 0,
+                            },
+                            activation_time: d.get("activationTime").and_then(ArgValue::as_f32).unwrap_or(0.0),
+                            degradation_time: d.get("degradationTime").and_then(ArgValue::as_f32).unwrap_or(0.0),
+                            speed_coef: d.get("speedCoef").and_then(ArgValue::as_f32).unwrap_or(0.0),
+                            rotation_yaw: d.get("rotationYaw").and_then(ArgValue::as_f32).unwrap_or(0.0),
+                            vertical_speed: d.get("verticalSpeed").and_then(ArgValue::as_f32).unwrap_or(0.0),
+                            target_yaw: d.get("targetYaw").and_then(ArgValue::as_f32).unwrap_or(0.0),
+                            target_depth: d.get("targetDepth").and_then(ArgValue::as_f32).unwrap_or(0.0),
+                        })
+                    });
+                    torpedoes.push(TorpedoData {
+                        owner_id: EntityId::from(owner_id),
+                        params_id: GameParamId::from(params_id),
+                        salvo_id,
+                        skin_id: GameParamId::from(skin_id),
+                        shot_id: ShotId::from(shot_id),
+                        origin: pos,
+                        direction: dir,
+                        armed,
+                        maneuver_dump,
+                        acoustic_dump,
+                    });
+                }
+            }
+            DecodedPacketPayload::TorpedoesReceived { avatar_id: AvatarId::from(*entity_id), torpedoes }
+        } else if *method == "receiveShotKills" {
+            // SHOTKILLS_PACK: Array of { ownerID: PLAYER_ID, hitType: UINT8, kills: Array<SHOTKILL> }
+            // SHOTKILL: { pos: VECTOR3, shotID: SHOT_ID, terminalBallisticsInfo: TERMINAL_BALLISTICS_INFO (AllowNone) }
+            let packs = match &args[0] {
+                ArgValue::Array(a) => a,
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            let mut hits = Vec::new();
+            for pack in packs {
+                let pack_dict = match pack {
+                    ArgValue::FixedDict(d) => d,
+                    _ => continue,
+                };
+                let owner_id: i32 = pack_dict.get("ownerID").and_then(ArgValue::as_i32).unwrap_or(0);
+                let hit_type: u8 = match pack_dict.get("hitType") {
+                    Some(ArgValue::Uint8(v)) => *v,
+                    Some(ArgValue::Int8(v)) => *v as u8,
+                    _ => 0,
+                };
+                let kills_array = match pack_dict.get("kills") {
+                    Some(ArgValue::Array(a)) => a,
+                    _ => continue,
+                };
+                for kill in kills_array {
+                    let kill_dict = match kill {
+                        ArgValue::FixedDict(d) => d,
+                        _ => continue,
+                    };
+                    let shot_id: u32 = kill_dict.get("shotID").and_then(ArgValue::as_u32).unwrap_or(0);
+                    let pos = Self::extract_world_pos(kill_dict.get("pos"));
+                    let terminal_ballistics = kill_dict.get("terminalBallisticsInfo").and_then(|v| {
+                        let d = match v {
+                            ArgValue::FixedDict(d) => d,
+                            ArgValue::NullableFixedDict(Some(d)) => d,
+                            _ => return None,
+                        };
+                        let position = Self::extract_world_pos(d.get("position"));
+                        let velocity = Velocity(Self::extract_vec3(d.get("velocity")));
+                        let detonator_activated = match d.get("detonatorActivated") {
+                            Some(ArgValue::Uint8(v)) => *v != 0,
+                            Some(ArgValue::Int8(v)) => *v != 0,
+                            _ => false,
+                        };
+                        let material_angle = d.get("materialAngle").and_then(ArgValue::as_f32).unwrap_or(0.0);
+                        Some(TerminalBallisticsInfo { position, velocity, detonator_activated, material_angle })
+                    });
+                    hits.push(ShotHit {
+                        owner_id: EntityId::from(owner_id),
+                        hit_type: HitType::from_raw(hit_type, ships_constants, version),
+                        shot_id: ShotId::from(shot_id),
+                        position: pos,
+                        terminal_ballistics,
+                    });
+                }
+            }
+            DecodedPacketPayload::ShotKills { avatar_id: AvatarId::from(*entity_id), hits }
+        } else if *method == "receiveTorpedoDirection" {
+            // args: [ownerId PLAYER_ID, torpedoId SHOT_ID(UINT16), serverPos VECTOR3,
+            //        targetYaw FLOAT, targetDepth FLOAT, speedCoef FLOAT, curYawSpeed FLOAT,
+            //        curPitchSpeed FLOAT, canReachDepth BOOL]. Use width-tolerant integer
+            // reads: torpedoId is a UINT16 on the wire and must not bail the decode.
+            let Some(owner_id) = args.first().and_then(|a| a.as_i32()).map(EntityId::from) else {
+                return DecodedPacketPayload::EntityMethod(packet);
+            };
+            let Some(shot_id) = args.get(1).and_then(|a| a.as_u32()).map(ShotId::from) else {
+                return DecodedPacketPayload::EntityMethod(packet);
+            };
+            let position = Self::extract_world_pos(args.get(2));
+            let target_yaw = match args.get(3) {
+                Some(ArgValue::Float32(v)) => *v,
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            let speed_coef = match args.get(5) {
+                Some(ArgValue::Float32(v)) => *v,
+                _ => 1.0,
+            };
+            DecodedPacketPayload::TorpedoDirection { owner_id, shot_id, position, target_yaw, speed_coef }
+        } else if *method == "receive_addMinimapSquadron" {
+            // args: [plane_id, team_id, params_id, position, unknown]
+            let plane_id: PlaneId = match &args[0] {
+                ArgValue::Uint64(v) => PlaneId::from(*v),
+                ArgValue::Int64(v) => PlaneId::from(*v),
+                ArgValue::Uint32(v) => PlaneId::from(*v as u64),
+                ArgValue::Int32(v) => PlaneId::from(*v as i64),
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            let team_id: u32 = match &args[1] {
+                ArgValue::Uint32(v) => *v,
+                ArgValue::Int32(v) => *v as u32,
+                ArgValue::Uint64(v) => *v as u32,
+                ArgValue::Int64(v) => *v as u32,
+                ArgValue::Uint8(v) => *v as u32,
+                ArgValue::Int8(v) => *v as u32,
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            let params_id: u64 = match &args[2] {
+                ArgValue::Uint64(v) => *v,
+                ArgValue::Int64(v) => *v as u64,
+                ArgValue::Uint32(v) => *v as u64,
+                ArgValue::Int32(v) => *v as u64,
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            let position = match &args[3] {
+                ArgValue::Array(a) if a.len() >= 2 => {
+                    let x: f32 = (&a[0]).try_into().unwrap_or(0.0);
+                    let y: f32 = (&a[1]).try_into().unwrap_or(0.0);
+                    (x, y)
+                }
+                ArgValue::Vector2((x, y)) => (*x, *y),
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            DecodedPacketPayload::PlaneAdded {
+                entity_id: *entity_id,
+                plane_id,
+                team_id,
+                params_id: GameParamId::from(params_id),
+                position: WorldPos2D { x: position.0, z: position.1 },
+            }
+        } else if *method == "receive_removeMinimapSquadron" {
+            let plane_id: PlaneId = match &args[0] {
+                ArgValue::Uint64(v) => PlaneId::from(*v),
+                ArgValue::Int64(v) => PlaneId::from(*v),
+                ArgValue::Uint32(v) => PlaneId::from(*v as u64),
+                ArgValue::Int32(v) => PlaneId::from(*v as i64),
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            DecodedPacketPayload::PlaneRemoved { entity_id: *entity_id, plane_id }
+        } else if *method == "receive_updateMinimapSquadron" {
+            let plane_id: PlaneId = match &args[0] {
+                ArgValue::Uint64(v) => PlaneId::from(*v),
+                ArgValue::Int64(v) => PlaneId::from(*v),
+                ArgValue::Uint32(v) => PlaneId::from(*v as u64),
+                ArgValue::Int32(v) => PlaneId::from(*v as i64),
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            let position = match &args[1] {
+                ArgValue::Array(a) if a.len() >= 2 => {
+                    let x: f32 = (&a[0]).try_into().unwrap_or(0.0);
+                    let y: f32 = (&a[1]).try_into().unwrap_or(0.0);
+                    (x, y)
+                }
+                ArgValue::Vector2((x, y)) => (*x, *y),
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            DecodedPacketPayload::PlanePosition {
+                entity_id: *entity_id,
+                plane_id,
+                position: WorldPos2D { x: position.0, z: position.1 },
+            }
+        } else if *method == "receive_wardAdded" {
+            // args: [squadronId, position, time, radius, teamId, ownerId, wardType]
+            let plane_id: PlaneId = match &args[0] {
+                ArgValue::Uint64(v) => PlaneId::from(*v),
+                ArgValue::Int64(v) => PlaneId::from(*v),
+                ArgValue::Uint32(v) => PlaneId::from(*v as u64),
+                ArgValue::Int32(v) => PlaneId::from(*v as i64),
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            let position = match &args[1] {
+                ArgValue::Vector3((x, y, z)) => WorldPos::new(*x, *y, *z),
+                ArgValue::Array(a) if a.len() >= 3 => {
+                    let x: f32 = (&a[0]).try_into().unwrap_or(0.0);
+                    let y: f32 = (&a[1]).try_into().unwrap_or(0.0);
+                    let z: f32 = (&a[2]).try_into().unwrap_or(0.0);
+                    WorldPos::new(x, y, z)
+                }
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            let radius: f32 = match &args[3] {
+                ArgValue::Float32(v) => *v,
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            let owner_id: EntityId = match &args[5] {
+                ArgValue::Uint32(v) => EntityId::from(*v),
+                ArgValue::Int32(v) => EntityId::from(*v),
+                ArgValue::Uint64(v) => EntityId::from(*v as u32),
+                ArgValue::Int64(v) => EntityId::from(*v),
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            DecodedPacketPayload::WardAdded {
+                entity_id: *entity_id,
+                plane_id,
+                position,
+                radius: BigWorldDistance::from(radius),
+                owner_id,
+            }
+        } else if *method == "receive_wardRemoved" {
+            // args: [squadronId]
+            let plane_id: PlaneId = match &args[0] {
+                ArgValue::Uint64(v) => PlaneId::from(*v),
+                ArgValue::Int64(v) => PlaneId::from(*v),
+                ArgValue::Uint32(v) => PlaneId::from(*v as u64),
+                ArgValue::Int32(v) => PlaneId::from(*v as i64),
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            DecodedPacketPayload::WardRemoved { entity_id: *entity_id, plane_id }
+        } else if *method == "syncGun" {
+            // args: [weaponType: u8, gunId: u8, yaw: f32, pitch: f32, alive, reloadPerc, loadedAmmo]
+            let weapon_type = match &args[0] {
+                ArgValue::Uint8(v) => *v as u32,
+                ArgValue::Int8(v) => *v as u32,
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            let gun_id = match &args[1] {
+                ArgValue::Uint8(v) => *v as u32,
+                ArgValue::Int8(v) => *v as u32,
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            let yaw = match &args[2] {
+                ArgValue::Float32(v) => *v,
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            let pitch = match &args[3] {
+                ArgValue::Float32(v) => *v,
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            DecodedPacketPayload::GunSync { entity_id: *entity_id, weapon_type, gun_id, yaw, pitch }
+        } else if *method == "setAmmoForWeapon" {
+            // args: [weaponType: u8, ammoParamsId: u32, isReload: bool (optional in older replays)]
+            let weapon_type = match &args[0] {
+                ArgValue::Uint8(v) => *v as u32,
+                ArgValue::Int8(v) => *v as u32,
+                ArgValue::Uint32(v) => *v,
+                ArgValue::Int32(v) => *v as u32,
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            let ammo_param_id = match &args[1] {
+                ArgValue::Uint32(v) => GameParamId::from(*v),
+                ArgValue::Int32(v) => GameParamId::from(*v as u32),
+                ArgValue::Uint64(v) => GameParamId::from(*v),
+                ArgValue::Int64(v) => GameParamId::from(*v),
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            let is_reload = if args.len() > 2 {
+                match &args[2] {
+                    ArgValue::Uint8(v) => *v != 0,
+                    ArgValue::Int8(v) => *v != 0,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            DecodedPacketPayload::SetAmmoForWeapon { entity_id: *entity_id, weapon_type, ammo_param_id, is_reload }
+        } else if *method == "syncShipCracks" {
+            // args: [state1: BLOB, state2: BLOB] — 72-byte physics body states for each hull half
+            let raw1 = match &args[0] {
+                ArgValue::String(s) => s.as_slice(),
+                ArgValue::Blob(b) => b.as_slice(),
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            let raw2 = match &args[1] {
+                ArgValue::String(s) => s.as_slice(),
+                ArgValue::Blob(b) => b.as_slice(),
+                _ => return DecodedPacketPayload::EntityMethod(packet),
+            };
+            DecodedPacketPayload::SyncShipCracks {
+                entity_id: *entity_id,
+                state1: PhysicsBodyState::parse(raw1),
+                state2: PhysicsBodyState::parse(raw2),
+            }
+        } else {
+            DecodedPacketPayload::EntityMethod(packet)
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct DecodedPacket<'replay, 'argtype, 'rawpacket> {
+    pub packet_type: crate::packet2::PacketTypeId,
+    pub clock: crate::types::GameClock,
+    pub payload: DecodedPacketPayload<'replay, 'argtype, 'rawpacket>,
+    /// Bytes remaining after parsing. Non-empty means the parser didn't consume
+    /// the full packet payload.
+    #[serde(skip_serializing_if = "<[u8]>::is_empty")]
+    pub leftover: &'replay [u8],
+}
+
+/// Reusable packet decoder that holds version and game constants.
+///
+/// Create once per replay, then call `decode()` for each packet.
+#[derive(bon::Builder)]
+pub struct PacketDecoder<'a> {
+    version: Version,
+    #[builder(default)]
+    audit: bool,
+    #[builder(default = &DEFAULT_BATTLE_CONSTANTS)]
+    battle_constants: &'a wowsunpack::game_constants::BattleConstants,
+    #[builder(default = &DEFAULT_COMMON_CONSTANTS)]
+    common_constants: &'a wowsunpack::game_constants::CommonConstants,
+    #[builder(default = &DEFAULT_SHIPS_CONSTANTS)]
+    ships_constants: &'a wowsunpack::game_constants::ShipsConstants,
+}
+
+impl<'a> PacketDecoder<'a> {
+    pub fn decode<'replay, 'argtype, 'rawpacket>(
+        &self,
+        packet: &'rawpacket Packet<'_, '_>,
+    ) -> DecodedPacket<'replay, 'argtype, 'rawpacket>
+    where
+        'rawpacket: 'replay,
+        'rawpacket: 'argtype,
+    {
+        DecodedPacket {
+            clock: packet.clock,
+            packet_type: packet.packet_type,
+            payload: DecodedPacketPayload::from(
+                &self.version,
+                self.audit,
+                &packet.payload,
+                packet.packet_type,
+                self.battle_constants,
+                self.common_constants,
+                self.ships_constants,
+            ),
+            leftover: packet.leftover,
+        }
+    }
+}
+
+struct Decoder {
+    silent: bool,
+    output: Option<Box<dyn std::io::Write>>,
+    packet_decoder: PacketDecoder<'static>,
+}
+
+impl Decoder {
+    fn write(&mut self, line: &str) {
+        if !self.silent {
+            match self.output.as_mut() {
+                Some(f) => {
+                    writeln!(f, "{}", line).unwrap();
+                }
+                None => {
+                    println!("{}", line);
+                }
+            }
+        }
+    }
+}
+
+mod raw_minimap_update {
+    #![allow(dead_code)]
+    use modular_bitfield::prelude::*;
+
+    #[bitfield]
+    #[derive(Debug)]
+    pub(crate) struct RawMinimapUpdate {
+        pub x: B11,
+        pub y: B11,
+        pub heading: B8,
+        pub unknown: bool,
+        pub is_disappearing: bool,
+    }
+}
+use raw_minimap_update::RawMinimapUpdate;
+
+impl Analyzer for Decoder {
+    fn finish(&mut self) {}
+
+    fn process(&mut self, packet: &Packet<'_, '_>) {
+        let decoded = self.packet_decoder.decode(packet);
+        //println!("{:#?}", decoded);
+        //println!("{}", serde_json::to_string_pretty(&decoded).unwrap());
+        let encoded = serde_json::to_string(&decoded).unwrap();
+        self.write(&encoded);
+    }
+}
+
+#[cfg(test)]
+mod player_key_map_tests {
+    use super::*;
+
+    fn v(major: u32, minor: u32, patch: u32) -> Version {
+        Version::base(major, minor, patch)
+    }
+
+    /// Pre-0.10.7 clients (e.g. the 0.9.10 Smaland replay) carry a 34-field player
+    /// FixedDict. Verified field-by-field against a real 0.9.10 replay: mapping the
+    /// full set -- not just the eight the old code needed -- is what lets these
+    /// replays resolve connection state and ship builds instead of reading every
+    /// player as disconnected with no build.
+    #[test]
+    fn pre_10_7_maps_connection_and_build_fields() {
+        let m = PlayerStateData::player_key_map(&v(0, 9, 10));
+        assert_eq!(m.get(PlayerStateData::KEY_IS_CONNECTED), Some(&15));
+        assert_eq!(m.get(PlayerStateData::KEY_SHIP_CONFIG_DUMP), Some(&28));
+        assert_eq!(m.get(PlayerStateData::KEY_IS_ALIVE), Some(&13));
+        assert_eq!(m.get(PlayerStateData::KEY_IS_BOT), Some(&14));
+        // Anchors that were already correct in the prior (partial) map.
+        assert_eq!(m.get(PlayerStateData::KEY_MAX_HEALTH), Some(&21));
+        assert_eq!(m.get(PlayerStateData::KEY_NAME), Some(&22));
+        assert_eq!(m.get(PlayerStateData::KEY_SHIP_ID), Some(&29));
+        assert_eq!(m.get(PlayerStateData::KEY_TEAM_ID), Some(&32));
+        // Fields that did not exist this early must be absent, not mis-indexed.
+        assert_eq!(m.get(PlayerStateData::KEY_IS_CLIENT_LOADED), None);
+        assert_eq!(m.get(PlayerStateData::KEY_SHIP_COMPONENTS), None);
+    }
+
+    /// 0.10.7-0.10.8 added isClientLoaded; still no antiAbuseEnabled/shipComponents.
+    /// Verified against a real 0.10.7 replay.
+    #[test]
+    fn v10_7_layout() {
+        let m = PlayerStateData::player_key_map(&v(0, 10, 7));
+        assert_eq!(m.get(PlayerStateData::KEY_IS_CLIENT_LOADED), Some(&15));
+        assert_eq!(m.get(PlayerStateData::KEY_IS_CONNECTED), Some(&16));
+        assert_eq!(m.get(PlayerStateData::KEY_SHIP_CONFIG_DUMP), Some(&29));
+        assert_eq!(m.get(PlayerStateData::KEY_MAX_HEALTH), Some(&22));
+        assert_eq!(m.get(PlayerStateData::KEY_TEAM_ID), Some(&33));
+        assert_eq!(m.get(PlayerStateData::KEY_ANTI_ABUSE_ENABLED), None);
+        assert_eq!(m.get(PlayerStateData::KEY_SHIP_COMPONENTS), None);
+    }
+
+    /// 0.10.9-0.11.10 added antiAbuseEnabled(1) and shipComponents(30).
+    /// Verified against real replays across the range.
+    #[test]
+    fn v10_9_layout() {
+        let m = PlayerStateData::player_key_map(&v(0, 10, 9));
+        assert_eq!(m.get(PlayerStateData::KEY_ANTI_ABUSE_ENABLED), Some(&1));
+        assert_eq!(m.get(PlayerStateData::KEY_IS_CONNECTED), Some(&17));
+        assert_eq!(m.get(PlayerStateData::KEY_SHIP_COMPONENTS), Some(&30));
+        assert_eq!(m.get(PlayerStateData::KEY_SHIP_CONFIG_DUMP), Some(&31));
+        assert_eq!(m.get(PlayerStateData::KEY_MAX_HEALTH), Some(&23));
+        assert_eq!(m.get(PlayerStateData::KEY_TEAM_ID), Some(&35));
+    }
+
+    /// 0.11.11 onward shares the 38-field layout (every field this code reads matches
+    /// 0.12.8): isConnected and shipConfigDump stay put while name/ship ids shift.
+    #[test]
+    fn v11_11_matches_modern_for_read_fields() {
+        let a = PlayerStateData::player_key_map(&v(0, 11, 11));
+        let b = PlayerStateData::player_key_map(&v(0, 12, 8));
+        for key in [
+            PlayerStateData::KEY_IS_CONNECTED,
+            PlayerStateData::KEY_SHIP_CONFIG_DUMP,
+            PlayerStateData::KEY_MAX_HEALTH,
+            PlayerStateData::KEY_NAME,
+            PlayerStateData::KEY_SHIP_ID,
+            PlayerStateData::KEY_TEAM_ID,
+        ] {
+            assert_eq!(a.get(key), b.get(key), "field {key} diverges at 0.11.11");
+        }
+    }
+}

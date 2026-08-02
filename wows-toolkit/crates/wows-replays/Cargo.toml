@@ -1,0 +1,61 @@
+[package]
+name = "wows_replays"
+version = "0.44.0"
+authors = ["landaire"]
+description = "A parser for World of Warships replay files"
+repository = "https://github.com/landaire/wows-toolkit"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+winnow = { workspace = true, optional = true }
+flate2 = { workspace = true }
+serde = { workspace = true, features = ["rc"] }
+serde_json = { workspace = true, optional = true }
+thiserror = { workspace = true }
+blowfish = { version = "0.9", optional = true }
+cipher = { version = "0.4", optional = true }
+byteorder = { version = "1", optional = true }
+pickled = { workspace = true, optional = true }
+rmpv = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+kinded = "0.5"
+tracing = { workspace = true }
+wowsunpack = { workspace = true, default-features = false }
+bon = { workspace = true, optional = true }
+rootcause = { workspace = true, optional = true }
+modular-bitfield = { version = "0.13", optional = true }
+
+[build-dependencies]
+serde = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+sha2 = { workspace = true }
+wows-data-mgr = { workspace = true }
+
+[features]
+default = ["arc", "parsing"]
+# Sans-io parsing: decrypt, decompress, and walk packets entirely in memory.
+# Compiles for wasm32. Does not pull in the filesystem-backed VFS.
+parsing = [
+    "dep:winnow",
+    "dep:blowfish",
+    "dep:cipher",
+    "dep:byteorder",
+    "dep:pickled",
+    "dep:rmpv",
+    "dep:base64",
+    "dep:modular-bitfield",
+    "dep:bon",
+    "dep:serde_json",
+    "dep:rootcause",
+    "wowsunpack/json",
+    "wowsunpack/parsing",
+]
+# Adds the filesystem-backed VFS loaders (GameConstants::from_vfs etc.).
+# Not wasm-compatible (pulls in memmap2).
+vfs = ["parsing", "wowsunpack/vfs"]
+arc = ["wowsunpack/arc"]

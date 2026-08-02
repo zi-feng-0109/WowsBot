@@ -583,12 +583,17 @@ def render(report: MatchReport, out_path: str):
                 draw.text((x + 870, ty), f"{sd:>5,}".replace(",", " "), sd_color, f_num)
             else:
                 draw.text((x + 870, ty), "—", GAME_DIM, f_row)
-            # potential damage (fall back to actual damage taken if not available)
+            # potential damage. Falls back to actual damage taken (HP lost) when the
+            # value is unavailable — but WOWS_NO_POTENTIAL_FALLBACK=1 disables that
+            # (Lesta: only the recorder has real potential; others' HP-lost under a
+            # 潜在 header misleads, so show "—" instead — 宁缺勿错).
             if p.potential_damage is not None and p.potential_damage > 0:
                 pot = int(p.potential_damage)
                 pot_color = (GAME_PURPLE if pot >= 3_000_000 else
                              GAME_GOLD if pot >= 1_500_000 else GAME_TEXT)
                 draw.text((x + 970, ty), f"{pot:>7,}".replace(",", " "), pot_color, f_num)
+            elif _os.environ.get("WOWS_NO_POTENTIAL_FALLBACK") == "1":
+                draw.text((x + 970, ty), "—", GAME_DIM, f_row)
             else:
                 taken = int(p.max_hp - p.final_hp)
                 draw.text((x + 970, ty), f"{taken:>7,}".replace(",", " "), GAME_DIM, f_num)
