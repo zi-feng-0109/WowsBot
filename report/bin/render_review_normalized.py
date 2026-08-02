@@ -59,29 +59,37 @@ def _output_slices(self_damage_by_type):
     return slices
 
 
-def _ribbon_display(r):
-    """(label, flat icon basename). Basename via render_damage_chart.RIBBON_DISPLAY
-    so hit-quality subribbons collapse onto their flat parent banner (穿透/未穿/跳弹 →
-    ribbon_main_caliber) — one flat art style, no mismatched angled subribbons. The
-    label keeps Lesta's own wording (display_name) when present."""
+def _ribbon_display(r, is_lesta):
+    """(label, icon basename).
+
+    Lesta ships a full per-ribbon "detailed" set (`subribbon_*`, its post-battle
+    art) covering every ribbon type. For a Lesta report use that set for EVERY
+    ribbon so the source is uniform (all Lesta post-battle art), keying by the
+    ribbon name (`RIBBON_FRAG` → `subribbon_frag`). For WG, keep the legacy
+    behaviour: collapse via RIBBON_DISPLAY onto the flat parent banner.
+    """
     raw = r.get("name", "")
     if raw.startswith("RIBBON_"):
         raw = raw[len("RIBBON_"):]
+    label = r.get("display_name") or (dc.RIBBON_DISPLAY.get(raw, (raw,))[0])
+    if is_lesta:
+        return label, "subribbon_" + raw.lower()
     entry = dc.RIBBON_DISPLAY.get(raw)
-    label = r.get("display_name") or (entry[0] if entry else raw)
     if entry:
         return label, entry[1]
     key = r.get("icon_key", "")
     return label, (f"sub{key}" if r.get("is_subribbon") else key)
 
 
-def _ribbon_dirs(raw_json):
-    """Icon dirs to try, in order. Lesta replays (version.major>=16) prefer Lesta's
-    own flat ribbon set so a Lesta report uses Lesta art; WG's shared set is the
-    fallback for anything Lesta lacks."""
+def _is_lesta(raw_json):
+    return ((raw_json.get("metadata") or {}).get("version") or {}).get("major", 0) >= 16
+
+
+def _ribbon_dirs(is_lesta):
+    """Icon dirs to try, in order. Lesta reports prefer Lesta's own post-battle
+    ribbon set; WG's shared set is the fallback."""
     dirs = [dc.RIBBON_ICON_DIR]
-    ver_major = ((raw_json.get("metadata") or {}).get("version") or {}).get("major", 0)
-    if ver_major >= 16:
+    if is_lesta:
         lesta = Path(__file__).resolve().parent.parent / "data" / "ribbon_icons_lesta"
         if lesta.is_dir():
             dirs.insert(0, str(lesta))
@@ -153,7 +161,8 @@ def render(json_path: str, out_path: str):
         f_cnt = fm(20)
         f_lbl = f(16)
 
-        ribbon_dirs = _ribbon_dirs(raw)
+        is_lesta = _is_lesta(raw)
+        ribbon_dirs = _ribbon_dirs(is_lesta)
 
         def _ribbon_img(basename):
             for d in ribbon_dirs:
@@ -173,7 +182,7 @@ def render(json_path: str, out_path: str):
             row, col = divmod(i, RIBBON_PER_ROW)
             ax = PAD + 16 + col * item_w
             ay = row_y0 + row * RIBBON_ROW_H + 6
-            label, basename = _ribbon_display(r)
+            label, basename = _ribbon_display(r, is_lesta)
             icon = _ribbon_img(basename)
             if icon:
                 img.paste(icon, (ax, ay), icon)
