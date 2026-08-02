@@ -57,8 +57,8 @@ DEFAULT_ENABLED = {
 }
 
 # 规划中功能;在这里追加: ("名字", "一句话简介")
+# 莱斯塔(Lesta)服务器 replay 渲染已上线(视频/战报/复盘/聊天),从规划中移除。
 PLANNED_FEATURES: list[tuple[str, str]] = [
-    ("莱斯塔服务器 replay 渲染", "支持莱斯塔(Lesta)服务器战斗回放的渲染"),
 ]
 
 # 【游戏】section — 命令驱动的游戏类指令,跟 replay-toggle 不同源,单独一栏。
@@ -284,8 +284,8 @@ def render_menu_png(out_path: str, *, scope: str, ident: str,
 
     # ----- 使用方法 -----
     draw.text((PAD, y), "【使用方法】", GAME_TEXT, f_section); y += 30
-    draw.text((PAD + 12, y), "把 .wowsreplay 拖进群里或私聊我", GAME_TEXT, f_row); y += ROW_H
-    draw.text((PAD + 12, y), "开着的输出会自动产生并发回", GAME_DIM, f_row); y += ROW_H
+    draw.text((PAD + 12, y), "把 .wowsreplay(WG)或 .korablireplay(莱斯塔)拖进群里或私聊我", GAME_TEXT, f_row); y += ROW_H
+    draw.text((PAD + 12, y), "开着的输出会自动产生并发回(莱斯塔支持 视频/战报/复盘/聊天)", GAME_DIM, f_row); y += ROW_H
     y += SECTION_GAP
 
     # ----- 游戏 -----
