@@ -65,8 +65,14 @@ def main():
 
     py = find_python()
     print("[2/4] 战报 ...", file=sys.stderr)
+    # When stitching, skip the battle report's own 个人战绩 band + footer — the
+    # 复盘 half below already carries per-self stats and the final footer (matches
+    # wows_full_report / the EssexBot layout).
+    report_env = os.environ.copy()
+    report_env["WOWS_SKIP_PERSONAL"] = "1"
+    report_env["WOWS_SKIP_FOOTER"] = "1"
     subprocess.run([py, str(BIN / "render_report_normalized.py"), str(json_path), str(report_png)],
-                   check=True, stdout=sys.stderr)
+                   check=True, stdout=sys.stderr, env=report_env)
     print("[3/4] 复盘 ...", file=sys.stderr)
     subprocess.run([py, str(BIN / "render_review_normalized.py"), str(json_path), str(review_png)],
                    check=True, stdout=sys.stderr)
