@@ -23,30 +23,15 @@ use wowsunpack::game_types::GameParamId;
 use crate::analyzer::decoder::PlayerStateData;
 use crate::wowsreplay::VehicleInfoMeta;
 
-// Lesta ships TWO record layouts, keyed by whether the record is a real
-// account or an AI (bot). Both appear in the same replay, in SEPARATE zlib+msgpack
-// blobs: the human blob (local player + real players) comes first, the bot blob
-// (low-tier random / co-op AI, negative account ids) second. A low-tier battle
-// can have a 1-entry human blob (you alone among bots), so both layouts and both
-// blobs must be decoded and merged. Indices verified against build 26.7 (2026-08).
-
-// HUMAN record layout.
-const H_ACCOUNT: i64 = 0;
-const H_AVATAR: i64 = 2; // scalar avatar entity id (voiceline sender id space)
-const H_CLAN: i64 = 7;
-const H_ACCOUNT_ID: i64 = 13; // accountId — the `onChatMessageRegular` sender id (≠ accountDBID at idx0)
-const H_NAME: i64 = 28;
-const H_TEAM_MAP: i64 = 29; // { playerModeType, observedTeamId }
-const H_SHIP_CONFIG: i64 = 35; // base64-encoded shipConfig blob
-const H_SHIP_ENTITY: i64 = 36; // the player's ship (vehicle) entity id
-
-// BOT (AI) record layout — different field positions from the human record.
-const B_ACCOUNT: i64 = 0; // negative i32 bot id (as_u64 → 0, which is fine: bots share id 0)
-const B_AVATAR: i64 = 2; // [avatar entity id, 0]
-const B_NAME: i64 = 22;
-const B_SHIP_CONFIG: i64 = 25; // base64-encoded shipConfig blob
-const B_SHIP_ENTITY: i64 = 26; // the bot's ship (vehicle) entity id
-const B_TEAM: i64 = 29; // scalar team id (NOT a map, unlike the human record)
+// Field indices within a Lesta roster player record.
+const IDX_ACCOUNT: i64 = 0;
+const IDX_AVATAR: i64 = 2; // avatar entity id (voiceline sender id space)
+const IDX_CLAN: i64 = 7;
+const IDX_ACCOUNT_ID: i64 = 13; // accountId — the `onChatMessageRegular` sender id (≠ accountDBID at idx0)
+const IDX_NAME: i64 = 28;
+const IDX_TEAM_MAP: i64 = 29; // { playerModeType, observedTeamId }
+const IDX_SHIP_CONFIG: i64 = 35; // base64-encoded shipConfig blob
+const IDX_SHIP_ENTITY: i64 = 36; // the player's ship (vehicle) entity id
 
 struct RosterEntry {
     account_id: u32,
@@ -139,36 +124,18 @@ pub fn entity_ship_params(packet_data: &[u8], version: &Version) -> Vec<(EntityI
 }
 
 fn extract_roster(packet_data: &[u8], version: &Version) -> Vec<RosterEntry> {
-    // Merge every roster blob found (human blob + bot blob), deduping by ship
-    // entity id. Both blobs must be collected: the human blob has self + real
-    // players, the bot blob has the AI. Returning only the first (as before)
-    // dropped one or the other, and rejecting <2-entry blobs dropped the whole
-    // roster in low-tier battles where you are the only human.
-    let mut merged: Vec<RosterEntry> = Vec::new();
-    let mut seen_ship: std::collections::HashSet<u32> = std::collections::HashSet::new();
-    let mut seen_avatar: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut i = 0usize;
     while i + 2 < packet_data.len() {
         if packet_data[i] == 0x78 && matches!(packet_data[i + 1], 0x01 | 0x9c | 0xda) {
             if let Some(inflated) = inflate_zlib(&packet_data[i..]) {
                 if let Some(roster) = try_decode_roster(&inflated, version) {
-                    for e in roster {
-                        // Dedup: the same roster can be recompressed at several
-                        // offsets; keep the first sighting of each ship/avatar.
-                        if e.ship_entity_id != 0 && !seen_ship.insert(e.ship_entity_id) {
-                            continue;
-                        }
-                        if e.ship_entity_id == 0 && e.avatar_id != 0 && !seen_avatar.insert(e.avatar_id) {
-                            continue;
-                        }
-                        merged.push(e);
-                    }
+                    return roster;
                 }
             }
         }
         i += 1;
     }
-    merged
+    Vec::new()
 }
 
 fn inflate_zlib(data: &[u8]) -> Option<Vec<u8>> {
@@ -180,16 +147,15 @@ fn inflate_zlib(data: &[u8]) -> Option<Vec<u8>> {
 fn try_decode_roster(inflated: &[u8], version: &Version) -> Option<Vec<RosterEntry>> {
     let root = rmpv::decode::read_value(&mut &inflated[..]).ok()?;
     let players = root.as_array()?;
-    // A roster blob can have a single entry (low-tier battle where you are the
-    // only human), so >=1. Emptiness or any nameless entry means this is a
-    // different (non-roster) zlib blob — reject the whole candidate.
-    if players.is_empty() {
+    if players.len() < 2 {
         return None;
     }
     let mut out = Vec::with_capacity(players.len());
     for p in players {
         let pairs = p.as_array()?;
         let entry = decode_player(pairs, version);
+        // Every roster player carries a name; a nameless entry means we matched a
+        // different (non-roster) zlib blob — reject the whole candidate.
         if entry.name.is_empty() {
             return None;
         }
@@ -199,84 +165,52 @@ fn try_decode_roster(inflated: &[u8], version: &Version) -> Option<Vec<RosterEnt
 }
 
 fn decode_player(pairs: &[rmpv::Value], version: &Version) -> RosterEntry {
-    // Index -> value map for random access (fields aren't in a fixed order and
-    // the two layouts share some indices with different meanings).
-    let mut m: std::collections::HashMap<i64, &rmpv::Value> = std::collections::HashMap::new();
+    let mut e = RosterEntry {
+        account_id: 0,
+        avatar_id: 0,
+        chat_account_id: 0,
+        ship_entity_id: 0,
+        name: String::new(),
+        clan: String::new(),
+        team_id: 0,
+        ship_params_id: None,
+    };
     for pair in pairs {
         let Some(kv) = pair.as_array() else { continue };
         if kv.len() != 2 {
             continue;
         }
-        if let Some(idx) = kv[0].as_i64() {
-            m.insert(idx, &kv[1]);
-        }
-    }
-
-    let text = |idx: i64| -> String { m.get(&idx).map(|v| value_to_string(v)).unwrap_or_default() };
-    // Account/entity ids: bots store a NEGATIVE i32 account id, so read signed and
-    // wrap to u32. `as_u64` alone returns 0 for negatives, collapsing every bot to
-    // account 0 — which then collides on metadata lookup (all bots inherit one
-    // player's relation, marking allied bots as enemies). The low 32 bits are the
-    // stable per-bot id both the roster (meta) and player-state sides agree on.
-    let u32_at = |idx: i64| -> u32 {
-        match m.get(&idx) {
-            Some(v) => v.as_u64().map(|x| x as u32).or_else(|| v.as_i64().map(|x| x as u32)).unwrap_or(0),
-            None => 0,
-        }
-    };
-    // Avatar can be a scalar (human) or `[avatar_id, 0]` (bot).
-    let avatar_at = |idx: i64| -> u32 {
-        match m.get(&idx) {
-            Some(rmpv::Value::Array(a)) => a.first().and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            Some(v) => v.as_u64().unwrap_or(0) as u32,
-            None => 0,
-        }
-    };
-    let ship_params = |idx: i64| -> Option<GameParamId> {
-        let b64 = text(idx);
-        let bin = base64::engine::general_purpose::STANDARD.decode(b64.trim()).ok()?;
-        parse_ship_config(&bin, version).ok().map(|c| c.ship_params_id())
-    };
-
-    // A human record carries its name at H_NAME; a bot at B_NAME. Pick the layout
-    // by which one holds a non-empty string.
-    let human_name = text(H_NAME);
-    if !human_name.is_empty() {
-        let mut team_id = 0i64;
-        if let Some(v) = m.get(&H_TEAM_MAP) {
-            if let Some(map) = v.as_map() {
-                for (k, mv) in map {
-                    // map keys are binary utf-8, not str
-                    let is_team = k.as_str() == Some("observedTeamId")
-                        || matches!(k, rmpv::Value::Binary(b) if b.as_slice() == b"observedTeamId");
-                    if is_team {
-                        team_id = mv.as_i64().unwrap_or(0);
+        let Some(idx) = kv[0].as_i64() else { continue };
+        let v = &kv[1];
+        match idx {
+            IDX_ACCOUNT => e.account_id = v.as_u64().unwrap_or(0) as u32,
+            IDX_AVATAR => e.avatar_id = v.as_u64().unwrap_or(0) as u32,
+            IDX_ACCOUNT_ID => e.chat_account_id = v.as_u64().unwrap_or(0) as u32,
+            IDX_SHIP_ENTITY => e.ship_entity_id = v.as_u64().unwrap_or(0) as u32,
+            IDX_NAME => e.name = value_to_string(v),
+            IDX_CLAN => e.clan = value_to_string(v),
+            IDX_TEAM_MAP => {
+                if let Some(map) = v.as_map() {
+                    for (k, mv) in map {
+                        // map keys are binary utf-8, not str
+                        let is_team = k.as_str() == Some("observedTeamId")
+                            || matches!(k, rmpv::Value::Binary(b) if b.as_slice() == b"observedTeamId");
+                        if is_team {
+                            e.team_id = mv.as_i64().unwrap_or(0);
+                        }
                     }
                 }
             }
-        }
-        RosterEntry {
-            account_id: u32_at(H_ACCOUNT),
-            avatar_id: avatar_at(H_AVATAR),
-            chat_account_id: u32_at(H_ACCOUNT_ID),
-            ship_entity_id: u32_at(H_SHIP_ENTITY),
-            name: human_name,
-            clan: text(H_CLAN),
-            team_id,
-            ship_params_id: ship_params(H_SHIP_CONFIG),
-        }
-    } else {
-        RosterEntry {
-            account_id: u32_at(B_ACCOUNT),
-            avatar_id: avatar_at(B_AVATAR),
-            chat_account_id: 0, // bots never chat
-            ship_entity_id: u32_at(B_SHIP_ENTITY),
-            name: text(B_NAME),
-            clan: String::new(),
-            team_id: m.get(&B_TEAM).and_then(|v| v.as_i64()).unwrap_or(0),
-            ship_params_id: ship_params(B_SHIP_CONFIG),
+            IDX_SHIP_CONFIG => {
+                let b64 = value_to_string(v);
+                if let Ok(bin) = base64::engine::general_purpose::STANDARD.decode(b64.trim()) {
+                    e.ship_params_id = parse_ship_config(&bin, version).ok().map(|c| c.ship_params_id());
+                }
+            }
+            _ => {}
         }
     }
+    e
 }
 
 fn value_to_string(v: &rmpv::Value) -> String {
