@@ -96,6 +96,14 @@ def _ribbon_dirs(is_lesta):
     return dirs
 
 
+def _center_num(draw, value, cx, cy, font):
+    """Draw the donut total centered in the hole at (cx, cy)."""
+    s = f"{int(value):,}".replace(",", " ")
+    b = font.getbbox(s)
+    w, h = b[2] - b[0], b[3] - b[1]
+    draw.text((cx - w // 2, cy - h // 2 - b[1]), s, GAME_GOLD, font)
+
+
 def render(json_path: str, out_path: str):
     rb.load_translations()
     raw = json.load(open(json_path, encoding="utf-8"))
@@ -132,7 +140,7 @@ def render(json_path: str, out_path: str):
     draw.text((PAD + 20, y0 + 50), f"总击伤 {total:,}".replace(",", " "), GAME_DIM, f_h3)
     cx, cy, r = PAD + 200, y0 + 260, 150
     dc.draw_pie(img, draw, (cx, cy), r, slices)
-    draw.text((cx - r + 10, cy - 20), f"{total:,}".replace(",", " "), GAME_GOLD, f_h2)
+    _center_num(draw, total, cx, cy, fm(28))
     dc.draw_legend(draw, PAD + 420, y0 + 90, half - 440, slices, total, f_lab, f_num)
 
     # ── received-damage panel (right): by SOURCE ship (packet-derived) ────────
@@ -152,7 +160,7 @@ def render(json_path: str, out_path: str):
         draw.text((rx + 20, y0 + 50), f"累计承伤 {recv_total:,}".replace(",", " ") + "  (按来源舰船)", GAME_DIM, f_h3)
         rcx, rcy, rr = rx + 200, y0 + 260, 150
         dc.draw_pie(img, draw, (rcx, rcy), rr, recv_slices)
-        draw.text((rcx - rr + 10, rcy - 20), f"{recv_total:,}".replace(",", " "), GAME_GOLD, f_h2)
+        _center_num(draw, recv_total, rcx, rcy, fm(28))
         dc.draw_legend(draw, rx + 420, y0 + 90, half - 440, recv_slices, recv_total, f_lab, f_num)
     else:
         draw.text((rx + 20, y0 + pie_block_h // 2 - 10), "本场无承伤记录。", GAME_DIM, f_h3)
