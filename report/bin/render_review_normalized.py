@@ -59,9 +59,20 @@ def _output_slices(self_damage_by_type):
     return slices
 
 
-def _ribbon_basename(r):
+def _ribbon_display(r):
+    """(label, flat icon basename). Maps via render_damage_chart.RIBBON_DISPLAY so
+    hit-quality subribbons collapse onto their flat parent banner (穿透/未穿/跳弹 →
+    ribbon_main_caliber), matching the WG report's single flat art style — instead
+    of the Lesta client's mismatched angled subribbon icons."""
+    raw = r.get("name", "")
+    if raw.startswith("RIBBON_"):
+        raw = raw[len("RIBBON_"):]
+    entry = dc.RIBBON_DISPLAY.get(raw)
+    if entry:
+        return entry[0], entry[1]
+    # Fallback for anything unmapped: Lesta display name + best-effort basename.
     key = r.get("icon_key", "")
-    return f"sub{key}" if r.get("is_subribbon") else key
+    return r.get("display_name", ""), (f"sub{key}" if r.get("is_subribbon") else key)
 
 
 def render(json_path: str, out_path: str):
@@ -71,15 +82,6 @@ def render(json_path: str, out_path: str):
     if selfp is None:
         raise RuntimeError("normalized JSON has no self player")
 
-    # Lesta ribbon icons are a different (3D-angled) art style from WG's flat
-    # banners; use Lesta's own full set so a Lesta report is visually consistent,
-    # leaving the shared WG set (used by the legacy WG renderer) untouched.
-    ver_major = ((raw.get("metadata") or {}).get("version") or {}).get("major", 0)
-    if ver_major >= 16:
-        lesta_dir = Path(__file__).resolve().parent.parent / "data" / "ribbon_icons_lesta"
-        if lesta_dir.is_dir():
-            dc.RIBBON_ICON_DIR = str(lesta_dir)
-            dc._RIBBON_ICON_CACHE.clear()
 
     slices = _output_slices(selfp.get("self_damage_by_type"))
     total = sum(v for _, _, v in slices)
@@ -152,7 +154,8 @@ def render(json_path: str, out_path: str):
             row, col = divmod(i, RIBBON_PER_ROW)
             ax = PAD + 16 + col * item_w
             ay = row_y0 + row * RIBBON_ROW_H + 6
-            icon = _ribbon_img(_ribbon_basename(r))
+            label, basename = _ribbon_display(r)
+            icon = _ribbon_img(basename)
             if icon:
                 img.paste(icon, (ax, ay), icon)
                 bw = icon.width
@@ -160,7 +163,7 @@ def render(json_path: str, out_path: str):
                 bw = int(icon_h * 133 / 51)
             cnt = f"x{r.get('count', 0)}"
             draw.text((ax + bw + 8, ay + icon_h // 2 - 12), cnt, GAME_GOLD, f_cnt)
-            draw.text((ax, ay + icon_h + 6), r.get("display_name", "")[:8], GAME_TEXT, f_lbl)
+            draw.text((ax, ay + icon_h + 6), label[:8], GAME_TEXT, f_lbl)
 
     dc._draw_footer(draw, PAD, H - 34, W - 2 * PAD, 28)
     img.save(out_path)
