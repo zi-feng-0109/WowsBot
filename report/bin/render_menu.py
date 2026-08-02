@@ -199,7 +199,7 @@ def _draw_super_indicator(draw, x, y, status, f_label):
 
 def render_menu_png(out_path: str, *, scope: str, ident: str,
                     state_snapshot: dict, is_super: bool,
-                    version: str = "v0.4.0", guess_enabled=None) -> str:
+                    version: str = "v1.4.0", guess_enabled=None) -> str:
     """渲染一张菜单 PNG 到 out_path,返回 out_path。
     state_snapshot 是 permissions.snapshot() 的输出。
     guess_enabled: 本群「猜船」开关状态 (True/False)；None 表示不显示该行
@@ -356,7 +356,7 @@ def _cli():
                     help="渲染超管视角(显示 /sa 行)")
     ap.add_argument("--state-json",
                     help="可选:从该 JSON 读 state_snapshot;不给就用空 state")
-    ap.add_argument("--version", default="v0.4.0",
+    ap.add_argument("--version", default="v1.4.0",
                     help="版本字符串显示用")
     ap.add_argument("--guess", choices=["on", "off", "none"], default="none",
                     help="猜船开关显示:on/off 显示对应状态,none 不显示该行")

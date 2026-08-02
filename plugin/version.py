@@ -18,7 +18,7 @@ import os
 import subprocess
 from pathlib import Path
 
-_DEFAULT_VERSION = "1.3.0"
+_DEFAULT_VERSION = "1.4.0"
 
 __version__ = os.environ.get("WOWS_BOT_VERSION") or _DEFAULT_VERSION
 
