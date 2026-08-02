@@ -71,6 +71,16 @@ def render(json_path: str, out_path: str):
     if selfp is None:
         raise RuntimeError("normalized JSON has no self player")
 
+    # Lesta ribbon icons are a different (3D-angled) art style from WG's flat
+    # banners; use Lesta's own full set so a Lesta report is visually consistent,
+    # leaving the shared WG set (used by the legacy WG renderer) untouched.
+    ver_major = ((raw.get("metadata") or {}).get("version") or {}).get("major", 0)
+    if ver_major >= 16:
+        lesta_dir = Path(__file__).resolve().parent.parent / "data" / "ribbon_icons_lesta"
+        if lesta_dir.is_dir():
+            dc.RIBBON_ICON_DIR = str(lesta_dir)
+            dc._RIBBON_ICON_CACHE.clear()
+
     slices = _output_slices(selfp.get("self_damage_by_type"))
     total = sum(v for _, _, v in slices)
     ribbons = selfp.get("ribbons") or []
@@ -79,10 +89,11 @@ def render(json_path: str, out_path: str):
     fm = lambda s: rb.font(rb.MONO_FONT, s)
     f_h1, f_h2, f_h3, f_lab, f_num, f_small = f(30), f(22), f(17), f(18), fm(18), f(14)
 
-    # Layout heights.
+    # Layout heights (ribbon grid mirrors the legacy render_damage_chart).
+    RIBBON_BANNER_W, RIBBON_PER_ROW, RIBBON_ROW_H, RIBBON_TITLE_BAND = 180, 8, 110, 50
     pie_block_h = 460
-    ribbon_rows = (len(ribbons) + 7) // 8
-    ribbon_h = 60 + max(ribbon_rows, 1) * 120
+    ribbon_rows = max(1, (len(ribbons) + RIBBON_PER_ROW - 1) // RIBBON_PER_ROW)
+    ribbon_h = RIBBON_TITLE_BAND + ribbon_rows * RIBBON_ROW_H + 16
     H = PAD + 50 + pie_block_h + 20 + ribbon_h + 40
 
     img = Image.new("RGB", (W, H), GAME_BG)
@@ -115,21 +126,31 @@ def render(json_path: str, out_path: str):
     if not ribbons:
         draw.text((PAD + 20, ry + 56), "本场无勋带数据", GAME_DIM, f_h3)
     else:
-        banner_w = 150
-        col_w = (W - 2 * PAD - 40) // 8
-        for i, rb_item in enumerate(ribbons):
-            col = i % 8
-            row = i // 8
-            bx = PAD + 30 + col * col_w
-            by = ry + 60 + row * 120
-            icon = dc.load_ribbon_icon(_ribbon_basename(rb_item), banner_w)
-            if icon is not None:
-                img.paste(icon, (bx, by), icon)
-                cnt_x, cnt_y = bx + banner_w - 6, by
+        # Clean 8-per-row grid: banner + xN overlaid (white w/ black outline) on
+        # the banner, label below — same layout as the legacy render_damage_chart.
+        inner_w = W - 2 * PAD - 32
+        item_w = inner_w // RIBBON_PER_ROW
+        row_y0 = ry + RIBBON_TITLE_BAND
+        f_cnt = fm(22)
+        f_lbl = f(16)
+        for i, r in enumerate(ribbons):
+            row, col = divmod(i, RIBBON_PER_ROW)
+            ax = PAD + 16 + col * item_w
+            ay = row_y0 + row * RIBBON_ROW_H + 6
+            icon = dc.load_ribbon_icon(_ribbon_basename(r), RIBBON_BANNER_W)
+            if icon:
+                img.paste(icon, (ax, ay), icon)
+                bw, bh = icon.size
             else:
-                cnt_x, cnt_y = bx, by
-            draw.text((cnt_x, cnt_y), f"x{rb_item.get('count', 0)}", GAME_GOLD, f_num)
-            draw.text((bx, by + 62), rb_item.get("display_name", "")[:8], GAME_TEXT, f_small)
+                bw, bh = RIBBON_BANNER_W, int(RIBBON_BANNER_W * 51 / 133)
+            cnt = f"x{r.get('count', 0)}"
+            cb = f_cnt.getbbox(cnt)
+            cw, chh = cb[2] - cb[0], cb[3] - cb[1]
+            cx, cy = ax + bw - cw - 12, ay + (bh - chh) // 2 - 2
+            for ox, oy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                draw.text((cx + ox, cy + oy), cnt, (0, 0, 0), f_cnt)
+            draw.text((cx, cy), cnt, (255, 255, 255), f_cnt)
+            draw.text((ax + 4, ay + bh + 4), r.get("display_name", "")[:8], GAME_TEXT, f_lbl)
 
     dc._draw_footer(draw, PAD, H - 34, W - 2 * PAD, 28)
     img.save(out_path)
