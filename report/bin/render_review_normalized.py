@@ -60,19 +60,32 @@ def _output_slices(self_damage_by_type):
 
 
 def _ribbon_display(r):
-    """(label, flat icon basename). Maps via render_damage_chart.RIBBON_DISPLAY so
-    hit-quality subribbons collapse onto their flat parent banner (穿透/未穿/跳弹 →
-    ribbon_main_caliber), matching the WG report's single flat art style — instead
-    of the Lesta client's mismatched angled subribbon icons."""
+    """(label, flat icon basename). Basename via render_damage_chart.RIBBON_DISPLAY
+    so hit-quality subribbons collapse onto their flat parent banner (穿透/未穿/跳弹 →
+    ribbon_main_caliber) — one flat art style, no mismatched angled subribbons. The
+    label keeps Lesta's own wording (display_name) when present."""
     raw = r.get("name", "")
     if raw.startswith("RIBBON_"):
         raw = raw[len("RIBBON_"):]
     entry = dc.RIBBON_DISPLAY.get(raw)
+    label = r.get("display_name") or (entry[0] if entry else raw)
     if entry:
-        return entry[0], entry[1]
-    # Fallback for anything unmapped: Lesta display name + best-effort basename.
+        return label, entry[1]
     key = r.get("icon_key", "")
-    return r.get("display_name", ""), (f"sub{key}" if r.get("is_subribbon") else key)
+    return label, (f"sub{key}" if r.get("is_subribbon") else key)
+
+
+def _ribbon_dirs(raw_json):
+    """Icon dirs to try, in order. Lesta replays (version.major>=16) prefer Lesta's
+    own flat ribbon set so a Lesta report uses Lesta art; WG's shared set is the
+    fallback for anything Lesta lacks."""
+    dirs = [dc.RIBBON_ICON_DIR]
+    ver_major = ((raw_json.get("metadata") or {}).get("version") or {}).get("major", 0)
+    if ver_major >= 16:
+        lesta = Path(__file__).resolve().parent.parent / "data" / "ribbon_icons_lesta"
+        if lesta.is_dir():
+            dirs.insert(0, str(lesta))
+    return dirs
 
 
 def render(json_path: str, out_path: str):
@@ -140,15 +153,21 @@ def render(json_path: str, out_path: str):
         f_cnt = fm(20)
         f_lbl = f(16)
 
+        ribbon_dirs = _ribbon_dirs(raw)
+
         def _ribbon_img(basename):
-            p = Path(dc.RIBBON_ICON_DIR) / f"{basename}.png"
-            try:
-                src = _Image.open(p).convert("RGBA")
-                w, h = src.size
-                tw = max(1, round(icon_h * w / h))
-                return src.resize((min(tw, RIBBON_BANNER_W), icon_h), _Image.LANCZOS)
-            except Exception:
-                return None
+            for d in ribbon_dirs:
+                p = Path(d) / f"{basename}.png"
+                if not p.is_file():
+                    continue
+                try:
+                    src = _Image.open(p).convert("RGBA")
+                    w, h = src.size
+                    tw = max(1, round(icon_h * w / h))
+                    return src.resize((min(tw, RIBBON_BANNER_W), icon_h), _Image.LANCZOS)
+                except Exception:
+                    continue
+            return None
 
         for i, r in enumerate(ribbons):
             row, col = divmod(i, RIBBON_PER_ROW)
