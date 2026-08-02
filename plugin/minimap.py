@@ -90,6 +90,7 @@ ANALYZE_TIMEOUT  = int(os.environ.get("WOWS_ANALYZE_TIMEOUT", "120"))
 
 # 战报 / 战犯 数据免责声明 —— 回放只含玩家个人视野内的数据,视野外不下发
 _DATA_DISCLAIMER = "由于 WG 不下发个人视野之外的数据,本数据仅供参考。"
+_DATA_DISCLAIMER_LESTA = "由于 Lesta 下发的数据有限,本数据仅供参考。"
 
 replay_handler = on_message(priority=5, block=False)
 
@@ -1004,7 +1005,7 @@ async def process_queue(bot: Bot):
             if mp4_path or report_png or report_error:
                 sent_report_msg_id = await upload_and_notify(
                     bot, user_id, group_id, message_id,
-                    mp4_path, report_png, report_error,
+                    mp4_path, report_png, report_error, is_lesta,
                 )
 
             # 若发出去了战报 PNG (有 # 列那张),把索引清单 remember 进 query_index
@@ -1470,7 +1471,8 @@ async def _run_report_like(cmd: str, replay_path: str, work_dir: str, label: str
 async def upload_and_notify(bot: Bot, user_id: str, group_id: Optional[int],
                             message_id: int, mp4_path: Optional[str],
                             png_path: Optional[str] = None,
-                            png_error: Optional[str] = None) -> Optional[int]:
+                            png_error: Optional[str] = None,
+                            is_lesta: bool = False) -> Optional[int]:
     """上传 MP4(如果有),并把 PNG (或失败说明) 一起回到原消息上。
     mp4_path / png_path / png_error 三者均可为 None — 全 None 时本函数静默 no-op。
     返回:发出去的 chat 消息 msg_id (供 /查询 反查),静默 no-op 时返 None。"""
@@ -1503,7 +1505,7 @@ async def upload_and_notify(bot: Bot, user_id: str, group_id: Optional[int],
     message = MessageSegment.reply(message_id) + text
     if png_path and os.path.exists(png_path):
         message = message + MessageSegment.image(f"file://{png_path}")
-        message = message + f"\n{_DATA_DISCLAIMER}"
+        message = message + f"\n{_DATA_DISCLAIMER_LESTA if is_lesta else _DATA_DISCLAIMER}"
 
     try:
         if group_id:
