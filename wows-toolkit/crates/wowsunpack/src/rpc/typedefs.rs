@@ -526,8 +526,14 @@ pub fn parse_type(arg: &roxmltree::Node, aliases: &HashMap<String, ArgType>) -> 
     } else if t == "FLOAT32" {
         ArgType::Primitive(PrimitiveType::Float32)
     } else if t == "FLOAT" {
-        // Note that "FLOAT64" is Float64
+        // Bare "FLOAT" is BigWorld's 32-bit float; "FLOAT64" is the 8-byte one below.
         ArgType::Primitive(PrimitiveType::Float32)
+    } else if t == "FLOAT64" {
+        // First appeared in WG 15.7 (build 13015811). PrimitiveType::Float64 already
+        // existed (parse/size/serialize all handled); only this name mapping was
+        // missing, so 15.7 entity defs panicked with "Unrecognized type FLOAT64"
+        // and GameParams rkyv re-derivation was skipped.
+        ArgType::Primitive(PrimitiveType::Float64)
     } else if t == "STRING" {
         ArgType::Primitive(PrimitiveType::String)
     } else if t == "UNICODE_STRING" {
