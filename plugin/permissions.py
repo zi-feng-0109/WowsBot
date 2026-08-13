@@ -24,17 +24,19 @@ FEATURES = ["视频", "战报", "复盘", "分析", "战犯", "聊天"]
 # 每个 feature 的默认开启状态(用户没主动设过的话采用这里的值)。
 # 分析 默认关:DeepSeek 调用要 API key + 算钱,群主自己评估再开。
 # 战犯 默认关:噪声大、对录制者非 CV 时数据受限,需要群主手动开启。
-# 聊天 默认关:加 team-roster 后视频里 chat 被覆盖,拆成独立 PNG;群里可能不
-#   想公开本局聊天记录,需要群主明确开启。
+# 聊天 默认开(v2 起):功能已稳定,默认给所有群。想关的群 `/聊天 关` 即可。
 DEFAULT_ENABLED = {
     "视频": True,
     "战报": True,
     "复盘": True,
     "分析": False,
     "战犯": False,
-    "聊天": False,
+    "聊天": True,
 }
-_STATE_VERSION = 1
+# v1 -> v2:聊天默认从关改为开。升级时清掉各作用域已存的「聊天」覆盖值,让
+# 已有的群/私聊也回落到新默认(开),而不是停留在当初的默认关状态。
+_STATE_VERSION = 2
+_CHAT_DEFAULT_ON_VERSION = 2
 _LEGACY_FILE_NAME = "analyze_toggle.json"
 _STATE_FILE_NAME = "toggle_state.json"
 
@@ -81,6 +83,25 @@ def _load() -> None:
     for k in ("global_blacklist", "groups", "private"):
         _state.setdefault(k, [] if k == "global_blacklist" else {})
     _state.setdefault("version", _STATE_VERSION)
+    _upgrade_chat_default()
+
+
+def _upgrade_chat_default() -> None:
+    """v1 -> v2 一次性迁移:聊天默认从关改为开。需在 _lock 内调用。
+
+    只改「聊天」这一个 key:把各群/私聊已存的覆盖值删掉,让它们回落到新的
+    DEFAULT_ENABLED(开)。删而不是置 True,是为了让这些作用域继续跟随默认值 ——
+    以后若再调默认,它们同样自动跟上;群主之后 `/聊天 关` 会重新写入覆盖值。
+    其他 feature 的覆盖值一律不动。落盘由本函数完成,升级只发生一次(靠 version)。
+    """
+    if int(_state.get("version", 1)) >= _CHAT_DEFAULT_ON_VERSION:
+        return
+    for bucket in ("groups", "private"):
+        for overrides in _state.get(bucket, {}).values():
+            if isinstance(overrides, dict):
+                overrides.pop("聊天", None)
+    _state["version"] = _STATE_VERSION
+    _save()
 
 
 def _save() -> None:

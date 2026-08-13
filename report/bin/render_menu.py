@@ -53,7 +53,7 @@ DEFAULT_ENABLED = {
     "复盘": True,
     "分析": False,
     "战犯": False,
-    "聊天": False,
+    "聊天": True,
 }
 
 # 规划中功能;在这里追加: ("名字", "一句话简介")
