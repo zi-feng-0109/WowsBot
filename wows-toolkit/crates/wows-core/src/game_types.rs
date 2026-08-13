@@ -3101,10 +3101,21 @@ mod tests {
     fn aux_torpedo_booster_round_trips() {
         // WG 15.7 replaced Defensive AA Fire with this on the ships that had it
         // (CONSUMABLE_IDS: auxTorpBooster = 65). Without the mapping the renderer
-        // shows an unnamed, icon-less consumable.
+        // shows an unnamed, icon-less consumable — verified on a real 15.7 Atlanta
+        // replay, where the two uses decoded as Unknown("65") before this fix.
         let c = Consumable::from_consumable_type("auxTorpBooster", Version::default());
         assert_eq!(c, Recognized::Known(Consumable::AuxiliaryTorpedoBooster));
         assert_eq!(Consumable::AuxiliaryTorpedoBooster.name(), "auxTorpBooster");
+
+        // The numeric id lives in each version's extracted constants.json (merged
+        // over the hardcoded defaults), so resolve through a constants table the
+        // way the renderer does rather than hardcoding 65 in the type layer.
+        let mut constants = CommonConstants::defaults();
+        constants.consumable_types_mut().insert(65, std::borrow::Cow::Borrowed("auxTorpBooster"));
+        assert_eq!(
+            Consumable::from_id(65, &constants, Version::default()),
+            Some(Recognized::Known(Consumable::AuxiliaryTorpedoBooster))
+        );
 
         // Defensive AA Fire itself still exists in the id table (id 2) — 15.7 only
         // swapped which ships carry it, so its mapping must stay intact.
