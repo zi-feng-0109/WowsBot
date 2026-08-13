@@ -1639,6 +1639,10 @@ pub enum Consumable {
     PlaneTrigger2,
     PlaneTrigger3,
     PlaneBuff,
+    /// WG 15.7: replaced Defensive AA Fire on the ships that used to carry it.
+    /// Speeds up "Concentrated AA Fire" buildup and boosts torpedo/secondary
+    /// armament (icon `PCY087_AuxiliaryTorpedoArmamentBooster`, id 65).
+    AuxiliaryTorpedoBooster,
     Any,
     All,
     Special,
@@ -1706,6 +1710,7 @@ impl Consumable {
             "planeTrigger2" => Recognized::Known(Self::PlaneTrigger2),
             "planeTrigger3" => Recognized::Known(Self::PlaneTrigger3),
             "planeBuff" => Recognized::Known(Self::PlaneBuff),
+            "auxTorpBooster" => Recognized::Known(Self::AuxiliaryTorpedoBooster),
             "Any" => Recognized::Known(Self::Any),
             "All" => Recognized::Known(Self::All),
             "Special" => Recognized::Known(Self::Special),
@@ -1770,6 +1775,7 @@ impl Consumable {
             Self::PlaneTrigger2 => "planeTrigger2",
             Self::PlaneTrigger3 => "planeTrigger3",
             Self::PlaneBuff => "planeBuff",
+            Self::AuxiliaryTorpedoBooster => "auxTorpBooster",
             Self::Any => "Any",
             Self::All => "All",
             Self::Special => "Special",
@@ -3089,5 +3095,22 @@ mod tests {
         let future = VisibilityFlags::new(1 | 1 << 20);
         assert_eq!(future.unknown_bits(), 1 << 20);
         assert_eq!(future.to_string(), "BY_SHIP|UNKNOWN(0x100000)");
+    }
+
+    #[test]
+    fn aux_torpedo_booster_round_trips() {
+        // WG 15.7 replaced Defensive AA Fire with this on the ships that had it
+        // (CONSUMABLE_IDS: auxTorpBooster = 65). Without the mapping the renderer
+        // shows an unnamed, icon-less consumable.
+        let c = Consumable::from_consumable_type("auxTorpBooster", Version::default());
+        assert_eq!(c, Recognized::Known(Consumable::AuxiliaryTorpedoBooster));
+        assert_eq!(Consumable::AuxiliaryTorpedoBooster.name(), "auxTorpBooster");
+
+        // Defensive AA Fire itself still exists in the id table (id 2) — 15.7 only
+        // swapped which ships carry it, so its mapping must stay intact.
+        assert_eq!(
+            Consumable::from_consumable_type("airDefenseDisp", Version::default()),
+            Recognized::Known(Consumable::DefensiveAntiAircraft)
+        );
     }
 }

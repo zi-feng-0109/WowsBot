@@ -2970,6 +2970,8 @@ fn consumable_to_base_icon_key(c: Consumable) -> Option<String> {
         Consumable::Hydrophone => "PCY045_Hydrophone",
         Consumable::EnhancedRudders => "PCY046_FastDeepRudders",
         Consumable::SubmarineSurveillance => "PCY048_SubmarineLocator",
+        // WG 15.7 replacement for Defensive AA Fire on the ships that carried it.
+        Consumable::AuxiliaryTorpedoBooster => "PCY087_AuxiliaryTorpedoArmamentBooster",
         _ => return None,
     };
     Some(key.to_string())
