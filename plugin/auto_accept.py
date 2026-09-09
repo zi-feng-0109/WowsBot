@@ -14,9 +14,11 @@
 get_driver().config 读,不用 os.environ):
     WOWS_AUTO_ACCEPT_FRIEND=true      默认 true
     WOWS_AUTO_ACCEPT_INVITE=true      默认 true
-    WOWS_AUTO_ACCEPT_NOTIFY=true      默认 true —— 同意后私聊通知超管
+    WOWS_AUTO_ACCEPT_NOTIFY=true      默认 true —— 同意后发通知
+    WOWS_AUTO_ACCEPT_NOTIFY_GROUP=892054735   通知发到哪个群(默认见常量)
 
-超管名单复用 announcement.py 那份 data/admins.json(同一份名单,单一来源)。
+通知统一发到 NOTIFY_GROUP 这个群里并 @ 全部超管(不私聊)。超管名单复用
+announcement.py 那份 data/admins.json(同一份名单,单一来源)。
 """
 import json
 from pathlib import Path
@@ -27,14 +29,16 @@ from nonebot.adapters.onebot.v11 import (
     Bot,
     FriendRequestEvent,
     GroupRequestEvent,
+    Message,
+    MessageSegment,
 )
 from nonebot.log import logger
 from nonebot.plugin import PluginMetadata
 
 __plugin_meta__ = PluginMetadata(
     name="自动同意好友/入群邀请",
-    description="自动通过好友请求和拉群邀请,并私聊通知超管",
-    usage="无指令,后台自动生效。开关见 .env 的 WOWS_AUTO_ACCEPT_*",
+    description="自动通过好友请求和拉群邀请,并在通知群里 @ 超管",
+    usage="无指令,后台自动生效。开关/通知群见 .env 的 WOWS_AUTO_ACCEPT_*",
     type="application",
     supported_adapters={"~onebot.v11"},
 )
@@ -42,6 +46,8 @@ __plugin_meta__ = PluginMetadata(
 PLUGIN_DIR = Path(__file__).parent
 BOT_DIR = PLUGIN_DIR.parent.parent          # EssexBot 根目录
 ADMIN_DATA_PATH = BOT_DIR / "data" / "admins.json"
+# 通知落地的群(可用 .env 的 WOWS_AUTO_ACCEPT_NOTIFY_GROUP 覆盖)
+DEFAULT_NOTIFY_GROUP = 892054735
 
 
 def _cfg_bool(name: str, default: bool = True) -> bool:
@@ -69,15 +75,38 @@ def _load_admins() -> List[str]:
         return []
 
 
-async def _notify_admins(bot: Bot, text: str) -> None:
-    """私聊通知每个超管。单个失败不影响其他人,也不影响已完成的同意动作。"""
+def _notify_group_id() -> int:
+    """通知群号:.env 覆盖优先,否则用 DEFAULT_NOTIFY_GROUP。"""
+    raw = getattr(get_driver().config, "wows_auto_accept_notify_group", None)
+    if raw is None:
+        return DEFAULT_NOTIFY_GROUP
+    try:
+        return int(str(raw).strip())
+    except ValueError:
+        logger.warning(f"[自动同意] 通知群号配置无效({raw!r}),回退 {DEFAULT_NOTIFY_GROUP}")
+        return DEFAULT_NOTIFY_GROUP
+
+
+async def _notify(bot: Bot, text: str) -> None:
+    """发通知到指定群,开头 @ 全部超管。
+
+    发送失败只记 error —— 通知丢了不影响已经完成的同意动作(好友/入群已生效)。
+    超管名单为空时仍然发,只是没有 @(至少群里能看到发生了什么)。
+    """
     if not _cfg_bool("WOWS_AUTO_ACCEPT_NOTIFY"):
         return
+    group_id = _notify_group_id()
+    msg = Message()
     for admin in _load_admins():
         try:
-            await bot.send_private_msg(user_id=int(admin), message=text)
-        except Exception as e:
-            logger.warning(f"[自动同意] 通知超管 {admin} 失败: {e}")
+            msg += MessageSegment.at(int(admin)) + " "
+        except ValueError:
+            logger.warning(f"[自动同意] 跳过无效超管 QQ: {admin!r}")
+    msg += text
+    try:
+        await bot.send_group_msg(group_id=group_id, message=msg)
+    except Exception as e:
+        logger.error(f"[自动同意] 发通知到群 {group_id} 失败: {e}")
 
 
 # ==================== 好友请求 ====================
@@ -95,7 +124,7 @@ async def handle_friend(bot: Bot, event: FriendRequestEvent):
     except Exception as e:
         logger.error(f"[自动同意] 同意好友 {event.user_id} 失败: {e}")
         return
-    await _notify_admins(bot, f"已自动同意好友请求\nQQ: {event.user_id}\n验证消息: {event.comment or '(无)'}")
+    await _notify(bot, f"已自动同意好友请求\nQQ: {event.user_id}\n验证消息: {event.comment or '(无)'}")
 
 
 # ==================== 入群邀请 ====================
@@ -116,4 +145,4 @@ async def handle_group(bot: Bot, event: GroupRequestEvent):
     except Exception as e:
         logger.error(f"[自动同意] 接受入群邀请 {event.group_id} 失败: {e}")
         return
-    await _notify_admins(bot, f"已自动接受入群邀请\n群号: {event.group_id}\n邀请人: {event.user_id}")
+    await _notify(bot, f"已自动接受入群邀请\n群号: {event.group_id}\n邀请人: {event.user_id}")
