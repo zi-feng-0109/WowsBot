@@ -102,6 +102,10 @@ _DATA_DISCLAIMER_LESTA = "由于 Lesta 下发的数据有限,本数据仅供参�
 _ERR_NO_DATA_MARKERS = (
     "No extracted data matches replay build",      # minimap:extracted 里没有该 build
     "Extracted data is build",                     # minimap/replayshark:数据与回放 build 不符
+    # 用错版本的 entity defs 解析时的 panic 原文(defs 在版本间会变)。走到这里说明
+    # 前置检查被绕过(读不出 build / extracted 读不到)后又回退了 spoof,对玩家而言
+    # 症状仍是"这个版本还不支持",按同一套文案解释。
+    "failed to deserialize player_states",
 )
 _ERR_NO_CONSTANTS_MARKERS = (
     "could not be resolved; nearest available is", # normalized:上游 constants 还没发这个 build
