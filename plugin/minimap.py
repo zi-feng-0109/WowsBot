@@ -92,6 +92,115 @@ ANALYZE_TIMEOUT  = int(os.environ.get("WOWS_ANALYZE_TIMEOUT", "120"))
 _DATA_DISCLAIMER = "由于 WG 不下发个人视野之外的数据,本数据仅供参考。"
 _DATA_DISCLAIMER_LESTA = "由于 Lesta 下发的数据有限,本数据仅供参考。"
 
+# ---- 错误文案人性化 ---------------------------------------------------------
+# 渲染器的报错是给开发看的 Rust 文本(带堆栈/路径/build 号),玩家看不懂。
+# 最常见的一类:游戏刚出新版本,玩家抢先上传新版回放,而服务器还没刷对应的
+# 离线数据 —— 这既不是玩家的错也不是 bug,要明确告诉他“等管理员更新数据”。
+#
+# 判据用渲染器实际输出的原文(见 minimap-renderer/src/main.rs 与
+# replayshark/src/battle_results_cmd.rs),别凭印象编。
+_ERR_NO_DATA_MARKERS = (
+    "No extracted data matches replay build",      # minimap:extracted 里没有该 build
+    "Extracted data is build",                     # minimap/replayshark:数据与回放 build 不符
+)
+_ERR_NO_CONSTANTS_MARKERS = (
+    "could not be resolved; nearest available is", # normalized:上游 constants 还没发这个 build
+    "no constants published upstream for build",
+)
+
+
+def _extract_build(raw: str) -> Optional[str]:
+    """从报错原文里抠出回放的 build 号,拼进提示好让玩家能报给管理员。"""
+    m = re.search(r"replay (?:build|is build) (\d+)", raw)
+    return m.group(1) if m else None
+
+
+def friendly_error(raw: str) -> str:
+    """把渲染器原始报错翻成玩家看得懂的话。认不出来的原样返回。"""
+    text = str(raw)
+    if any(k in text for k in _ERR_NO_DATA_MARKERS):
+        build = _extract_build(text)
+        ver = "(build %s)" % build if build else ""
+        return (
+            "这局回放是游戏新版本" + ver + "录的,机器人还没更新对应的游戏数据,暂时渲染不了。\n"
+            "这不是你的问题 —— 每次游戏大版本更新后,管理员都要手动把新版数据传到服务器。\n"
+            "请等管理员更新(通常一两天内),之后重发这个回放就能正常出图。\n"
+            "旧版本的回放不受影响,可以照常上传。"
+        )
+    if any(k in text for k in _ERR_NO_CONSTANTS_MARKERS):
+        return (
+            "这局回放的游戏版本太新,配套数据表(上游还没发布)缺失,暂时渲染不了。\n"
+            "这不是你的问题,等上游发布后管理员刷新一次即可。旧版本回放不受影响。"
+        )
+    return text
+
+def _replay_build(replay_path: str) -> Optional[int]:
+    """读 replay 头部 meta 的 clientVersionFromExe,取 build 号。读不出返回 None。
+
+    文件头布局:u32 magic | u32 blockCount | u32 meta_len | UTF-8 JSON meta。
+    WG 与 Lesta(.korablireplay)同一布局。"""
+    try:
+        with open(replay_path, "rb") as f:
+            head = f.read(12)
+            if len(head) < 12:
+                return None
+            meta_len = int.from_bytes(head[8:12], "little")
+            if not 0 < meta_len <= 5 * 1024 * 1024:
+                return None
+            meta = json.loads(f.read(meta_len).decode("utf-8", errors="ignore"))
+    except Exception:
+        return None
+    parts = str(meta.get("clientVersionFromExe", "")).split(",")
+    if len(parts) < 4:
+        return None
+    try:
+        return int(parts[3].strip())
+    except ValueError:
+        return None
+
+
+def _available_builds() -> set:
+    """扫 extracted 根目录下的 <ver>_<build>/ 子目录,收集可用 build 号。
+
+    读不到目录时返回空集合 —— 调用方据此跳过前置检查(宁可让渲染器自己报错,
+    也不要因为目录一时读不到就把所有回放都拦下来)。"""
+    builds = set()
+    try:
+        for name in os.listdir(WOWS_DATA_DIR):
+            m = re.match(r"^\d+(?:\.\d+)+_(\d+)$", name)
+            if m and os.path.isdir(os.path.join(WOWS_DATA_DIR, name)):
+                builds.add(int(m.group(1)))
+    except OSError:
+        return set()
+    return builds
+
+
+def unsupported_build_notice(replay_path: str) -> Optional[str]:
+    """渲染前的前置检查:这个 build 的离线数据在不在?
+
+    不在就返回给玩家看的提示文案(调用方跳过整局)。这样新版本刚发布时玩家只收到
+    一条人话提示,而不是 MP4/战报/聊天各报一次 Rust 堆栈,也省掉几次注定失败的渲染。
+    返回 None = 数据齐备或无法判断(照常渲染,让渲染器自己决定)。
+    """
+    build = _replay_build(replay_path)
+    if build is None:
+        return None
+    avail = _available_builds()
+    if not avail or build in avail:
+        return None
+    newer_than_all = build > max(avail)
+    if newer_than_all:
+        return (
+            "这局回放是游戏新版本(build %s)录的,机器人还没更新对应的游戏数据,暂时渲染不了。" % build + "\n"
+            "这不是你的问题 —— 每次游戏大版本更新后,管理员都要手动把新版数据传到服务器。\n"
+            "请等管理员更新(通常一两天内),之后重发这个回放就能正常出图。\n"
+            "旧版本的回放不受影响,可以照常上传。"
+        )
+    return (
+        "这局回放的游戏版本(build %s)太旧,机器人已经没有对应的游戏数据了,渲染不了。" % build + "\n"
+        "请上传最近版本的回放。"
+    )
+
 replay_handler = on_message(priority=5, block=False)
 
 task_queue: asyncio.Queue = asyncio.Queue()
@@ -923,6 +1032,15 @@ async def process_queue(bot: Bot):
             if not os.path.exists(replay_path):
                 raise RuntimeError("replay 文件不存在")
 
+            # 前置检查:离线数据没有这个 build 就别开渲染了(新版本刚发布最常见)。
+            # 提前拦掉 = 玩家只收到一条人话提示,而不是各渲染器各报一次 Rust 堆栈。
+            notice = unsupported_build_notice(replay_path)
+            if notice:
+                logger.warning(f"跳过(数据缺该 build): {replay_path}")
+                await send_message(bot, user_id, group_id, message_id, f"⚠️ {notice}")
+                task_queue.task_done()
+                continue
+
             # 决定走哪条报告路径(产 JSON 的子进程只跑一次)
             # Lesta 不上 分析/战犯,故不为它们强产 JSON。
             needs_json = (on["分析"] or on["战犯"]) and not is_lesta
@@ -993,7 +1111,7 @@ async def process_queue(bot: Bot):
             report_error = None
             r = result_map.get("report")
             if isinstance(r, Exception):
-                report_error = str(r)
+                report_error = friendly_error(r)
                 logger.warning(f"报告渲染失败 (kind={report_kind}): {r}")
             elif isinstance(r, str):
                 # report_kind=="battle" 且只为分析时不送图
@@ -1034,7 +1152,7 @@ async def process_queue(bot: Bot):
                     except Exception as e:
                         logger.warning(f"LLM 分析失败: {e}")
                         await send_message(bot, user_id, group_id, message_id,
-                                           f"⚠️ LLM 分析失败: {e}")
+                                           f"⚠️ LLM 分析失败: {friendly_error(e)}")
                 else:
                     logger.warning(f"未找到战报 JSON,跳过分析: {json_path}")
 
@@ -1056,7 +1174,7 @@ async def process_queue(bot: Bot):
                     except Exception as e:
                         logger.warning(f"战犯渲染失败: {e}")
                         await send_message(bot, user_id, group_id, message_id,
-                                           f"⚠️ 战犯渲染失败: {e}")
+                                           f"⚠️ 战犯渲染失败: {friendly_error(e)}")
                 else:
                     logger.warning(f"未找到 JSON,跳过战犯: {json_path}")
 
@@ -1082,7 +1200,7 @@ async def process_queue(bot: Bot):
                 except Exception as e:
                     logger.warning(f"聊天渲染失败: {e}")
                     await send_message(bot, user_id, group_id, message_id,
-                                       f"⚠️ 聊天渲染失败: {e}")
+                                       f"⚠️ 聊天渲染失败: {friendly_error(e)}")
 
             logger.info(f"用户 {user_id} 任务完成 (开: {[k for k,v in on.items() if v]})")
 
@@ -1090,7 +1208,7 @@ async def process_queue(bot: Bot):
             logger.error(f"处理任务出错: {e}")
             await send_message(
                 bot, user_id, group_id, message_id,
-                f"❌ 渲染失败: {str(e)}"
+                f"❌ 渲染失败: {friendly_error(e)}"
             )
 
         finally:
