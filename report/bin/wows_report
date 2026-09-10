@@ -21,6 +21,7 @@ Paths default to the bot deployment layout but can be overridden via env vars:
 """
 import json
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -36,6 +37,14 @@ CONSTANTS_JSON = os.environ.get("WOWS_CONSTANTS_JSON",
                                  str(BOT_HOME / "data" / "constants.json"))
 RENDER_PY   = os.environ.get("WOWS_RENDER_PY",   str(BOT_HOME / "bin" / "render_battle_report.py"))
 DEFAULT_OUT_DIR = os.environ.get("WOWS_OUT_DIR", "/tmp/wows_report")
+
+# 按回放 build 自动挑版本目录用的两个根:
+#   EXTRACTED_ROOT   放 <ver>_<build>/{metadata.toml,vfs/{scripts,content}} 的根
+#   SPECS_PATCHED_ROOT  放 <ver>_<build>/scripts 的根 —— FLOAT64 手术产物
+#     (15.7 起 WG 的 entity defs 用了 FLOAT64,这个预编译 replayshark 不认,
+#      所以那些版本必须用手术过的 scripts 副本;<=15.6 没这问题,用原始的)
+EXTRACTED_ROOT = os.environ.get("WOWS_EXTRACTED_ROOT", "/var/lib/wows-data/extracted")
+SPECS_PATCHED_ROOT = os.environ.get("WOWS_SPECS_PATCHED_ROOT", "/var/lib/wows-data/specs-patched")
 
 
 def find_python() -> str:
@@ -96,6 +105,47 @@ def read_specs_build(specs_dir):
     return None
 
 
+def resolve_specs_for_build(replay_build: int):
+    """按回放 build 从 EXTRACTED_ROOT 拼一份 specs 目录,拼不出返回 None。
+
+    为什么不能只用单一 SPECS_DIR + spoof:spoof 只伪造 metadata 里的 build 号,
+    entity defs 仍是 specs 指向的那个版本的。而 defs 在版本间会变(实测 15.7->15.8
+    的 Avatar.def 就变了),用错版本的 defs 解析会 panic
+    ("failed to deserialize player_states")。所以必须按 build 取对应版本的 defs。
+
+    组装规则(结果是个临时目录,里面三个软链):
+      metadata.toml <- extracted/<ver>_<build>/metadata.toml
+      content       <- extracted/<ver>_<build>/vfs/content
+      scripts       <- specs-patched/<ver>_<build>/scripts 若存在(FLOAT64 手术过的),
+                       否则 extracted/<ver>_<build>/vfs/scripts
+    """
+    root = Path(EXTRACTED_ROOT)
+    if not root.is_dir():
+        return None
+    match = None
+    for child in root.iterdir():
+        m = re.match(r"^\d+(?:\.\d+)+_(\d+)$", child.name)
+        if m and int(m.group(1)) == replay_build and child.is_dir():
+            match = child
+            break
+    if match is None:
+        return None
+
+    meta_file = match / "metadata.toml"
+    content = match / "vfs" / "content"
+    scripts = Path(SPECS_PATCHED_ROOT) / match.name / "scripts"
+    if not scripts.is_dir():
+        scripts = match / "vfs" / "scripts"
+    if not (meta_file.is_file() and content.is_dir() and scripts.is_dir()):
+        return None
+
+    tmp = Path(tempfile.mkdtemp(prefix=f"wows_specs_b{replay_build}_"))
+    (tmp / "metadata.toml").symlink_to(meta_file)
+    (tmp / "content").symlink_to(content)
+    (tmp / "scripts").symlink_to(scripts)
+    return tmp
+
+
 def make_spoofed_specs(canonical: Path, target_build: int, target_version: str) -> Path:
     tmp = Path(tempfile.mkdtemp(prefix=f"wows_specs_b{target_build}_"))
     (tmp / "scripts").symlink_to(canonical / "scripts")
@@ -134,15 +184,24 @@ def main():
     version_str = ".".join(meta.get("clientVersionFromExe", "").split(",")[:3]) or "0.0.0"
 
     spoofed_dir = None
-    if canonical_build is not None and replay_build != canonical_build:
-        log(
-            f"[spoof] replay build {replay_build} != specs build {canonical_build}; "
-            f"creating temp dir for {version_str} build {replay_build}"
-        )
-        spoofed_dir = make_spoofed_specs(canonical, replay_build, version_str)
-        specs_dir = spoofed_dir
-    else:
+    if canonical_build is not None and replay_build == canonical_build:
+        # specs 正好就是这个 build,直接用
         specs_dir = canonical
+    else:
+        # 优先按 build 找该版本自己的 defs —— spoof 换不了 defs,版本不对会 panic
+        resolved = resolve_specs_for_build(replay_build)
+        if resolved is not None:
+            log(f"[specs] replay build {replay_build}: using per-build dir {resolved}")
+            spoofed_dir = resolved
+            specs_dir = resolved
+        else:
+            log(
+                f"[spoof] no extracted data for build {replay_build}; falling back to "
+                f"specs build {canonical_build} with faked metadata ({version_str}) "
+                f"— defs may not match, parsing can fail"
+            )
+            spoofed_dir = make_spoofed_specs(canonical, replay_build, version_str)
+            specs_dir = spoofed_dir
 
     try:
         log(f"[1/2] parsing replay with replayshark (specs: {specs_dir}) ...")
