@@ -70,8 +70,14 @@ report/lib/wowsbot/
 | `replay` | 回放文件头解析 | `read_meta(p)` `build_of(p)` `version_of(p)` `is_lesta(p)` `available_builds(root)` |
 | `theme` | 视觉常量 | `CJK_FONT` `MONO_FONT` `GAME_BG/PANEL/PANEL_ALT/GREEN/RED/GOLD/PURPLE/TEXT/DIM/BORDER` |
 | `text` | 纯字符串函数 | `strip_known` `strip_id` `clean_ship_name` `fmt_time` |
-| `i18n` | 翻译加载与查询 | `load_translations()` `t(key)` |
+| `i18n` | 翻译加载与查询 + 硬编码中文标签表 | `load_translations()` `t(key)` `SPECIES_SHORT` `DEATH_CAUSE_CN` `MATCH_GROUP_CN` |
 | `results` | 结算数组按名取值 | `load_result_indices()` `result_field(...)` |
+
+三张中文标签表(`SPECIES_SHORT` / `DEATH_CAUSE_CN` / `MATCH_GROUP_CN`)也被跨文件引用,
+一并进 `i18n`(原代码注释就写着 "Hardcoded fallback for things not keyed as IDS_*")。
+
+`font(path, size)`(`ImageFont.truetype` 的两行包装)**留在 `render_battle_report.py`**,
+不进 `theme` —— 否则 `theme` 就得 import PIL,破坏下面的硬约束。
 
 **硬约束**:`wowsbot/` 内不得 import `nonebot`、不得 `subprocess`、不得做 PIL 绘图。
 只放纯函数、常量、以及必要的只读文件加载。理由:三类 consumer(nonebot 环境的
@@ -130,7 +136,8 @@ report/lib/wowsbot/
      player JSON。图像里若含时间戳等易变量,先固定环境变量或时间源再取基线。
    - 基线与结果都落在 `/tmp`,不入库;spec 实施时把 sha256 对照表贴进 PR/提交说明。
 2. **现有 3 个测试全过**:`test_permissions` / `test_render_armor` / `test_render_menu`。
-3. **新增单测**:
+3. **新增单测**(跟现有测试同风格:**纯 assert + print + `__main__` 块,不引入 pytest**
+   —— 仓库无依赖声明文件,现有 3 个测试都是 `python tests/test_x.py` 直接跑):
    - `replay.build_of` / `version_of` / `is_lesta`:用真实回放验(本机有 15.7 build
      13015811、15.8 build 13187581、Lesta build 8857866,build 号已知);
      损坏文件与空文件返回 `None` 而不抛异常。
@@ -140,7 +147,15 @@ report/lib/wowsbot/
 4. **依赖纯净性**:grep 断言 `report/lib/wowsbot/` 内不出现 `nonebot`、`subprocess`、
    `ImageDraw`。
 5. **多环境冒烟**:nonebot venv 与 report venv 各 `import wowsbot` 一次。
-6. **零残留**:`grep -r 'from render_battle_report import' report/ plugin/` 必须为空。
+6. **零残留(两种 import 形式都要查)**:
+   - `grep -r 'from render_battle_report import' report/ plugin/` 必须为空;
+   - 另有 2 个脚本用 `import render_battle_report as rb`
+     (`render_report_normalized.py` / `render_review_normalized.py`),要断言它们不再通过
+     `rb.` 取 **theme 常量和标签表**(`rb.CJK_FONT` `rb.MONO_FONT` `rb.GAME_*`
+     `rb.DEATH_CAUSE_CN` `rb.MATCH_GROUP_CN`)。
+   - **合法保留**(不算残留):`rb.render` `rb.load` `rb.MatchReport` `rb.PlayerStats`
+     `rb.font` `rb.load_achievements` `rb._ACH_ID_TO_INDEX` —— 这两个脚本本就是在
+     渲染器之上做加工,依赖渲染器本身是合理的。
 
 ## 风险与对策
 
