@@ -23,10 +23,11 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "report" / "lib"))
+from wowsbot import paths                # noqa: E402
 
-BOT_HOME = Path(__file__).resolve().parent.parent
-DEFAULT_SHIPS_JSON = BOT_HOME / "report" / "data" / "ships.json"
-DEFAULT_ICON_DIR = BOT_HOME / "report" / "data" / "ship_icons"
+DEFAULT_SHIPS_JSON = Path(paths.SHIPS_JSON)
+DEFAULT_ICON_DIR = Path(paths.SHIP_ICON_DIR)
 DEFAULT_HOST = "api.worldofwarships.asia"
 DEFAULT_APP_ID = "8ea66b76f5483555ae2594a68882cbf9"
 

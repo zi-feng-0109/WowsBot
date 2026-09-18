@@ -22,12 +22,13 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "report" / "lib"))
+from wowsbot import paths                # noqa: E402
 
-BOT_HOME = Path(__file__).resolve().parent.parent
-DEFAULT_SPECS = BOT_HOME / "specs"
-DEFAULT_MO = BOT_HOME / "report" / "data" / "zh_sg.mo"
-DEFAULT_OUT = BOT_HOME / "report" / "data" / "builds.json"
-DEFAULT_REPLAYSHARK = BOT_HOME / "replayshark"
+DEFAULT_SPECS = Path(paths.SPECS_DIR)              # 原 BOT_HOME/"specs" —— 少了 report/
+DEFAULT_MO = Path(paths.TRANSLATIONS_MO)
+DEFAULT_OUT = Path(paths.BUILDS_JSON)
+DEFAULT_REPLAYSHARK = Path(paths.REPLAYSHARK)      # 原 BOT_HOME/"replayshark" —— 少了 report/
 
 
 def run_replayshark(replayshark: Path, specs: Path) -> dict:

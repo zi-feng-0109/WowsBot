@@ -21,12 +21,13 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "report" / "lib"))
+from wowsbot import paths                # noqa: E402
 
-BOT_HOME = Path(__file__).resolve().parent.parent
-DEFAULT_SPECS = BOT_HOME / "specs"
-DEFAULT_REPLAYSHARK = BOT_HOME / "replayshark"
-DEFAULT_UPGRADE_DIR = BOT_HOME / "report" / "data" / "upgrade_icons"
-DEFAULT_SKILL_DIR   = BOT_HOME / "report" / "data" / "skill_icons"
+DEFAULT_SPECS = Path(paths.SPECS_DIR)              # 原 BOT_HOME/"specs" —— 少了 report/
+DEFAULT_REPLAYSHARK = Path(paths.REPLAYSHARK)      # 原 BOT_HOME/"replayshark" —— 少了 report/
+DEFAULT_UPGRADE_DIR = Path(paths.UPGRADE_ICON_DIR)
+DEFAULT_SKILL_DIR = Path(paths.SKILL_ICON_DIR)
 
 UPGRADE_URL = "https://raw.githubusercontent.com/wowsinfo/data/master/live/app/assets/upgrades/{name}.png"
 SKILL_URL   = "https://raw.githubusercontent.com/wowsinfo/data/master/live/app/assets/skills/{name}.png"

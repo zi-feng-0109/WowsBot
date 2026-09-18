@@ -35,11 +35,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "report" / "lib"))
+from wowsbot import paths                # noqa: E402
 
-BOT_HOME = Path(__file__).resolve().parent.parent
-DEFAULT_GAMEPARAMS = BOT_HOME / "specs" / "content" / "GameParams.data"
-DEFAULT_MO = BOT_HOME / "report" / "data" / "zh_sg.mo"
-DEFAULT_OUT = BOT_HOME / "report" / "data" / "ships.json"
+DEFAULT_GAMEPARAMS = Path(paths.GAME_PARAMS_DATA)  # 原 BOT_HOME/"specs"/"content"/... —— 少了 report/
+DEFAULT_MO = Path(paths.TRANSLATIONS_MO)
+DEFAULT_OUT = Path(paths.SHIPS_JSON)
 DEFAULT_HOST = "api.worldofwarships.asia"
 # 用户的 ESSEXBOT app_id (eu/asia 都认,realm 无关);仅构建期用,运行时 bot 不碰。
 DEFAULT_APP_ID = "8ea66b76f5483555ae2594a68882cbf9"
