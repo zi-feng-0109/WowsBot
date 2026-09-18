@@ -12,50 +12,27 @@ from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
-# --- locate bot home (parent of this script's dir) --------------------------
 import os as _os
-_BOT_HOME = Path(__file__).resolve().parent.parent
-_DATA = _BOT_HOME / "data"
 
-# Fonts: per-OS lookup with env-var override (CJK + monospace required).
-# On Linux, install fonts-noto-cjk + fonts-dejavu (or set WOWS_CJK_FONT).
-_CJK_CANDIDATES = [
-    _os.environ.get("WOWS_CJK_FONT"),
-    "/System/Library/Fonts/Hiragino Sans GB.ttc",                  # macOS
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",      # Debian/Ubuntu (Noto)
-    "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",    # Fedora
-    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",                # WenQuanYi fallback
-]
-_MONO_CANDIDATES = [
-    _os.environ.get("WOWS_MONO_FONT"),
-    "/System/Library/Fonts/Menlo.ttc",                             # macOS
-    "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",         # Debian/Ubuntu
-    "/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf",  # Fedora
-]
-
-
-def _first_existing(paths):
-    for p in paths:
-        if p and _os.path.exists(p):
-            return p
-    return None
-
-
-CJK_FONT = _first_existing(_CJK_CANDIDATES)
-MONO_FONT = _first_existing(_MONO_CANDIDATES) or CJK_FONT
-if not CJK_FONT:
-    raise RuntimeError(
-        "No CJK font found. Install fonts-noto-cjk on Linux, "
-        "or set WOWS_CJK_FONT env var to a .ttc/.ttf path."
-    )
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from wowsbot import paths as _paths                                    # noqa: E402
+from wowsbot.i18n import (                                             # noqa: E402
+    DEATH_CAUSE_CN, MATCH_GROUP_CN, SPECIES_SHORT, load_translations, t,
+)
+from wowsbot.results import load_result_indices, result_field          # noqa: E402
+from wowsbot.text import (                                             # noqa: E402
+    clean_ship_name, fmt_time, ID_RE, KNOWN_RE, RELATION_RE,
+    relation_name, strip_id, strip_known,
+)
+from wowsbot.theme import (                                            # noqa: E402
+    CJK_FONT, GAME_BG, GAME_BORDER, GAME_DIM, GAME_GOLD, GAME_GREEN,
+    GAME_PANEL, GAME_PANEL_ALT, GAME_PURPLE, GAME_RED, GAME_TEXT, MONO_FONT,
+)
 
 # Data files (overridable via env vars; defaults inside the deploy bundle)
-TRANSLATIONS_MO      = _os.environ.get("WOWS_TRANSLATIONS_MO",   str(_DATA / "zh_sg.mo"))
-CONSTANTS_JSON       = _os.environ.get("WOWS_CONSTANTS_JSON",    str(_DATA / "constants.json"))
-ACHIEVEMENTS_JSON    = _os.environ.get("WOWS_ACHIEVEMENTS_JSON", str(_DATA / "achievements.json"))
-ACHIEVEMENT_ICON_DIR = _os.environ.get("WOWS_ACHIEVEMENT_ICONS", str(_DATA / "achievement_icons"))
+ACHIEVEMENTS_JSON    = _paths.ACHIEVEMENTS_JSON      # load_achievements() 用
+ACHIEVEMENT_ICON_DIR = _paths.ACHIEVEMENT_ICON_DIR   # achievement_icon() 用
 
-_RESULT_INDICES: dict[str, int] = {}
 _ACH_ID_TO_INDEX: dict[int, str] = {}
 _ACH_ICON_CACHE: dict[str, Image.Image] = {}
 
@@ -102,133 +79,8 @@ def achievement_name(ach_id: int) -> str:
     return t(f"IDS_ACHIEVEMENT_{idx}", idx)
 
 
-def load_result_indices(path: str = CONSTANTS_JSON):
-    global _RESULT_INDICES
-    if _RESULT_INDICES:
-        return
-    try:
-        c = json.load(open(path))
-        _RESULT_INDICES = {k: int(v) for k, v in c.get("CLIENT_PUBLIC_RESULTS_INDICES", {}).items()}
-    except Exception as e:
-        print(f"warn: failed to load constants: {e}", file=sys.stderr)
-
-
-def result_field(arr, name: str, default=None):
-    """Look up a named field from a raw results_info array."""
-    load_result_indices()
-    idx = _RESULT_INDICES.get(name)
-    if idx is None or arr is None or not isinstance(arr, list) or idx >= len(arr):
-        return default
-    return arr[idx]
-
-_TRANSLATIONS: dict[str, str] = {}
-
-
-def load_translations(mo_path: str = TRANSLATIONS_MO):
-    """Load WoWs gettext catalog into a dict, on demand."""
-    global _TRANSLATIONS
-    if _TRANSLATIONS:
-        return
-    try:
-        import polib
-        mo = polib.mofile(mo_path)
-        _TRANSLATIONS = {e.msgid: e.msgstr for e in mo if e.msgstr}
-    except Exception as e:
-        print(f"warn: failed to load translations from {mo_path}: {e}", file=sys.stderr)
-
-
-def t(key: str, default: Optional[str] = None) -> str:
-    """Translate an IDS_* key. Returns default (or key itself) if not found."""
-    load_translations()
-    return _TRANSLATIONS.get(key, default if default is not None else key)
-
-
-# Hardcoded fallback for things not keyed as IDS_*
-MATCH_GROUP_CN = {
-    "pvp": "随机战",
-    "ranked": "排位赛",
-    "cooperative": "合作战斗",
-    "training": "训练房",
-    "clan": "战队战",
-    "brawl": "乱斗",
-    "scenario": "战役",
-}
-
-
 def font(path: str, size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(path, size)
-
-
-# ---------- data normalization ----------
-
-ID_RE = re.compile(r"(?:AccountId|EntityId|GameParamId)\((\d+)\)")
-KNOWN_RE = re.compile(r"Known\(([A-Za-z]+)\)")
-RELATION_RE = re.compile(r"Relation\((\d+)\)")
-
-SPECIES_SHORT = {
-    "Battleship": "BB",
-    "Cruiser": "CL",
-    "Destroyer": "DD",
-    "AirCarrier": "CV",
-    "Submarine": "SS",
-    "Auxiliary": "AUX",
-}
-
-DEATH_CAUSE_CN = {
-    "ApShell": "AP",
-    "HeShell": "HE",
-    "CsShell": "CS",
-    "Torpedo": "鱼雷",
-    "AerialTorpedo": "机雷",
-    "AerialRocket": "火箭",
-    "AerialBomb": "炸弹",
-    "DiveBomber": "俯冲",
-    "SkipBomber": "跳炸",
-    "AerialDepthCharge": "深弹",
-    "DepthCharge": "深弹",
-    "Fire": "燃烧",
-    "Flooding": "进水",
-    "Ram": "撞击",
-    "Terrain": "撞礁",
-    "Detonate": "弹药库",
-    "SecondaryCaliber": "副炮",
-    "AntiAir": "副炮",
-    "SeaMine": "水雷",
-    "Health": "血量",
-}
-
-
-def strip_id(s: str) -> int:
-    m = ID_RE.match(s or "")
-    return int(m.group(1)) if m else 0
-
-
-def strip_known(s: str) -> str:
-    if not s:
-        return ""
-    m = KNOWN_RE.match(s)
-    return m.group(1) if m else s
-
-
-def relation_name(s: str) -> str:
-    # 0 = Self, 1 = Friendly, 2 = Enemy (BigWorld convention)
-    m = RELATION_RE.match(s or "")
-    n = int(m.group(1)) if m else -1
-    return {0: "self", 1: "friendly", 2: "enemy"}.get(n, "?")
-
-
-def clean_ship_name(raw: str) -> str:
-    """PASS208_Salmon -> Salmon, PASC108_Baltimore_1944 -> Baltimore."""
-    if not raw:
-        return "?"
-    # Drop prefix segment (e.g. PASS208, PASC108)
-    parts = raw.split("_")
-    if len(parts) >= 2:
-        parts = parts[1:]
-    # Drop trailing year-like segments (4-digit numbers)
-    while parts and parts[-1].isdigit() and len(parts[-1]) == 4:
-        parts.pop()
-    return "_".join(parts) or raw
 
 
 # ---------- data extraction ----------
@@ -377,23 +229,6 @@ def load(json_path: str) -> MatchReport:
 
 
 # ---------- rendering ----------
-
-GAME_BG = (18, 24, 38)
-GAME_PANEL = (32, 42, 64)
-GAME_PANEL_ALT = (28, 36, 56)
-GAME_GREEN = (74, 200, 132)
-GAME_RED = (235, 86, 75)
-GAME_GOLD = (242, 196, 87)
-GAME_PURPLE = (188, 122, 232)  # tier color above gold (顶级)
-GAME_TEXT = (228, 233, 245)
-GAME_DIM = (140, 155, 180)
-GAME_BORDER = (60, 75, 100)
-
-
-def fmt_time(secs: int) -> str:
-    secs = int(secs)
-    return f"{secs//60:02d}:{secs%60:02d}"
-
 
 def hp_pct(p: PlayerStats) -> float:
     if not p.max_hp:
