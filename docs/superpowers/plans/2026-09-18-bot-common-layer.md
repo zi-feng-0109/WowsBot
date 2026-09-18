@@ -37,20 +37,31 @@
 
 必须用 `os.environ.get(name, default)`,**不要**写 `os.environ.get(name) or default` —— 前者在 env 设为空串时返回空串,后者返回默认值。
 
-### 5. footer 里有分钟级时间戳 —— sha256 比对必须跳过 footer
+### 5. footer 有分钟级时间戳 —— 比对的是「裁掉 footer 的正文哈希」,不是文件哈希
 
-`render_battle_report.py::_draw_footer` 画了 `datetime.now().strftime("%Y-%m-%d %H:%M")`,
-所以**隔一分钟渲染同一份输入,PNG 的 sha256 就不同**。Task 0 执行时实测踩到:两次紧挨着
-渲染哈希相同(同一分钟),隔几分钟再渲就变了。
+两个渲染器都在底部画了带**分钟级时间戳**的 footer
+(`datetime.now().strftime("%Y-%m-%d %H:%M")`),所以隔一分钟渲染同一份输入,
+整图 sha256 就变。Task 0 执行时实测踩到过两次:
 
-已严格验证差异只来自 footer:两次相隔数分钟的渲染,各裁掉底部 48px 后**正文逐字节一致**,
-仅 footer 区不同;而 `datetime` 在三个渲染器里**只出现在 footer**
-(`render_battle_report.py` 第 858/869 行),所以关掉 footer 后整图完全确定。
+1. 第一版基线用整图 sha256 —— 子代理"渲两次一致"的自检无效(那两次在同一分钟内),
+   隔几分钟独立复渲即不匹配。
+2. 改用 `WOWS_SKIP_FOOTER=1` 后 `report.png` 稳定了,但 `review.png` 仍在漂 ——
+   **`render_review_normalized.py` 末行直接调 `dc._draw_footer(...)`,绕过了
+   `dc.render()` 里的 `skip_footer` 判断,所以那个开关对它无效。**
+   (这是存量问题:`WOWS_SKIP_FOOTER` 本身是半失效的。本次不修 —— 修它会改变该 flag
+   下的行为,不属于"行为不变"的重构范围。)
 
-因此**所有 fixture 渲染统一走 `tools/p2_render_fixtures.sh`**,它固定
-`WOWS_SKIP_FOOTER=1` + 字体 + `WOWS_BOT_VERSION`。基线与后续每次检查必须用**完全相同的
-调用**,抄多份命令必然漂移 —— 这是脚本存在的理由,不是风格偏好。
-该脚本是重构期脚手架,Task 11 删除。
+最终方案:**照生产原样渲染(footer 照画,不设任何 skip 开关),只在哈希时裁掉底部 48px**
+(足以覆盖 report 的 48px 与 review 的 34px footer)。既不改生产行为,又把唯一的时变
+元素排除在比对之外。
+
+**已跨时间实证**:用相隔十几分钟渲的两组图对比,裁掉底部 48px 后 `report.png` 与
+`review.png` 的正文哈希都逐字节一致;像素级定位过差异范围 —— review 的差异只有
+10x14px 的一个字符(分钟数字)。
+
+因此**所有 fixture 渲染统一走 `tools/p2_render_fixtures.sh`**(它固定字体与版本号、
+渲染后输出正文哈希)。基线与后续每次检查必须用**完全相同的调用**,抄多份命令必然漂移
+—— 这是脚本存在的理由,不是风格偏好。该脚本是重构期脚手架,Task 11 删除。
 
 ### 6. 两种 import 形式都要处理
 
@@ -137,7 +148,8 @@ Expected: JSON 生成(约 260KB)。**注意本机 Python 是 Windows 版,认不�
 
 - [ ] **Step 4: 用统一脚本渲染基线并记录 sha256**
 
-渲染一律走 `tools/p2_render_fixtures.sh`(理由见「关键背景 5」)。
+渲染一律走 `tools/p2_render_fixtures.sh`(理由见「关键背景 5」)。它输出的是
+**裁掉底部 48px 后的正文哈希**,不是文件哈希 —— footer 里的分钟时间戳因此不影响比对。
 
 ```bash
 cd /c/Users/29801/Desktop/wows-bot-review
@@ -1825,39 +1837,37 @@ diff docs/superpowers/plans/2026-09-18-p2-baseline.sha256 "$T/p2_check/fixtures.
 
 Expected: `FINAL_PIXEL_IDENTICAL`
 
-- [ ] **Step 4b: footer 覆盖检查(sha256 门槛跳过了 footer,单独验它没坏)**
+- [ ] **Step 4b: footer 覆盖检查(主门槛裁掉了 footer,单独验它没坏)**
 
-主门槛用 `WOWS_SKIP_FOOTER=1`,所以 footer 那段绘图代码没被比对覆盖。footer 用的正是
-搬走的 theme 常量(`GAME_GOLD` 等),所以要单独确认它仍能画出来、几何未变:
+正文哈希裁掉了底部 48px,所以 footer 那段绘图没被比对覆盖。footer 用的正是搬走的 theme
+常量(`GAME_GOLD` 顶边、`GAME_PANEL` 底色),所以单独确认这两种颜色仍出现在 footer 带里
+—— 若 theme 搬迁把常量搞丢或搞错,这里会失败。
 
 ```bash
 cd /c/Users/29801/Desktop/wows-bot-review
 T="$(python -c 'import tempfile;print(tempfile.gettempdir())')"
 python - <<'EOF'
-import os, subprocess, sys, tempfile
+import os, tempfile
+from collections import Counter
 from PIL import Image
 T = tempfile.gettempdir()
-json_in = os.path.join(T, "p2_baseline", "report.json")
-env = dict(os.environ, WOWS_CJK_FONT="C:/Windows/Fonts/msyh.ttc",
-           WOWS_MONO_FONT="C:/Windows/Fonts/consola.ttf",
-           WOWS_BOT_VERSION="p2-fixture")
-out = {}
-for tag, skip in (("with", "0"), ("without", "1")):
-    e = dict(env); e["WOWS_SKIP_FOOTER"] = skip
-    png = os.path.join(T, f"p2_footer_{tag}.png")
-    subprocess.run([sys.executable, "report/bin/render_report_normalized.py", json_in, png],
-                   env=e, check=True, stdout=subprocess.DEVNULL)
-    out[tag] = Image.open(png).size
-print("with footer   :", out["with"])
-print("without footer:", out["without"])
-assert out["with"][0] == out["without"][0], "宽度不该变"
-assert out["with"][1] - out["without"][1] == 48, f"footer 高度应为 48,实际 {out['with'][1]-out['without'][1]}"
-print("FOOTER_GEOMETRY_OK")
+GAME_GOLD, GAME_PANEL = (242, 196, 87), (32, 42, 64)
+
+def check(name, cut=48):
+    im = Image.open(os.path.join(T, "p2_check", name)).convert("RGB")
+    w, h = im.size
+    cnt = Counter(im.crop((0, h - cut, w, h)).getdata())
+    gold, panel = cnt.get(GAME_GOLD, 0), cnt.get(GAME_PANEL, 0)
+    print(f"{name}: footer {w}x{cut}  GAME_GOLD={gold}px  GAME_PANEL={panel}px")
+    return gold > 0 and panel > 0
+
+assert all(check(n) for n in ("report.png", "review.png")), "footer 里找不到 theme 颜色"
+print("FOOTER_THEME_OK")
 EOF
 ```
 
-Expected: 打印 `FOOTER_GEOMETRY_OK`(宽度不变、带 footer 高 48px)。
-这证明 footer 绘制路径仍然正常执行、用的 theme 常量没缺失。
+Expected: 打印 `FOOTER_THEME_OK`(两图 footer 带里 `GAME_GOLD` 与 `GAME_PANEL` 像素数都 > 0)。
+参考值(重构前实测):report 4400/97072 px、review 4306/84117 px。
 
 - [ ] **Step 4c: 删除重构期脚手架**
 
