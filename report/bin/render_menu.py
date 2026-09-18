@@ -19,10 +19,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from render_battle_report import (  # noqa: E402
-    CJK_FONT, MONO_FONT,
-    GAME_GREEN, GAME_RED,
-)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from wowsbot.theme import CJK_FONT, GAME_GREEN, GAME_RED, MONO_FONT    # noqa: E402
 from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 
 # 菜单专属调色板 — 比战报亮一档,适合"信息面板"风;不影响战报渲染。

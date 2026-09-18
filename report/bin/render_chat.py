@@ -27,11 +27,12 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 from render_query import (  # noqa: E402
     GAME_BG, GAME_PANEL, GAME_PANEL_ALT, GAME_TEXT, GAME_DIM, GAME_GOLD,
     CJK_FONT, MONO_FONT, W, PAD, FOOTER_H, _font, _draw_footer,
 )
-from render_battle_report import t as _translate  # noqa: E402
+from wowsbot.i18n import t as _translate   # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
 REPLAYSHARK = os.environ.get(

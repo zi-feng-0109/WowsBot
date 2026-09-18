@@ -24,11 +24,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from render_battle_report import (  # noqa: E402
-    t, result_field, load_translations, load_result_indices,
-    fmt_time, strip_known, strip_id, clean_ship_name,
-    CJK_FONT, MONO_FONT, GAME_BG, GAME_PANEL, GAME_PANEL_ALT, GAME_GREEN,
-    GAME_RED, GAME_GOLD, GAME_TEXT, GAME_DIM, GAME_BORDER,
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from wowsbot.i18n import load_translations, t                          # noqa: E402
+from wowsbot.results import load_result_indices, result_field          # noqa: E402
+from wowsbot.text import clean_ship_name, fmt_time, strip_id, strip_known  # noqa: E402
+from wowsbot.theme import (                                            # noqa: E402
+    CJK_FONT, GAME_BG, GAME_BORDER, GAME_DIM, GAME_GOLD, GAME_GREEN,
+    GAME_PANEL, GAME_PANEL_ALT, GAME_RED, GAME_TEXT, MONO_FONT,
 )
 from PIL import Image, ImageDraw, ImageFont
 

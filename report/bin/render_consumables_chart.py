@@ -10,10 +10,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from render_battle_report import (  # noqa: E402
-    t, load_translations, strip_known, strip_id, clean_ship_name,
-    CJK_FONT, MONO_FONT, GAME_BG, GAME_PANEL, GAME_PANEL_ALT, GAME_GREEN,
-    GAME_RED, GAME_TEXT, GAME_DIM, GAME_BORDER,
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from wowsbot.i18n import load_translations, t                          # noqa: E402
+from wowsbot.text import clean_ship_name, strip_id, strip_known        # noqa: E402
+from wowsbot.theme import (                                            # noqa: E402
+    CJK_FONT, GAME_BG, GAME_BORDER, GAME_DIM, GAME_GREEN, GAME_PANEL,
+    GAME_PANEL_ALT, GAME_RED, GAME_TEXT, MONO_FONT,
 )
 from render_criminals import consumable_display  # noqa: E402
 from PIL import Image, ImageDraw, ImageFont

@@ -18,12 +18,13 @@ from PIL import Image, ImageDraw, ImageFont
 # Reuse helpers + constants from the main renderer (path resolution, fonts,
 # translation, results-index lookup, ID parsing).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from render_battle_report import (  # noqa: E402
-    CJK_FONT, MONO_FONT,
-    GAME_BG, GAME_PANEL, GAME_GREEN, GAME_RED, GAME_GOLD, GAME_PURPLE,
-    GAME_TEXT, GAME_DIM, GAME_BORDER,
-    t, result_field, load_result_indices,
-    fmt_time, strip_known,
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from wowsbot.i18n import t                                             # noqa: E402
+from wowsbot.results import load_result_indices, result_field          # noqa: E402
+from wowsbot.text import fmt_time, strip_known                         # noqa: E402
+from wowsbot.theme import (                                            # noqa: E402
+    CJK_FONT, GAME_BG, GAME_BORDER, GAME_DIM, GAME_GOLD, GAME_GREEN,
+    GAME_PANEL, GAME_PURPLE, GAME_RED, GAME_TEXT, MONO_FONT,
 )
 
 RIBBON_ICON_DIR = os.environ.get(

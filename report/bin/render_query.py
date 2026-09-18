@@ -16,9 +16,9 @@ from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from render_battle_report import (  # noqa: E402
-    CJK_FONT, MONO_FONT,
-    GAME_GREEN, GAME_RED, GAME_GOLD,
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from wowsbot.theme import (                                            # noqa: E402
+    CJK_FONT, GAME_GOLD, GAME_GREEN, GAME_RED, MONO_FONT,
 )
 from PIL import Image, ImageDraw, ImageFont, ImageOps  # noqa: E402
 
