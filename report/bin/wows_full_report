@@ -14,11 +14,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-BOT_HOME = Path(__file__).resolve().parent.parent
-WOWS_REPORT        = BOT_HOME / "bin" / "wows_report"
-WOWS_DAMAGE_REPORT = BOT_HOME / "bin" / "wows_damage_report"
-RENDER_CRIMINALS   = BOT_HOME / "bin" / "render_criminals.py"
-DEFAULT_OUT = os.environ.get("WOWS_OUT_DIR", "/tmp/wows_report")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from wowsbot import paths          # noqa: E402
+
+BOT_HOME = paths.REPORT_ROOT
+WOWS_REPORT        = Path(paths.REPORT_BATTLE_CMD)
+WOWS_DAMAGE_REPORT = Path(paths.REPORT_DAMAGE_CMD)
+RENDER_CRIMINALS   = Path(paths.RENDER_CRIMINALS_PY)
+DEFAULT_OUT = paths.OUT_DIR
 GAP = 16
 BG  = (18, 24, 38)  # GAME_BG
 

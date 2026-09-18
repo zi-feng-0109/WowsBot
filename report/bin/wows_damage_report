@@ -16,10 +16,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-BOT_HOME = Path(__file__).resolve().parent.parent
-WOWS_REPORT = BOT_HOME / "bin" / "wows_report"
-RENDER_PY   = BOT_HOME / "bin" / "render_damage_chart.py"
-DEFAULT_OUT = os.environ.get("WOWS_OUT_DIR", "/tmp/wows_report")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from wowsbot import paths          # noqa: E402
+
+BOT_HOME = paths.REPORT_ROOT
+WOWS_REPORT = Path(paths.REPORT_BATTLE_CMD)
+RENDER_PY   = Path(paths.RENDER_DAMAGE_PY)
+DEFAULT_OUT = paths.OUT_DIR
 
 
 def find_python() -> str:

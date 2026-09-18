@@ -21,12 +21,11 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-# 复用 render_battle_report 的翻译 + 常量索引工具
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from render_battle_report import (  # noqa: E402
-    t, result_field, load_translations, load_result_indices,
-    fmt_time, strip_known, strip_id, clean_ship_name, MATCH_GROUP_CN,
-)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from wowsbot.i18n import MATCH_GROUP_CN, load_translations, t              # noqa: E402
+from wowsbot.results import load_result_indices, result_field             # noqa: E402
+from wowsbot.text import clean_ship_name, fmt_time, strip_id, strip_known  # noqa: E402
 # 复用 damage-chart 的字段分类表 + 勋带映射,保证 LLM 摘要里的口径和图表一致
 from render_damage_chart import (  # noqa: E402
     DEALT_CATEGORIES, RECEIVED_CATEGORIES, aggregate, extract_ribbons,

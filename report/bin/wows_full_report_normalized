@@ -22,10 +22,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-BOT_HOME = Path(__file__).resolve().parent.parent
-REPLAYSHARK = os.environ.get("WOWS_REPLAYSHARK", str(BOT_HOME / "replayshark"))
-BIN = BOT_HOME / "bin"
-DEFAULT_OUT = os.environ.get("WOWS_OUT_DIR", "/tmp/wows_report")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from wowsbot import paths          # noqa: E402
+
+BOT_HOME = paths.REPORT_ROOT
+REPLAYSHARK = paths.REPLAYSHARK
+BIN = paths.BIN_DIR
+DEFAULT_OUT = paths.OUT_DIR
 GAP, BG = 16, (18, 24, 38)
 
 

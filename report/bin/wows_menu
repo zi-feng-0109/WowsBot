@@ -11,8 +11,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-BOT_HOME = Path(__file__).resolve().parent.parent
-RENDER_PY = BOT_HOME / "bin" / "render_menu.py"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from wowsbot import paths          # noqa: E402
+
+BOT_HOME = paths.REPORT_ROOT
+RENDER_PY = Path(paths.RENDER_MENU_PY)
 
 
 def find_python() -> str:

@@ -19,32 +19,32 @@ Paths default to the bot deployment layout but can be overridden via env vars:
     WOWS_RENDER_PY     path to render_battle_report.py
     WOWS_OUT_DIR       default output dir (overridable by arg #2)
 """
-import json
 import os
 import re
-import struct
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-# ---- locate bot home (parent of this script's dir) -------------------------
-BOT_HOME = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from wowsbot import paths, replay          # noqa: E402
 
-REPLAYSHARK = os.environ.get("WOWS_REPLAYSHARK", str(BOT_HOME / "replayshark"))
-SPECS_DIR   = os.environ.get("WOWS_SPECS_DIR",   str(BOT_HOME / "specs"))
-CONSTANTS_JSON = os.environ.get("WOWS_CONSTANTS_JSON",
-                                 str(BOT_HOME / "data" / "constants.json"))
-RENDER_PY   = os.environ.get("WOWS_RENDER_PY",   str(BOT_HOME / "bin" / "render_battle_report.py"))
-DEFAULT_OUT_DIR = os.environ.get("WOWS_OUT_DIR", "/tmp/wows_report")
+# ---- locate bot home (parent of this script's dir) -------------------------
+BOT_HOME = paths.REPORT_ROOT
+
+REPLAYSHARK = paths.REPLAYSHARK
+SPECS_DIR   = paths.SPECS_DIR
+CONSTANTS_JSON = paths.CONSTANTS_JSON
+RENDER_PY   = paths.RENDER_BATTLE_PY
+DEFAULT_OUT_DIR = paths.OUT_DIR
 
 # 按回放 build 自动挑版本目录用的两个根:
 #   EXTRACTED_ROOT   放 <ver>_<build>/{metadata.toml,vfs/{scripts,content}} 的根
 #   SPECS_PATCHED_ROOT  放 <ver>_<build>/scripts 的根 —— FLOAT64 手术产物
 #     (15.7 起 WG 的 entity defs 用了 FLOAT64,这个预编译 replayshark 不认,
 #      所以那些版本必须用手术过的 scripts 副本;<=15.6 没这问题,用原始的)
-EXTRACTED_ROOT = os.environ.get("WOWS_EXTRACTED_ROOT", "/var/lib/wows-data/extracted")
-SPECS_PATCHED_ROOT = os.environ.get("WOWS_SPECS_PATCHED_ROOT", "/var/lib/wows-data/specs-patched")
+EXTRACTED_ROOT = paths.EXTRACTED_ROOT
+SPECS_PATCHED_ROOT = paths.SPECS_PATCHED_ROOT
 
 
 def find_python() -> str:
@@ -65,29 +65,9 @@ def find_python() -> str:
         return str(candidate)
     return "python3"
 
-REPLAY_SIGNATURE = b"\x12\x32\x34\x11"
-
 
 def log(msg: str):
     print(msg, file=sys.stderr)
-
-
-def read_replay_meta(path: Path) -> dict:
-    with open(path, "rb") as fp:
-        sig = fp.read(4)
-        if sig != REPLAY_SIGNATURE:
-            raise ValueError(f"not a valid WoWs replay: {path}")
-        _ = fp.read(4)
-        block_size = struct.unpack("i", fp.read(4))[0]
-        return json.loads(fp.read(block_size))
-
-
-def parse_build(meta: dict) -> int:
-    ver = meta.get("clientVersionFromExe", "")
-    parts = [p.strip() for p in ver.split(",")]
-    if len(parts) >= 4:
-        return int(parts[3])
-    raise ValueError(f"cannot parse build from {ver!r}")
 
 
 def read_specs_build(specs_dir):
@@ -161,11 +141,11 @@ def main():
         log("usage: wows_report <replay.wowsreplay> [out_dir]")
         sys.exit(2)
 
-    replay = Path(sys.argv[1]).expanduser().resolve()
+    replay_path = Path(sys.argv[1]).expanduser().resolve()
     out_dir = Path(sys.argv[2] if len(sys.argv) >= 3 else DEFAULT_OUT_DIR).expanduser()
 
-    if not replay.is_file():
-        log(f"error: replay not found: {replay}")
+    if not replay_path.is_file():
+        log(f"error: replay not found: {replay_path}")
         sys.exit(1)
     if not Path(REPLAYSHARK).exists():
         log(f"error: replayshark binary not found at {REPLAYSHARK}")
@@ -173,15 +153,16 @@ def main():
         sys.exit(1)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    base = replay.stem
+    base = replay_path.stem
     json_path = out_dir / f"{base}.json"
     png_path = out_dir / f"{base}.png"
 
     canonical = Path(SPECS_DIR)
-    meta = read_replay_meta(replay)
-    replay_build = parse_build(meta)
+    replay_build = replay.build_of(str(replay_path))
+    if replay_build is None:
+        raise ValueError(f"not a valid WoWs replay: {replay_path}")
+    version_str = replay.version_of(str(replay_path))
     canonical_build = read_specs_build(canonical)
-    version_str = ".".join(meta.get("clientVersionFromExe", "").split(",")[:3]) or "0.0.0"
 
     spoofed_dir = None
     if canonical_build is not None and replay_build == canonical_build:
@@ -208,7 +189,7 @@ def main():
         cmd = [REPLAYSHARK, "-e", str(specs_dir)]
         if Path(CONSTANTS_JSON).is_file():
             cmd += ["-c", CONSTANTS_JSON]
-        cmd += ["battle-report", str(replay), "-o", str(json_path)]
+        cmd += ["battle-report", str(replay_path), "-o", str(json_path)]
         subprocess.run(cmd, check=True, stdout=sys.stderr)
 
         log("[2/2] rendering PNG ...")
