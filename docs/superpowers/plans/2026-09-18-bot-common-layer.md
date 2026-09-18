@@ -1553,16 +1553,34 @@ EXTRACTED_ROOT = paths.EXTRACTED_ROOT
 SPECS_PATCHED_ROOT = paths.SPECS_PATCHED_ROOT
 ```
 
-删掉本文件的 `read_replay_meta()` 与 `parse_build()`,改用 `replay`:
+删掉本文件的 `read_replay_meta()` 与 `parse_build()`,改用 `replay` —— **但必须补一道
+显式校验,否则会造成回归**:
 
 ```python
-# 原:meta = read_replay_meta(replay_path); replay_build = parse_build(meta)
+# 原:meta = read_replay_meta(replay_path)   # 魔数不对时 raise ValueError
+#     replay_build = parse_build(meta)      # 版本串解析不出时 raise ValueError
 #     version_str = ".".join(meta.get("clientVersionFromExe","").split(",")[:3]) or "0.0.0"
 replay_build = replay.build_of(str(replay_path))
+if replay_build is None:
+    raise ValueError(f"not a valid WoWs replay: {replay_path}")
 version_str = replay.version_of(str(replay_path))
 ```
 
-**注意**:原 `parse_build()` 若解析失败的返回值与 `replay.build_of` 的 `None` 不同,须保持调用点行为一致 —— 先跑 `grep -n 'parse_build\|read_replay_meta\|REPLAY_SIGNATURE' report/bin/wows_report` 看清所有用法再改;`REPLAY_SIGNATURE` 若仍被用于校验则保留。
+**为什么必须加这道 `raise`**:两个实现的失败契约不同,而且是有意为之 ——
+
+| 场景 | 原 `wows_report` | `wowsbot.replay` |
+|---|---|---|
+| 魔数不是 `\x12\x32\x34\x11` | `raise ValueError("not a valid WoWs replay: ...")` | 不校验魔数,失败返回 `None` |
+| 版本串解析不出 | `raise ValueError("cannot parse build from ...")` | 返回 `None` |
+
+公共层刻意「不抛异常、返回 None」,因为 bot 的前置检查要靠它判断放行还是拦下。
+但 `wows_report` 这条路径下游经不起 `None`:实测确认 `resolve_specs_for_build(None)`
+会因 `int(...) == None` 恒假而返回 `None`,继而落到 `make_spoofed_specs(canonical, None,
+version_str)`,把 `build = None` 写进临时 metadata.toml —— 于是「一句清楚的
+not a valid WoWs replay」退化成 replayshark 抛出的莫名错误。加这道 `raise` 保住原行为。
+
+**顺带删掉随之变成死代码的三样**(已 grep 确认只被 `read_replay_meta` 使用):
+`REPLAY_SIGNATURE` 常量、`import struct`、`import json`。
 
 - [ ] **Step 2: 另外 4 个入口脚本**
 
