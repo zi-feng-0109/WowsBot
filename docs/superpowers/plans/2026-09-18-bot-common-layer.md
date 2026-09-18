@@ -94,7 +94,16 @@
 （Task 11 的零残留断言本身用的是 `grep -rn ... report/ plugin/`,两种形式都能抓到 ——
 所以漏的是**迁移范围**,不是检查手段。执行 Task 6 时由子代理发现。)
 
-### 9. 两种 import 形式都要处理
+### 9. 有意不收进 paths 的东西
+
+- **`plugin/minimap.py` 的 `GUESS_TOGGLE_FILE`**(env `ESSEXBOT_GUESS_TOGGLE`,默认
+  `/home/zifeng/桌面/bot/EssexBot/data/guess_toggle.json`)—— 它指向 **EssexBot 项目自己的
+  数据文件**,在 `/opt/wows-bot` 之外。`wowsbot.paths` 是以 wows-bot 仓为根的表,收它进去
+  等于把两个部署单元的路径混在一起,所以**故意留在原处**。
+- **`WOWS_PYTHON`**(minimap.py 两处 + `wows_report::find_python`)—— 那是"用哪个解释器
+  派生子进程",跟数据/命令路径不是一类问题;要统一也应单独做,不属本次范围。
+
+### 10. 两种 import 形式都要处理
 
 - 6 个脚本用 `from render_battle_report import (...)` —— 全部改为从 `wowsbot` 取。
 - 2 个脚本用 `import render_battle_report as rb`(`render_report_normalized.py` / `render_review_normalized.py`),它们既取 theme 常量/标签表(要改),又用 `rb.render` `rb.load` `rb.MatchReport` `rb.PlayerStats` `rb.font` `rb.load_achievements` `rb._ACH_ID_TO_INDEX`(**合法保留,不动**)。
