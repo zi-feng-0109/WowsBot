@@ -10,7 +10,7 @@ CLI 用法 (调试):
     render_menu.py <out.png> [--scope group --ident 123456 --super]
     (无 --scope 时按 private + 假 ident '0' 渲染)
 
-复用 render_battle_report 的色板/字体常量,与战报视觉一致。
+复用 wowsbot.theme 的色板/字体常量,与战报视觉一致。
 """
 import argparse
 import datetime

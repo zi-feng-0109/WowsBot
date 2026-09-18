@@ -80,7 +80,21 @@
 约定,不是文件内容** —— 落地时去掉,让所有模块统一以 docstring 开头(`paths.py` 就没有
 这行)。Task 2 执行时已按此处理。
 
-### 8. 两种 import 形式都要处理
+### 8. 消费者普查必须不限扩展名、且覆盖两种 import 形式
+
+计划初版把消费者数成 8 个,实际是 **10 个**。漏掉的两个和两个各自的盲点:
+
+- **`report/bin/wows_analyze`** —— 无扩展名的可执行脚本,`report/bin/*.py` 通配符扫不到。
+  `report/bin` 下有 6 个这样的文件(`wows_analyze` `wows_report` `wows_full_report`
+  `wows_full_report_normalized` `wows_damage_report` `wows_menu`),普查时必须用
+  `grep -r <目录>` 而不是 `*.py`。
+- **`plugin/minimap.py` 约第 1400 行** —— from-import 写在**函数体内**,而当初查模块式引用
+  用的模式是 `import render_battle_report`,它匹配不到 `from render_battle_report import`。
+
+（Task 11 的零残留断言本身用的是 `grep -rn ... report/ plugin/`,两种形式都能抓到 ——
+所以漏的是**迁移范围**,不是检查手段。执行 Task 6 时由子代理发现。)
+
+### 9. 两种 import 形式都要处理
 
 - 6 个脚本用 `from render_battle_report import (...)` —— 全部改为从 `wowsbot` 取。
 - 2 个脚本用 `import render_battle_report as rb`(`render_report_normalized.py` / `render_review_normalized.py`),它们既取 theme 常量/标签表(要改),又用 `rb.render` `rb.load` `rb.MatchReport` `rb.PlayerStats` `rb.font` `rb.load_achievements` `rb._ACH_ID_TO_INDEX`(**合法保留,不动**)。
@@ -1374,10 +1388,12 @@ cd /c/Users/29801/Desktop/wows-bot-review
 python -m py_compile report/bin/render_chat.py report/bin/render_criminals.py \
   report/bin/render_damage_chart.py report/bin/render_menu.py \
   report/bin/render_query.py report/bin/render_consumables_chart.py && echo COMPILE_OK
-grep -rn 'from render_battle_report import' report/ plugin/ ; echo "^ 必须为空"
+grep -rn 'from render_battle_report import' report/ plugin/
 ```
 
-Expected: `COMPILE_OK`,且 grep 无输出。
+Expected: `COMPILE_OK`。grep **此时还会剩两处** —— `report/bin/wows_analyze` 与
+`plugin/minimap.py`(见「关键背景 8」),它们分别由 Task 8 与 Task 9 迁移。
+本任务只需确认这 6 个文件自己没有残留。
 
 - [ ] **Step 4: 基线比对 + 现有测试**
 
@@ -1589,12 +1605,40 @@ RENDER_PY = Path(paths.RENDER_MENU_PY)
 
 每个文件都要在 import 区加 bootstrap 两行(同 Step 1)。
 
+- [ ] **Step 2b: `wows_analyze` 也从 wowsbot 取共享符号**
+
+这是普查时漏掉的消费者之一(无扩展名,`*.py` 扫不到,见「关键背景 8」)。原文:
+
+```python
+# 复用 render_battle_report 的翻译 + 常量索引工具
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from render_battle_report import (  # noqa: E402
+    t, result_field, load_translations, load_result_indices,
+    fmt_time, strip_known, strip_id, clean_ship_name, MATCH_GROUP_CN,
+)
+```
+
+改为:
+
+```python
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from wowsbot.i18n import MATCH_GROUP_CN, load_translations, t              # noqa: E402
+from wowsbot.results import load_result_indices, result_field              # noqa: E402
+from wowsbot.text import clean_ship_name, fmt_time, strip_id, strip_known  # noqa: E402
+```
+
+**紧跟其后的 `from render_damage_chart import (DEALT_CATEGORIES, RECEIVED_CATEGORIES,
+aggregate, extract_ribbons)` 保持不动** —— 那是对渲染器的合理依赖(字段分类表与勋带映射),
+不属于本次要搬的公共层。
+
 - [ ] **Step 3: 语法检查**
 
 ```bash
 cd /c/Users/29801/Desktop/wows-bot-review
 python -m py_compile report/bin/wows_report report/bin/wows_full_report \
-  report/bin/wows_full_report_normalized report/bin/wows_damage_report report/bin/wows_menu \
+  report/bin/wows_full_report_normalized report/bin/wows_damage_report \
+  report/bin/wows_menu report/bin/wows_analyze \
   && echo COMPILE_OK
 ```
 
@@ -1679,6 +1723,32 @@ ANALYZE_TIMEOUT       = _paths.ANALYZE_TIMEOUT
 ```
 
 其余逻辑(`friendly_error` / `_extract_build` / 文案)一行不动。
+
+- [ ] **Step 3b: 迁移函数体内那处 from-import(约第 1400 行)**
+
+这是普查时漏掉的另一个消费者(from-import 写在函数里,见「关键背景 8」)。原文:
+
+```python
+        import sys as _sys
+        rb_path = str(Path(REPORT_FULL_CMD).parent)
+        if rb_path not in _sys.path:
+            _sys.path.insert(0, rb_path)
+        from render_battle_report import (
+            t as _t, load_translations as _load_translations,
+            clean_ship_name as _clean, result_field as _rf,
+        )
+```
+
+改为(模块级 bootstrap 已把 `report/lib` 放进 `sys.path`,这里的路径拼接可以整段去掉):
+
+```python
+        from wowsbot.i18n import load_translations as _load_translations, t as _t
+        from wowsbot.results import result_field as _rf
+        from wowsbot.text import clean_ship_name as _clean
+```
+
+注意这也顺手消掉了一处 `sys.path.insert` 样板 —— 它属于下一步要清理的那批。
+**函数其余逻辑(`_ship_zh` / `_sort_dmg` 等)一行不动。**
 
 - [ ] **Step 4: 7 处 sys.path 样板收成 helper**
 
