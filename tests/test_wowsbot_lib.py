@@ -7,6 +7,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "report" / "lib"))
 
+# 字体环境变量必须在 import theme 之前设(theme 找不到 CJK 字体会直接 raise)。
+# 跟 tests/test_render_menu.py / test_render_armor.py 同一约定,保证裸环境也能跑。
+os.environ.setdefault("WOWS_CJK_FONT", "C:/Windows/Fonts/msyh.ttc")
+os.environ.setdefault("WOWS_MONO_FONT", "C:/Windows/Fonts/consola.ttf")
+
 LIB = ROOT / "report" / "lib" / "wowsbot"
 
 
