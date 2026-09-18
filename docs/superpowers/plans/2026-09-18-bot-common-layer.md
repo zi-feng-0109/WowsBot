@@ -1242,14 +1242,22 @@ from wowsbot.theme import (                                            # noqa: E
 
 **保留不动**:`font()`、`achievement_icon()`、`load_achievements()`、`_ACH_ID_TO_INDEX`、`_ACH_ICON_CACHE`、`PlayerStats` / `MatchReport` / `load()` / `render()` 及全部绘图代码。
 
-数据文件常量改为从 `paths` 取(其余引用它们的地方不用改,名字保持不变):
+数据文件常量:只保留**仍被本文件使用**的两个,改为从 `paths` 取(名字不变,引用处不用改):
 
 ```python
-TRANSLATIONS_MO      = _paths.TRANSLATIONS_MO
-CONSTANTS_JSON       = _paths.CONSTANTS_JSON
-ACHIEVEMENTS_JSON    = _paths.ACHIEVEMENTS_JSON
-ACHIEVEMENT_ICON_DIR = _paths.ACHIEVEMENT_ICON_DIR
+ACHIEVEMENTS_JSON    = _paths.ACHIEVEMENTS_JSON      # load_achievements() 用
+ACHIEVEMENT_ICON_DIR = _paths.ACHIEVEMENT_ICON_DIR   # achievement_icon() 用
 ```
+
+`TRANSLATIONS_MO` 与 `CONSTANTS_JSON` **一并删除** —— 它们原本只作为 `load_translations`
+/ `load_result_indices` 的默认参数存在,那两个函数已搬走,且全仓无外部消费者(已 grep 确认),
+留着就是死代码。同理 `_BOT_HOME` / `_DATA` / `_first_existing` 与两张字体候选表也删掉。
+
+⚠️ **上面那些 import 必须写在模块级,不能塞进函数里。** 原因:6 个脚本用
+`from render_battle_report import GAME_BG, ...`、2 个脚本用 `rb.GAME_BG` 访问 ——
+`from X import Y` 会让 `Y` 成为本模块的属性(已实测确认),所以模块级 import 能让这 8 个
+下游脚本在 Task 6/7 迁移之前继续正常工作。**Task 5 自己的基线验证正是通过其中两个脚本
+跑的**,写进函数里会当场断掉。
 
 - [ ] **Step 2: 语法检查**
 
