@@ -63,7 +63,18 @@
 渲染后输出正文哈希)。基线与后续每次检查必须用**完全相同的调用**,抄多份命令必然漂移
 —— 这是脚本存在的理由,不是风格偏好。该脚本是重构期脚手架,Task 11 删除。
 
-### 6. 两种 import 形式都要处理
+### 6. 依赖纯净性检查必须用 ast,不能 grep 源码文本
+
+模块的 docstring 会写"不 import nonebot、不 subprocess、不碰 PIL"这类说明,**grep 字面量
+会把文档误判成违规**。计划初版就踩了这个坑:Task 1 的 `paths.py` 与它的测试是一对自相
+矛盾的文本 —— 照抄必然失败(执行时由子代理发现并正确升级)。
+
+改用 `ast` 只看真实的 import 语句(函数体内的延迟 import 也覆盖),并且**只在
+`tests/test_wowsbot_purity.py` 一处实现、自动扫描整个 `report/lib/wowsbot/` 目录** ——
+新增模块自动被覆盖,不必每个模块各写一份。该文件带一个反向用例,证明检查确实能抓到
+违规而不是空跑。
+
+### 7. 两种 import 形式都要处理
 
 - 6 个脚本用 `from render_battle_report import (...)` —— 全部改为从 `wowsbot` 取。
 - 2 个脚本用 `import render_battle_report as rb`(`render_report_normalized.py` / `render_review_normalized.py`),它们既取 theme 常量/标签表(要改),又用 `rb.render` `rb.load` `rb.MatchReport` `rb.PlayerStats` `rb.font` `rb.load_achievements` `rb._ACH_ID_TO_INDEX`(**合法保留,不动**)。
@@ -194,13 +205,14 @@ git commit -m "test(p2): 记录重构前渲染基线 sha256 + 确定性渲染脚
 
 **Files:**
 - Create: `report/lib/wowsbot/__init__.py`, `report/lib/wowsbot/paths.py`
-- Test: `tests/test_wowsbot_paths.py`
+- Test: `tests/test_wowsbot_paths.py`, `tests/test_wowsbot_purity.py`
 
 - [ ] **Step 1: 写失败的测试**
 
 ```python
 # tests/test_wowsbot_paths.py
 """wowsbot.paths 测试 —— env 覆盖 / 默认值 / 派生规则。
+依赖纯净性由 tests/test_wowsbot_purity.py 统一守卫(见「关键背景 6」),这里不重复。
 无 pytest 依赖,纯 assert + print。用法: python tests/test_wowsbot_paths.py"""
 import importlib
 import os
@@ -299,13 +311,6 @@ def test_timeouts_are_ints():
     print("  test_timeouts_are_ints PASS")
 
 
-def test_no_forbidden_imports():
-    src = (ROOT / "report" / "lib" / "wowsbot" / "paths.py").read_text(encoding="utf-8")
-    for bad in ("nonebot", "subprocess", "ImageDraw"):
-        assert bad not in src, f"paths.py 不该出现 {bad}"
-    print("  test_no_forbidden_imports PASS")
-
-
 if __name__ == "__main__":
     print("== test_wowsbot_paths ==")
     test_defaults_derive_from_repo_root()
@@ -314,7 +319,6 @@ if __name__ == "__main__":
     test_extracted_root_reads_both_names()
     test_empty_string_env_is_kept()
     test_timeouts_are_ints()
-    test_no_forbidden_imports()
     print("== ALL PASS ==")
 ```
 
@@ -436,15 +440,91 @@ PNG_TIMEOUT = int(os.environ.get("WOWS_PNG_TIMEOUT", "300"))
 ANALYZE_TIMEOUT = int(os.environ.get("WOWS_ANALYZE_TIMEOUT", "120"))
 ```
 
+- [ ] **Step 3b: 写依赖纯净性测试(全目录唯一守卫)**
+
+`tests/test_wowsbot_purity.py` —— 用 ast 查真实 import,自动扫描整个 `wowsbot/` 目录:
+
+```python
+"""wowsbot 依赖纯净性 —— 硬约束的唯一守卫。
+
+为什么用 ast 而不是 grep 源码文本:模块的 docstring 本身会写"不 import nonebot"
+这类说明,grep 字面量会把文档误判成违规。ast 只看真实的 import 语句,函数体内的
+延迟 import 也能覆盖。
+
+为什么一个文件扫整个目录、而不是每个模块各写一份:新增模块自动被覆盖,不会漏。
+
+约束理由:三类 consumer 要 import 同一份公共层 —— nonebot 环境的 plugin/*、
+venv 环境的 report/bin/*(见 wows_report::find_python,解释器可能是三种之一)、
+以及将来 P1 的网站。任何一个模块拉进 nonebot / PIL,就有环境装不了。
+subprocess 则是职责边界:公共层只做常量与纯函数,不派生进程。
+
+无 pytest 依赖,纯 assert + print。用法: python tests/test_wowsbot_purity.py
+"""
+import ast
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+LIB = ROOT / "report" / "lib" / "wowsbot"
+
+FORBIDDEN = ("nonebot", "subprocess", "PIL")
+
+
+def _imported_top_level(src: str) -> set:
+    """收集文件里所有被 import 的顶层模块名(含函数体内的延迟 import)。"""
+    names = set()
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            # from . import paths -> node.module is None,相对导入不算外部依赖
+            if node.module and node.level == 0:
+                names.add(node.module.split(".")[0])
+    return names
+
+
+def test_no_forbidden_imports():
+    files = sorted(LIB.glob("*.py"))
+    assert files, f"没找到任何模块: {LIB}"
+    for f in files:
+        imported = _imported_top_level(f.read_text(encoding="utf-8"))
+        bad = sorted(set(FORBIDDEN) & imported)
+        assert not bad, f"{f.name} 不该 import {bad}(实际 import: {sorted(imported)})"
+        print(f"  {f.name}: OK (import {sorted(imported) or 'none'})")
+    print(f"  test_no_forbidden_imports PASS ({len(files)} 个模块)")
+
+
+def test_detects_a_real_violation():
+    """反向验证:这个检查真的能抓到违规,不是空跑。"""
+    assert "nonebot" in _imported_top_level("import nonebot")
+    assert "nonebot" in _imported_top_level("from nonebot import get_driver")
+    assert "PIL" in _imported_top_level("from PIL import Image")
+    assert "subprocess" in _imported_top_level("def f():\n    import subprocess\n")
+    # docstring 里提到这些词不算违规
+    doc = '"""不 import nonebot、不 subprocess、不碰 PIL。"""'
+    assert not (set(FORBIDDEN) & _imported_top_level(doc))
+    print("  test_detects_a_real_violation PASS")
+
+
+if __name__ == "__main__":
+    print("== test_wowsbot_purity ==")
+    test_no_forbidden_imports()
+    test_detects_a_real_violation()
+    print("== ALL PASS ==")
+```
+
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `python tests/test_wowsbot_paths.py`
-Expected: 7 个 `PASS` + `== ALL PASS ==`
+Run: `python tests/test_wowsbot_paths.py && python tests/test_wowsbot_purity.py`
+Expected: paths 测试 6 个 `PASS`;purity 测试逐模块列出 import 且全 `OK`;两个都
+打印 `== ALL PASS ==`
 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add report/lib/wowsbot/__init__.py report/lib/wowsbot/paths.py tests/test_wowsbot_paths.py
+git add report/lib/wowsbot/__init__.py report/lib/wowsbot/paths.py \
+  tests/test_wowsbot_paths.py tests/test_wowsbot_purity.py
 git commit -m "feat(lib): wowsbot.paths —— 路径/配置唯一声明表
 
 REPO_ROOT / REPORT_ROOT 取代含义冲突的 BOT_HOME(report/bin 里指 report/,tools/
@@ -554,13 +634,6 @@ def test_available_builds_unreadable_root_is_empty():
     print("  test_available_builds_unreadable_root_is_empty PASS")
 
 
-def test_no_forbidden_imports():
-    src = (ROOT / "report" / "lib" / "wowsbot" / "replay.py").read_text(encoding="utf-8")
-    for bad in ("nonebot", "subprocess", "ImageDraw"):
-        assert bad not in src, f"replay.py 不该出现 {bad}"
-    print("  test_no_forbidden_imports PASS")
-
-
 if __name__ == "__main__":
     print("== test_wowsbot_replay ==")
     test_wg_replay_build_and_version()
@@ -569,7 +642,6 @@ if __name__ == "__main__":
     test_absurd_meta_len_rejected()
     test_available_builds_only_version_dirs()
     test_available_builds_unreadable_root_is_empty()
-    test_no_forbidden_imports()
     print("== ALL PASS ==")
 ```
 
@@ -745,13 +817,6 @@ def test_theme_font_env_override_wins():
     print("  test_theme_font_env_override_wins PASS")
 
 
-def test_theme_has_no_pil_dependency():
-    src = (LIB / "theme.py").read_text(encoding="utf-8")
-    for bad in ("PIL", "ImageFont", "ImageDraw", "nonebot", "subprocess"):
-        assert bad not in src, f"theme.py 不该出现 {bad}(font() 留在渲染器里)"
-    print("  test_theme_has_no_pil_dependency PASS")
-
-
 def test_text_helpers():
     from wowsbot import text
     assert text.strip_id("AccountId(12345)") == 12345
@@ -803,24 +868,14 @@ def test_results_field_bounds():
     print("  test_results_field_bounds PASS")
 
 
-def test_lib_modules_have_no_forbidden_imports():
-    for name in ("theme.py", "text.py", "i18n.py", "results.py"):
-        src = (LIB / name).read_text(encoding="utf-8")
-        for bad in ("nonebot", "subprocess", "ImageDraw"):
-            assert bad not in src, f"{name} 不该出现 {bad}"
-    print("  test_lib_modules_have_no_forbidden_imports PASS")
-
-
 if __name__ == "__main__":
     print("== test_wowsbot_lib ==")
     test_theme_palette_values_unchanged()
     test_theme_font_env_override_wins()
-    test_theme_has_no_pil_dependency()
     test_text_helpers()
     test_i18n_labels_present()
     test_i18n_t_falls_back_to_key()
     test_results_field_bounds()
-    test_lib_modules_have_no_forbidden_imports()
     print("== ALL PASS ==")
 ```
 
@@ -942,6 +997,9 @@ def fmt_time(secs: int) -> str:
     secs = int(secs)
     return f"{secs//60:02d}:{secs%60:02d}"
 ```
+
+依赖纯净性(含"theme 不得 import PIL")由 `tests/test_wowsbot_purity.py` 统一守卫,
+它自动扫描整个 `wowsbot/` 目录,新模块无需另加检查。
 
 - [ ] **Step 5: 跑测试(theme/text 部分应转绿)**
 
@@ -1769,10 +1827,11 @@ git commit -m "fix(tools): 默认路径少一层 report/ 的老坑,常量收进 
 
 ```bash
 cd /c/Users/29801/Desktop/wows-bot-review
-grep -rnE 'nonebot|subprocess|ImageDraw' report/lib/wowsbot/ ; echo "^ 必须为空"
+python tests/test_wowsbot_purity.py
 ```
 
-Expected: 无输出。
+Expected: 逐个列出 6 个模块的 import 且全 `OK`,最后 `== ALL PASS ==`。
+(**不要用 grep 查源码文本** —— docstring 里会提到这些词,见「关键背景 6」。)
 
 - [ ] **Step 2: 零残留(两种 import 形式)**
 
