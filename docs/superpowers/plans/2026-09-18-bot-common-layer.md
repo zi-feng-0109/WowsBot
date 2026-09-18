@@ -74,7 +74,13 @@
 新增模块自动被覆盖,不必每个模块各写一份。该文件带一个反向用例,证明检查确实能抓到
 违规而不是空跑。
 
-### 7. 两种 import 形式都要处理
+### 7. 代码块首行的文件名注释不要抄进文件
+
+计划里部分代码块首行写了 `# report/lib/wowsbot/xxx.py` 作为文件名标记。**那是计划的排版
+约定,不是文件内容** —— 落地时去掉,让所有模块统一以 docstring 开头(`paths.py` 就没有
+这行)。Task 2 执行时已按此处理。
+
+### 8. 两种 import 形式都要处理
 
 - 6 个脚本用 `from render_battle_report import (...)` —— 全部改为从 `wowsbot` 取。
 - 2 个脚本用 `import render_battle_report as rb`(`render_report_normalized.py` / `render_review_normalized.py`),它们既取 theme 常量/标签表(要改),又用 `rb.render` `rb.load` `rb.MatchReport` `rb.PlayerStats` `rb.font` `rb.load_achievements` `rb._ACH_ID_TO_INDEX`(**合法保留,不动**)。
