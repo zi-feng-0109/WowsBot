@@ -126,7 +126,7 @@
 | `render_chat.py` `render_criminals.py` `render_damage_chart.py` `render_menu.py` `render_query.py` `render_consumables_chart.py` | `from render_battle_report import ...` → `from wowsbot...` |
 | `render_report_normalized.py` `render_review_normalized.py` | 只换 `rb.` 取的 theme 常量与标签表 |
 | `wows_report` `wows_full_report` `wows_full_report_normalized` `wows_damage_report` `wows_menu` | 常量收进 `paths`;`wows_report` 的 build 解析换 `replay` |
-| `plugin/minimap.py` | 常量收进 `paths`;build 解析换 `replay`;7 处 `sys.path.insert` 收成 helper |
+| `plugin/minimap.py` | 常量收进 `paths`;build 解析换 `replay`;9 处 `sys.path.insert` 收成 helper |
 | `tools/build_builds_json.py` `fetch_build_icons.py` `build_ships_json.py` `fetch_ship_icons.py` | 常量收进 `paths`,**顺带修掉默认路径错一层** |
 
 ---
@@ -1768,7 +1768,7 @@ ANALYZE_TIMEOUT       = _paths.ANALYZE_TIMEOUT
 注意这也顺手消掉了一处 `sys.path.insert` 样板 —— 它属于下一步要清理的那批。
 **函数其余逻辑(`_ship_zh` / `_sort_dmg` 等)一行不动。**
 
-- [ ] **Step 4: 7 处 sys.path 样板收成 helper**
+- [ ] **Step 4: 9 处 sys.path 样板收成 helper**
 
 新增一个 helper,替换 7 处重复:
 
@@ -1776,7 +1776,7 @@ ANALYZE_TIMEOUT       = _paths.ANALYZE_TIMEOUT
 def _import_report_bin(module: str):
     """import report/bin 下的渲染模块(它们不是包,靠 sys.path 找)。
 
-    重构前这段 3 行样板在本文件里重复了 7 次。
+    重构前这段 3 行样板在本文件里重复了 9 次(实测计数,计划初版写的 7 是错的)。
     """
     bin_dir = str(_paths.BIN_DIR)
     if bin_dir not in _sys.path:
@@ -1807,20 +1807,52 @@ grep -n 'os.environ.get' plugin/minimap.py      # 期望只剩 WOWS_BOT_HOME 那
 
 Expected: `COMPILE_OK`;`sys.path.insert` 计数为 1;`os.environ.get` 只剩 bootstrap 里那一处。
 
-- [ ] **Step 6: 冒烟(nonebot 不在本机也能验的部分)**
+- [ ] **Step 6: 真正 import 本模块并逐项对比常量值(比语法检查强得多)**
+
+**本机可以真 import** —— nonebot 已安装,`nonebot.init()` 之后 `plugin.minimap` 能正常载入
+(实测确认,不需要启动 driver)。所以这一步不是语法检查,而是**把 17 个常量的实际取值与
+改动前的快照逐项比对**。快照已由协调者在改动前采集到 `<TEMP>/minimap_consts_before.json`。
 
 ```bash
 cd /c/Users/29801/Desktop/wows-bot-review
-WOWS_BOT_HOME=/opt/wows-bot python - <<'EOF'
-import ast, pathlib
-src = pathlib.Path("plugin/minimap.py").read_text(encoding="utf-8")
-ast.parse(src)   # 语法与缩进
-print("AST_OK")
+python - <<'EOF'
+import importlib, json, os, sys, tempfile
+os.environ.setdefault("WOWS_CJK_FONT", "C:/Windows/Fonts/msyh.ttc")
+sys.path.insert(0, ".")
+import nonebot; nonebot.init()
+m = importlib.import_module("plugin.minimap")
+
+before = json.load(open(os.path.join(tempfile.gettempdir(), "minimap_consts_before.json"),
+                       encoding="utf-8"))
+bad = []
+for k, want in before.items():
+    got = getattr(m, k, "<MISSING>")
+    got = got if isinstance(want, int) else str(got).replace("\\", "/")
+    if got != want:
+        bad.append(f"  {k}: before {want!r} -> now {got!r}")
+print(f"compared {len(before)} constants")
+print("ALL_CONSTANTS_UNCHANGED" if not bad else "MISMATCH:\n" + "\n".join(bad))
 EOF
 python tests/test_permissions.py
 ```
 
-Expected: `AST_OK` + `== ALL PASS ==`。（`import plugin.minimap` 需要 nonebot 运行环境,留到服务器部署后验。)
+Expected: `ALL_CONSTANTS_UNCHANGED` + `== ALL PASS ==`。
+
+**期望值**(改动前实测,未设 `WOWS_BOT_HOME` 时):`RENDER_SH` = `/opt/wows-bot/minimap/render.sh`;
+`REPORT_FULL_CMD` / `REPORT_BATTLE_CMD` / `REPORT_DAMAGE_CMD` / `REPORT_FULL_LESTA_CMD` /
+`ANALYZE_CMD` / `RENDER_CRIMINALS_PY` / `RENDER_CHAT_PY` 均在 `/opt/wows-bot/report/bin/` 下;
+`REPLAYSHARK_LESTA` = `/opt/wows-bot/report/replayshark-lesta`;
+`WOWS_DATA_DIR` = `/var/lib/wows-data/extracted`;
+`REPORT_CMD` 等于 `REPORT_FULL_CMD`;
+`SHIPS_JSON` / `ARMOR_JSON` 在 `/opt/wows-bot/report/data/` 下;
+`MP4_TIMEOUT` / `PNG_TIMEOUT` / `ANALYZE_TIMEOUT` = `600` / `300` / `120`(**int,不是 str**)。
+
+⚠️ **`BASE_DIR` 最容易出错**:原式是
+`os.path.expanduser(os.environ.get("WOWS_REPLAY_BASEDIR", "~/wows-bot-replay"))` ——
+迁移时若丢掉 `expanduser`,值会变成字面量 `~/wows-bot-replay`,bot 就会在工作目录下建一个
+名叫 `~` 的目录。`paths.REPLAY_BASEDIR` 已经做过 expanduser,直接用即可;快照里它是展开后的
+绝对路径(本机 `C:/Users/29801/wows-bot-replay`),比对会抓住这个错误。
+
 
 - [ ] **Step 7: 提交**
 
@@ -1829,7 +1861,7 @@ git add plugin/minimap.py
 git commit -m "refactor(plugin): minimap.py 常量与 build 解析收进 wowsbot
 
 20 处 os.environ.get 收成 paths 的赋值(名字与类型不变);自写的 _replay_build /
-_available_builds 换 wowsbot.replay;7 处重复的 sys.path.insert 样板收成
+_available_builds 换 wowsbot.replay;9 处重复的 sys.path.insert 样板收成
 _import_report_bin helper。SHIPS_JSON / ARMOR_JSON 不再从命令路径反推。"
 ```
 
