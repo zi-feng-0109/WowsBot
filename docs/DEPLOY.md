@@ -480,3 +480,18 @@ Lesta 协议演进 — 工作量中等偏大,不建议作为本仓库的目标�
 /opt/wows-bot/report/bin/wows_full_report /tmp/x.wowsreplay /tmp/out 2>&1 | tail -50
 /opt/wows-bot/minimap/render.sh /tmp/x.wowsreplay /tmp/x.mp4 2>&1 | tail -50
 ```
+
+## 公共层 `report/lib/wowsbot/`
+
+bot 的 Python 公共层。路径/配置、回放元数据、主题、文本、翻译、结算字段各一个模块。
+
+- **谁在用**:`plugin/*`(nonebot 环境)、`report/bin/*`(venv 环境)、`tools/*`。
+- **怎么被找到**:纯 `sys.path`,不需要 pip install(运行时存在多个 Python 环境,
+  见 `wows_report::find_python`)。`report/bin/*` 与 `tools/*` 用相对路径;
+  `plugin/*` 因为会被 `cp` 到 EssexBot 目录,靠 `WOWS_BOT_HOME`(默认 `/opt/wows-bot`)。
+- **硬约束**:`wowsbot/` 内不 import `nonebot`、不 `subprocess`、不做 PIL 绘图 ——
+  否则三类环境无法共用。CI/收尾验证里有 grep 断言。
+- **env 变量**:全部在 `wowsbot/paths.py` 里集中声明(名字与历史完全兼容)。
+  加新路径请只改那里,不要在别处再写 `os.environ.get`。
+- **注意 `BOT_HOME` 的历史含义冲突**:老代码里它在 `report/bin/*` 指 `report/`、
+  在 `tools/*` 指仓库根。新代码用 `paths.REPO_ROOT` / `paths.REPORT_ROOT`,别再用这个名字。
