@@ -44,31 +44,45 @@ from nonebot.rule import to_me
 from nonebot.adapters.onebot.v11.event import GroupIncreaseNoticeEvent, MessageEvent
 from .version import version_str
 
-RENDER_SH        = os.environ.get("WOWS_RENDER_SH",   "/opt/wows-bot/minimap/render.sh")
-REPORT_FULL_CMD  = os.environ.get("WOWS_REPORT_FULL_CMD",  "/opt/wows-bot/report/bin/wows_full_report")
-REPORT_BATTLE_CMD = os.environ.get("WOWS_REPORT_BATTLE_CMD", "/opt/wows-bot/report/bin/wows_report")
-REPORT_DAMAGE_CMD = os.environ.get("WOWS_REPORT_DAMAGE_CMD", "/opt/wows-bot/report/bin/wows_damage_report")
-RENDER_CRIMINALS_PY = os.environ.get("WOWS_RENDER_CRIMINALS",
-                                      "/opt/wows-bot/report/bin/render_criminals.py")
-RENDER_CHAT_PY = os.environ.get("WOWS_RENDER_CHAT",
-                                 "/opt/wows-bot/report/bin/render_chat.py")
-# Lesta(«Мир кораблей», .korablireplay)分流:normalized 战报管线(战报+复盘拼一张)
-# + 专用 Lesta replayshark(旧 replayshark 无 battle-results/聊天 Lesta 修复)。
-# extracted root 由 replayshark 按回放 build 自动选版本(WG 15.x / Lesta 26.x 共存)。
-REPORT_FULL_LESTA_CMD = os.environ.get("WOWS_REPORT_FULL_LESTA_CMD",
-                                        "/opt/wows-bot/report/bin/wows_full_report_normalized")
-REPLAYSHARK_LESTA = os.environ.get("WOWS_REPLAYSHARK_LESTA",
-                                    "/opt/wows-bot/report/replayshark-lesta")
-WOWS_DATA_DIR = os.environ.get("WOWS_DATA_DIR", "/var/lib/wows-data/extracted")
-# 旧 alias 暂留兼容(.env 里可能还有);后续清理
-REPORT_CMD       = os.environ.get("WOWS_REPORT_CMD", REPORT_FULL_CMD)
-ANALYZE_CMD      = os.environ.get("WOWS_ANALYZE_CMD", "/opt/wows-bot/report/bin/wows_analyze")
-BASE_DIR         = os.path.expanduser(os.environ.get("WOWS_REPLAY_BASEDIR", "~/wows-bot-replay"))
-# /船 战舰数值卡:ships.json 跟 render_ship.py 都在 report 包里 (subprocess/import 现拉)
-SHIPS_JSON       = os.environ.get("WOWS_SHIPS_JSON",
-                                  str(Path(REPORT_FULL_CMD).parent.parent / "data" / "ships.json"))
-ARMOR_JSON       = os.environ.get("WOWS_ARMOR_JSON",
-                                  str(Path(SHIPS_JSON).parent / "armor.json"))
+# plugin/* 会被 cp 到 EssexBot 目录部署,Path(__file__) 在那边找不到仓库,
+# 所以走 WOWS_BOT_HOME env 定位 report/lib(默认 /opt/wows-bot,跟部署文档一致)。
+import os as _os
+import sys as _sys
+_LIB = _os.path.join(_os.environ.get("WOWS_BOT_HOME", "/opt/wows-bot"), "report", "lib")
+if _LIB not in _sys.path:
+    _sys.path.insert(0, _LIB)
+from wowsbot import paths as _paths, replay as _replay   # noqa: E402
+
+RENDER_SH             = _paths.RENDER_SH
+REPORT_FULL_CMD       = _paths.REPORT_FULL_CMD
+REPORT_BATTLE_CMD     = _paths.REPORT_BATTLE_CMD
+REPORT_DAMAGE_CMD     = _paths.REPORT_DAMAGE_CMD
+RENDER_CRIMINALS_PY   = _paths.RENDER_CRIMINALS_PY
+RENDER_CHAT_PY        = _paths.RENDER_CHAT_PY
+REPORT_FULL_LESTA_CMD = _paths.REPORT_FULL_LESTA_CMD
+REPLAYSHARK_LESTA     = _paths.REPLAYSHARK_LESTA
+WOWS_DATA_DIR         = _paths.EXTRACTED_ROOT
+REPORT_CMD            = _paths.REPORT_CMD
+ANALYZE_CMD           = _paths.ANALYZE_CMD
+BASE_DIR              = _paths.REPLAY_BASEDIR
+SHIPS_JSON            = _paths.SHIPS_JSON
+ARMOR_JSON            = _paths.ARMOR_JSON
+MP4_TIMEOUT           = _paths.MP4_TIMEOUT
+PNG_TIMEOUT           = _paths.PNG_TIMEOUT
+ANALYZE_TIMEOUT       = _paths.ANALYZE_TIMEOUT
+
+
+def _import_report_bin(module: str):
+    """import report/bin 下的渲染模块(它们不是包,靠 sys.path 找)。
+
+    重构前这段 3 行样板在本文件里重复了 9 次(实测计数,计划初版写的 7 是错的)。
+    """
+    bin_dir = str(_paths.BIN_DIR)
+    if bin_dir not in _sys.path:
+        _sys.path.insert(0, bin_dir)
+    return __import__(module)
+
+
 _armor_data = None  # 懒加载缓存:index -> {hull, turrets}
 
 
@@ -83,10 +97,6 @@ def _armor_for(index: str):
             _armor_data = {}
     return _armor_data.get(index)
 
-
-MP4_TIMEOUT      = int(os.environ.get("WOWS_MP4_TIMEOUT", "600"))
-PNG_TIMEOUT      = int(os.environ.get("WOWS_PNG_TIMEOUT", "300"))
-ANALYZE_TIMEOUT  = int(os.environ.get("WOWS_ANALYZE_TIMEOUT", "120"))
 
 # 战报 / 战犯 数据免责声明 —— 回放只含玩家个人视野内的数据,视野外不下发
 _DATA_DISCLAIMER = "由于 WG 不下发个人视野之外的数据,本数据仅供参考。"
@@ -138,47 +148,6 @@ def friendly_error(raw: str) -> str:
         )
     return text
 
-def _replay_build(replay_path: str) -> Optional[int]:
-    """读 replay 头部 meta 的 clientVersionFromExe,取 build 号。读不出返回 None。
-
-    文件头布局:u32 magic | u32 blockCount | u32 meta_len | UTF-8 JSON meta。
-    WG 与 Lesta(.korablireplay)同一布局。"""
-    try:
-        with open(replay_path, "rb") as f:
-            head = f.read(12)
-            if len(head) < 12:
-                return None
-            meta_len = int.from_bytes(head[8:12], "little")
-            if not 0 < meta_len <= 5 * 1024 * 1024:
-                return None
-            meta = json.loads(f.read(meta_len).decode("utf-8", errors="ignore"))
-    except Exception:
-        return None
-    parts = str(meta.get("clientVersionFromExe", "")).split(",")
-    if len(parts) < 4:
-        return None
-    try:
-        return int(parts[3].strip())
-    except ValueError:
-        return None
-
-
-def _available_builds() -> set:
-    """扫 extracted 根目录下的 <ver>_<build>/ 子目录,收集可用 build 号。
-
-    读不到目录时返回空集合 —— 调用方据此跳过前置检查(宁可让渲染器自己报错,
-    也不要因为目录一时读不到就把所有回放都拦下来)。"""
-    builds = set()
-    try:
-        for name in os.listdir(WOWS_DATA_DIR):
-            m = re.match(r"^\d+(?:\.\d+)+_(\d+)$", name)
-            if m and os.path.isdir(os.path.join(WOWS_DATA_DIR, name)):
-                builds.add(int(m.group(1)))
-    except OSError:
-        return set()
-    return builds
-
-
 def unsupported_build_notice(replay_path: str) -> Optional[str]:
     """渲染前的前置检查:这个 build 的离线数据在不在?
 
@@ -186,10 +155,10 @@ def unsupported_build_notice(replay_path: str) -> Optional[str]:
     一条人话提示,而不是 MP4/战报/聊天各报一次 Rust 堆栈,也省掉几次注定失败的渲染。
     返回 None = 数据齐备或无法判断(照常渲染,让渲染器自己决定)。
     """
-    build = _replay_build(replay_path)
+    build = _replay.build_of(replay_path)
     if build is None:
         return None
-    avail = _available_builds()
+    avail = _replay.available_builds(WOWS_DATA_DIR)
     if not avail or build in avail:
         return None
     newer_than_all = build > max(avail)
@@ -384,11 +353,7 @@ async def _reply_menu(bot: Bot, event):
 def _render_menu_sync(out_path, scope, ident, state, is_super, version, guess_enabled=None):
     """sync wrapper 给 to_thread 用 — render_menu 没有 async 接口。"""
     # 在 thread 里 import,避免插件加载阶段就拉 render_menu 的依赖链
-    import sys as _sys
-    bin_path = Path(REPORT_FULL_CMD).parent  # /opt/wows-bot/report/bin
-    if str(bin_path) not in _sys.path:
-        _sys.path.insert(0, str(bin_path))
-    from render_menu import render_menu_png
+    render_menu_png = _import_report_bin("render_menu").render_menu_png
     render_menu_png(
         out_path, scope=scope, ident=ident,
         state_snapshot=state, is_super=is_super, version=version,
@@ -555,11 +520,7 @@ async def _user_stats(bot: Bot, event: MessageEvent):
 def _render_user_stats_sync(out_path: str, total_users: int,
                              total_calls: int, top: list):
     """thread wrapper — render_user_stats 没 async 接口。"""
-    import sys as _sys
-    bin_path = str(Path(REPORT_FULL_CMD).parent)
-    if bin_path not in _sys.path:
-        _sys.path.insert(0, bin_path)
-    from render_user_stats import render_user_stats_png
+    render_user_stats_png = _import_report_bin("render_user_stats").render_user_stats_png
     render_user_stats_png(out_path, total_users=total_users,
                           total_calls=total_calls, top=top)
 
@@ -638,11 +599,7 @@ async def _query(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
 
 def _render_query_sync(out_path: str, player: dict, pvp, realm):
     """thread wrapper — render_query 没 async 接口。"""
-    import sys as _sys
-    bin_path = str(Path(REPORT_FULL_CMD).parent)
-    if bin_path not in _sys.path:
-        _sys.path.insert(0, bin_path)
-    from render_query import render_query_png
+    render_query_png = _import_report_bin("render_query").render_query_png
     render_query_png(out_path, player=player, pvp=pvp, realm=realm)
 
 
@@ -705,21 +662,13 @@ async def _ship(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
 
 def _render_ship_sync(out_path: str, ship: dict):
     """thread wrapper — render_ship 没 async 接口。"""
-    import sys as _sys
-    bin_path = str(Path(REPORT_FULL_CMD).parent)
-    if bin_path not in _sys.path:
-        _sys.path.insert(0, bin_path)
-    from render_ship import render_ship_png
+    render_ship_png = _import_report_bin("render_ship").render_ship_png
     render_ship_png(out_path, ship=ship)
 
 
 def _render_armor_sync(out_path: str, ship: dict, armor: dict):
     """thread wrapper — render_armor 没 async 接口。"""
-    import sys as _sys
-    bin_path = str(Path(REPORT_FULL_CMD).parent)
-    if bin_path not in _sys.path:
-        _sys.path.insert(0, bin_path)
-    from render_armor import render_armor_png
+    render_armor_png = _import_report_bin("render_armor").render_armor_png
     render_armor_png(out_path, ship=ship, armor=armor)
 
 
@@ -768,15 +717,11 @@ async def _pen(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
 
 def _render_pen_sync(out_path: str, target: dict, armor: dict):
     """thread wrapper。需要把 ships.json 里所有 ap_ballistic 一起传(典型弹拟合用)。"""
-    import sys as _sys
-    bin_path = str(Path(REPORT_FULL_CMD).parent)
-    if bin_path not in _sys.path:
-        _sys.path.insert(0, bin_path)
     import json
     ships_data = json.loads(Path(SHIPS_JSON).read_text("utf-8")).get("ships") or {}
     all_ap = [s.get("ap_ballistic") for s in ships_data.values()
               if s.get("ap_ballistic")]
-    from render_pen import render_armor_analysis_png
+    render_armor_analysis_png = _import_report_bin("render_pen").render_armor_analysis_png
     render_armor_analysis_png(out_path, target=target, armor=armor,
                               all_ap_shells=all_ap)
 
@@ -827,11 +772,7 @@ async def _line(bot: Bot, event: MessageEvent, args: Message = CommandArg()):
 
 def _render_line_sync(out_path: str, tree: dict):
     """thread wrapper — render_line 没 async 接口。"""
-    import sys as _sys
-    bin_path = str(Path(REPORT_FULL_CMD).parent)
-    if bin_path not in _sys.path:
-        _sys.path.insert(0, bin_path)
-    from render_line import render_line_png
+    render_line_png = _import_report_bin("render_line").render_line_png
     render_line_png(out_path, tree)
 
 
@@ -887,11 +828,7 @@ async def _online(bot: Bot, event: MessageEvent):
 
 def _render_online_sync(out_path: str, rows: list, note: str):
     """thread wrapper — render_online 没 async 接口。"""
-    import sys as _sys
-    bin_path = str(Path(REPORT_FULL_CMD).parent)  # /opt/wows-bot/report/bin
-    if bin_path not in _sys.path:
-        _sys.path.insert(0, bin_path)
-    from render_online import render_online_png
+    render_online_png = _import_report_bin("render_online").render_online_png
     render_online_png(out_path, rows=rows, note=note)
 
 
@@ -1393,14 +1330,9 @@ def _build_indexed_players(json_path: str) -> tuple[dict, list]:
 
     # 尝试翻译船名 + 拿 server-authoritative damage 排序 (跟战报 # 列对齐)
     try:
-        import sys as _sys
-        rb_path = str(Path(REPORT_FULL_CMD).parent)
-        if rb_path not in _sys.path:
-            _sys.path.insert(0, rb_path)
-        from render_battle_report import (
-            t as _t, load_translations as _load_translations,
-            clean_ship_name as _clean, result_field as _rf,
-        )
+        from wowsbot.i18n import load_translations as _load_translations, t as _t
+        from wowsbot.results import result_field as _rf
+        from wowsbot.text import clean_ship_name as _clean
         _load_translations()
         def _ship_zh(sp): return _t(f"IDS_{sp.get('index','')}", _clean(sp.get('name', '')))
         def _sort_dmg(p):
