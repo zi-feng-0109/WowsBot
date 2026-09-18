@@ -15,18 +15,17 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 import render_battle_report as rb  # noqa: E402
 import render_damage_chart as dc  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
+from wowsbot.i18n import load_translations                                  # noqa: E402
+from wowsbot.theme import (                                                 # noqa: E402
+    CJK_FONT, GAME_BG, GAME_BORDER, GAME_DIM, GAME_GOLD, GAME_PANEL, GAME_TEXT, MONO_FONT,
+)
 
 W = 2200
 PAD = 24
-GAME_BG = rb.GAME_BG
-GAME_PANEL = rb.GAME_PANEL
-GAME_TEXT = rb.GAME_TEXT
-GAME_DIM = rb.GAME_DIM
-GAME_GOLD = rb.GAME_GOLD
-GAME_BORDER = rb.GAME_BORDER
 
 # Rust DamageStatWeapon kind -> (donut label, palette key).
 _KIND = {
@@ -125,7 +124,7 @@ def _center_num(draw, value, cx, cy, font):
 
 
 def render(json_path: str, out_path: str):
-    rb.load_translations()
+    load_translations()
     raw = json.load(open(json_path, encoding="utf-8"))
     selfp = next((p for p in raw["players"] if p.get("is_self")), None)
     if selfp is None:
@@ -136,8 +135,8 @@ def render(json_path: str, out_path: str):
     total = sum(v for _, _, v in slices)
     ribbons = _collapse_ribbons(selfp.get("ribbons") or [])
 
-    f = lambda s: rb.font(rb.CJK_FONT, s)
-    fm = lambda s: rb.font(rb.MONO_FONT, s)
+    f = lambda s: rb.font(CJK_FONT, s)
+    fm = lambda s: rb.font(MONO_FONT, s)
     f_h1, f_h2, f_h3, f_lab, f_num, f_small = f(30), f(22), f(17), f(18), fm(18), f(14)
 
     # Layout heights (ribbon grid mirrors the legacy render_damage_chart).

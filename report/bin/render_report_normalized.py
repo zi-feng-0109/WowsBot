@@ -29,13 +29,15 @@ from pathlib import Path
 os.environ["WOWS_NO_POTENTIAL_FALLBACK"] = "1"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 import render_battle_report as rb  # noqa: E402
+from wowsbot.i18n import DEATH_CAUSE_CN, MATCH_GROUP_CN, load_translations  # noqa: E402
 
 # The new schema emits Rust `DeathCause` enum variant names, some of which differ
 # from the legacy server-result cause strings the shared map keys on. Extend the
 # shared map with the enum names (unknown/Lesta-only ones like `Fel` are left
 # untranslated rather than guessed).
-rb.DEATH_CAUSE_CN.update({
+DEATH_CAUSE_CN.update({
     "Artillery": "主炮",
     "Secondaries": "副炮",
     "Ramming": "撞击",
@@ -166,7 +168,7 @@ def load_normalized(json_path: str) -> "rb.MatchReport":
     deaths.sort(key=lambda x: x[0])
 
     group = m.get("match_group", "?")
-    mode = f"{rb.MATCH_GROUP_CN.get(group, group)}·{m.get('game_mode', '?')}"
+    mode = f"{MATCH_GROUP_CN.get(group, group)}·{m.get('game_mode', '?')}"
 
     return rb.MatchReport(
         map_name=m.get("map", "?"),
@@ -185,7 +187,7 @@ def load_normalized(json_path: str) -> "rb.MatchReport":
 
 
 def main(json_path: str, out_png: str):
-    rb.load_translations()
+    load_translations()
     report = load_normalized(json_path)
     rb.render(report, out_png)
     print(out_png)
