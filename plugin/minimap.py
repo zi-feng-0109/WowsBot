@@ -134,18 +134,12 @@ def friendly_error(raw: str) -> str:
     text = str(raw)
     if any(k in text for k in _ERR_NO_DATA_MARKERS):
         build = _extract_build(text)
-        ver = "(build %s)" % build if build else ""
-        return (
-            "这局回放是游戏新版本" + ver + "录的,机器人还没更新对应的游戏数据,暂时渲染不了。\n"
-            "这不是你的问题 —— 每次游戏大版本更新后,管理员都要手动把新版数据传到服务器。\n"
-            "请等管理员更新(通常一两天内),之后重发这个回放就能正常出图。\n"
-            "旧版本的回放不受影响,可以照常上传。"
-        )
+        which = "build %s" % build if build else "该版本"
+        return ("服务器缺少 %s 的游戏数据,无法解析这局回放。\n"
+                "需管理员补充该版本数据;其他版本回放不受影响。" % which)
     if any(k in text for k in _ERR_NO_CONSTANTS_MARKERS):
-        return (
-            "这局回放的游戏版本太新,配套数据表(上游还没发布)缺失,暂时渲染不了。\n"
-            "这不是你的问题,等上游发布后管理员刷新一次即可。旧版本回放不受影响。"
-        )
+        return ("该版本的配套数据表尚未发布,无法解析这局回放。\n"
+                "需等上游发布后由管理员刷新;其他版本回放不受影响。")
     return text
 
 def unsupported_build_notice(replay_path: str) -> Optional[str]:
@@ -161,18 +155,15 @@ def unsupported_build_notice(replay_path: str) -> Optional[str]:
     avail = _replay.available_builds(WOWS_DATA_DIR)
     if not avail or build in avail:
         return None
-    newer_than_all = build > max(avail)
-    if newer_than_all:
-        return (
-            "这局回放是游戏新版本(build %s)录的,机器人还没更新对应的游戏数据,暂时渲染不了。" % build + "\n"
-            "这不是你的问题 —— 每次游戏大版本更新后,管理员都要手动把新版数据传到服务器。\n"
-            "请等管理员更新(通常一两天内),之后重发这个回放就能正常出图。\n"
-            "旧版本的回放不受影响,可以照常上传。"
-        )
-    return (
-        "这局回放的游戏版本(build %s)太旧,机器人已经没有对应的游戏数据了,渲染不了。" % build + "\n"
-        "请上传最近版本的回放。"
-    )
+    # 带上版本号:同一个"build 比我们都新"既可能是正式服新版本,也可能是公开测试服或
+    # 国服(独立 build 体系),版本号能让管理员一眼分辨 —— 所以措辞不承诺"等更新就好"。
+    ver = _replay.version_of(replay_path)
+    tag = "%s / build %s" % (ver, build) if ver != "0.0.0" else "build %s" % build
+    if build > max(avail):
+        return ("暂不支持该版本(%s):服务器缺少对应的游戏数据。\n"
+                "其他版本回放不受影响。" % tag)
+    return ("暂不支持该版本(%s):服务器已无对应的游戏数据。\n"
+            "请上传较新版本的回放。" % tag)
 
 replay_handler = on_message(priority=5, block=False)
 
