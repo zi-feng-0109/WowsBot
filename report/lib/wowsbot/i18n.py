@@ -22,7 +22,8 @@ def load_translations(mo_path: str = None):
     global _TRANSLATIONS
     if _TRANSLATIONS:
         return
-    path = mo_path or paths.TRANSLATIONS_MO
+    # 用 is None 而不是 `or` —— 传空串时两者行为不同(paths.py 顶部有同款说明)
+    path = paths.TRANSLATIONS_MO if mo_path is None else mo_path
     try:
         import polib
         mo = polib.mofile(path)

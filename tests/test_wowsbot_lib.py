@@ -32,13 +32,20 @@ def test_theme_palette_values_unchanged():
 
 
 def test_theme_font_env_override_wins():
+    """WOWS_CJK_FONT 覆盖内置候选链。
+
+    注意 reload 顺序:env 由 paths 采样(paths.CJK_FONT_OVERRIDE),theme 只是把它当作
+    候选链的第一项。所以要先 reload paths 再 reload theme —— 只 reload theme 会拿到
+    paths 里的旧值。实际进程里两者都在启动时 import 一次,没有这个问题。
+    """
     import importlib
-    from wowsbot import theme
+    from wowsbot import paths, theme
     saved = os.environ.get("WOWS_CJK_FONT")
     # 用一个确实存在的文件当字体路径(内容不重要,theme 只做存在性检查)
     probe = str(ROOT / "README.md") if (ROOT / "README.md").is_file() else __file__
     os.environ["WOWS_CJK_FONT"] = probe
     try:
+        importlib.reload(paths)
         t = importlib.reload(theme)
         assert t.CJK_FONT == probe, t.CJK_FONT
         # MONO 未设时回落到 CJK
@@ -48,6 +55,7 @@ def test_theme_font_env_override_wins():
             os.environ.pop("WOWS_CJK_FONT", None)
         else:
             os.environ["WOWS_CJK_FONT"] = saved
+        importlib.reload(paths)
         importlib.reload(theme)
     print("  test_theme_font_env_override_wins PASS")
 

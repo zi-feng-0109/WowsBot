@@ -20,7 +20,8 @@ def load_result_indices(path: str = None):
     if _RESULT_INDICES:
         return
     try:
-        c = json.load(open(path or paths.CONSTANTS_JSON))
+        # 用 is None 而不是 `or` —— 传空串时两者行为不同
+        c = json.load(open(paths.CONSTANTS_JSON if path is None else path))
         _RESULT_INDICES = {k: int(v) for k, v in c.get("CLIENT_PUBLIC_RESULTS_INDICES", {}).items()}
     except Exception as e:
         print(f"warn: failed to load constants: {e}", file=sys.stderr)

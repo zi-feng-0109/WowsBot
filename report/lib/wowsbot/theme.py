@@ -5,20 +5,25 @@
 
 不 import PIL:font(path, size)(ImageFont.truetype 的两行包装)留在渲染器里,
 以保住"三类 Python 环境都能 import 这个包"的硬约束。
+
+env 覆盖(WOWS_CJK_FONT / WOWS_MONO_FONT)从 paths 取,不在这里直接读 os.environ ——
+paths 是全部 env 的唯一声明处。查找链本身留在这里,因为它要逐个探测文件是否存在。
 """
 import os
+
+from . import paths
 
 # Fonts: per-OS lookup with env-var override (CJK + monospace required).
 # On Linux, install fonts-noto-cjk + fonts-dejavu (or set WOWS_CJK_FONT).
 _CJK_CANDIDATES = [
-    os.environ.get("WOWS_CJK_FONT"),
+    paths.CJK_FONT_OVERRIDE,
     "/System/Library/Fonts/Hiragino Sans GB.ttc",                  # macOS
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",      # Debian/Ubuntu (Noto)
     "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",    # Fedora
     "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",                # WenQuanYi fallback
 ]
 _MONO_CANDIDATES = [
-    os.environ.get("WOWS_MONO_FONT"),
+    paths.MONO_FONT_OVERRIDE,
     "/System/Library/Fonts/Menlo.ttc",                             # macOS
     "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",         # Debian/Ubuntu
     "/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf",  # Fedora

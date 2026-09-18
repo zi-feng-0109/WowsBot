@@ -16,13 +16,9 @@ import os as _os
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 from wowsbot import paths as _paths                                    # noqa: E402
 from wowsbot.i18n import (                                             # noqa: E402
-    DEATH_CAUSE_CN, MATCH_GROUP_CN, SPECIES_SHORT, load_translations, t,
+    DEATH_CAUSE_CN, MATCH_GROUP_CN, SPECIES_SHORT, t,
 )
-# load_result_indices / load_translations 在本文件里已无直接调用(result_field 与 t
-# 内部自会按需加载),但 render_criminals / render_consumables_chart / 以及
-# render_report_normalized 的 rb.load_translations 仍靠本模块的属性访问它们 ——
-# 等 Task 6/7 把那些脚本改为直接从 wowsbot 取之后,这两个 import 才可以删。
-from wowsbot.results import load_result_indices, result_field          # noqa: E402
+from wowsbot.results import result_field                              # noqa: E402
 from wowsbot.text import (                                             # noqa: E402
     clean_ship_name, fmt_time, relation_name, strip_id, strip_known,
 )

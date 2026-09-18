@@ -28,16 +28,13 @@ REPO_ROOT = Path(os.environ.get("WOWS_BOT_HOME", str(_SELF_REPO)))
 REPORT_ROOT = REPO_ROOT / "report"      # 旧代码里 report/bin/* 的 "BOT_HOME"
 BIN_DIR = REPORT_ROOT / "bin"
 DATA_DIR = REPORT_ROOT / "data"
-LIB_DIR = REPORT_ROOT / "lib"
+# 注意:没有 LIB_DIR —— bootstrap 要在 import paths 之前就把 lib 加进 sys.path,
+# 存在鸡生蛋问题,所以各 consumer 自己拼这段路径,这里声明了也没人能用。
 
 # ---------- 二进制 ----------
 REPLAYSHARK = os.environ.get("WOWS_REPLAYSHARK", str(REPORT_ROOT / "replayshark"))
 REPLAYSHARK_LESTA = os.environ.get("WOWS_REPLAYSHARK_LESTA",
                                    str(REPORT_ROOT / "replayshark-lesta"))
-# 小地图二进制由 minimap/render.sh 自己按 WOWS_TOOLKIT_BIN 找;这里声明同样的默认值
-# 供需要引用它的 consumer 复用。
-TOOLKIT_BIN = os.environ.get("WOWS_TOOLKIT_BIN",
-                             "/opt/wows-toolkit/target/release/minimap_renderer")
 RENDER_SH = os.environ.get("WOWS_RENDER_SH", str(REPO_ROOT / "minimap" / "render.sh"))
 
 # ---------- 目录 ----------
@@ -84,10 +81,18 @@ ACHIEVEMENT_ICON_DIR = os.environ.get("WOWS_ACHIEVEMENT_ICONS",
 TRANSLATIONS_MO = os.environ.get("WOWS_TRANSLATIONS_MO", str(DATA_DIR / "zh_sg.mo"))
 UPGRADE_ICON_DIR = str(DATA_DIR / "upgrade_icons")
 SKILL_ICON_DIR = str(DATA_DIR / "skill_icons")
-RIBBON_ICON_DIR = str(DATA_DIR / "ribbon_icons")
+# 勋带图标目录:render_damage_chart.py 读的是 WOWS_RIBBON_ICONS,这里保持同一个 env 名,
+# 免得将来谁把它改成从本表取值时,把那个 override 悄悄弄丢。
+RIBBON_ICON_DIR = os.environ.get("WOWS_RIBBON_ICONS", str(DATA_DIR / "ribbon_icons"))
 SHIP_ICON_DIR = str(DATA_DIR / "ship_icons")
 # tools/build_ships_json.py 要读的 GameParams(在 specs 里,不在 data 里)
 GAME_PARAMS_DATA = str(Path(SPECS_DIR) / "content" / "GameParams.data")
+
+# ---------- 字体 ----------
+# 查找链在 theme.py 里(它要按 OS 逐个探测文件是否存在),这里只负责"env 覆盖"这一层,
+# 好让本表确实是所有 env 的唯一入口。未设时为 None,theme 会继续往后试内置候选。
+CJK_FONT_OVERRIDE = os.environ.get("WOWS_CJK_FONT")
+MONO_FONT_OVERRIDE = os.environ.get("WOWS_MONO_FONT")
 
 # ---------- 超时(秒) ----------
 MP4_TIMEOUT = int(os.environ.get("WOWS_MP4_TIMEOUT", "600"))

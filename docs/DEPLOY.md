@@ -334,6 +334,13 @@ ships.json + ship_icons/ 生成好提交进仓库后,生产端 `git pull` 即可
 如果你没按 `/opt/wows-bot` 默认布局,启动 nb 前 export:
 
 ```bash
+# ★ 这一条必须设,而且要最先设 —— 插件靠它找到公共层 report/lib/wowsbot,
+#   也靠它定位 report/bin 下那些以 import 方式调用的渲染模块
+#   (/菜单 /查询 /船 /船装甲 /穿深 /线 /在线 /用户统计 这 8 项)。
+#   不设的话:插件 import 阶段就 ModuleNotFoundError: No module named 'wowsbot';
+#   即便手动补上 lib 路径,那 8 项也会去 /opt/wows-bot/report/bin 找而不是你的实际目录。
+export WOWS_BOT_HOME=/your/path
+
 export WOWS_RENDER_SH=/your/path/minimap/render.sh
 export WOWS_REPORT_FULL_CMD=/your/path/report/bin/wows_full_report     # 战报+复盘合并 PNG
 export WOWS_REPORT_BATTLE_CMD=/your/path/report/bin/wows_report        # 仅战报 PNG
@@ -490,8 +497,11 @@ bot 的 Python 公共层。路径/配置、回放元数据、主题、文本、�
   见 `wows_report::find_python`)。`report/bin/*` 与 `tools/*` 用相对路径;
   `plugin/*` 因为会被 `cp` 到 EssexBot 目录,靠 `WOWS_BOT_HOME`(默认 `/opt/wows-bot`)。
 - **硬约束**:`wowsbot/` 内不 import `nonebot`、不 `subprocess`、不做 PIL 绘图 ——
-  否则三类环境无法共用。CI/收尾验证里有 grep 断言。
+  否则三类环境无法共用。守卫是 `tests/test_wowsbot_purity.py`,用 **ast** 看真实 import
+  (**不要用 grep 查源码文本** —— docstring 里会提到这些词,会被误判成违规)。
 - **env 变量**:全部在 `wowsbot/paths.py` 里集中声明(名字与历史完全兼容)。
   加新路径请只改那里,不要在别处再写 `os.environ.get`。
 - **注意 `BOT_HOME` 的历史含义冲突**:老代码里它在 `report/bin/*` 指 `report/`、
-  在 `tools/*` 指仓库根。新代码用 `paths.REPO_ROOT` / `paths.REPORT_ROOT`,别再用这个名字。
+  在 `tools/*` 指仓库根。新代码用 `paths.REPO_ROOT` / `paths.REPORT_ROOT` 表达这两个含义。
+  (`report/bin/*` 里仍保留 `BOT_HOME = paths.REPORT_ROOT` 这个局部别名,只为避免改动函数体;
+  新写代码不要再引入这个名字。)
