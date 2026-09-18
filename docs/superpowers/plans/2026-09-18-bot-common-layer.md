@@ -2131,10 +2131,21 @@ sudo cp /opt/wows-bot/plugin/*.py ~zifeng/桌面/bot/EssexBot/src/plugins/
 
 ## 完成标准
 
-1. `report/lib/wowsbot/` 下 6 个模块各自单一职责,grep 断言无禁止依赖。
-2. `grep -rn 'from render_battle_report import' report/ plugin/` 为空;两个 `rb.` 脚本只剩渲染器符号。
-3. 6 个测试文件全绿(3 个原有 + 3 个新增)。
-4. 渲染图 sha256 与 Task 0 基线**逐字节一致**。
-5. `plugin/minimap.py` 里 `sys.path.insert` 只剩 1 处、`os.environ.get` 只剩 1 处。
-6. `tools/build_builds_json.py --help` 的默认路径带 `report/`。
+(执行过程中修正过三条 —— 原写法与实际不符,已按实测更新。)
+
+1. `report/lib/wowsbot/` 下 6 个模块各自单一职责;依赖纯净性由
+   `tests/test_wowsbot_purity.py` 用 **ast** 守卫(不是 grep 源码文本,见「关键背景 6」)。
+2. `grep -rn 'from render_battle_report import' report/ plugin/` 为空;两个 `rb.` 脚本
+   只剩渲染器符号(`rb.render` `rb.load` `rb.MatchReport` `rb.PlayerStats` `rb.font`
+   `rb.load_achievements` `rb._ACH_ID_TO_INDEX`)。
+3. **7 个**测试文件全绿:原有 3 个(`test_permissions` / `test_render_menu` /
+   `test_render_armor`)+ 新增 4 个(`test_wowsbot_paths` / `test_wowsbot_replay` /
+   `test_wowsbot_lib` / `test_wowsbot_purity`)。
+4. 渲染 fixture 的**正文哈希**(裁掉底部 48px)与 Task 0 基线逐字节一致;
+   另有 footer 覆盖检查(`FOOTER_THEME_OK`)证明 footer 仍在用 theme 常量。
+5. `plugin/minimap.py` 里 `_sys.path.insert` 剩 **2 处**(模块 bootstrap + `_import_report_bin`
+   helper 内部各一;原为 9 处内联样板);`os.environ.get` 剩 **4 处** —— bootstrap 的
+   `WOWS_BOT_HOME`,加上有意保留的 `GUESS_TOGGLE_FILE` 与两处 `WOWS_PYTHON`(见「关键背景 9」)。
+6. `tools/` 四个脚本的默认路径都带 `report/`,且与 `paths.*` 逐项相等
+   (生产状态下实测为 `/opt/wows-bot/report/...`)。
 7. `.env` 未做任何改动。
