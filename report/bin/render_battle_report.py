@@ -4,7 +4,6 @@ Usage:
     python render_battle_report.py <battle_report.json> <out.png>
 """
 import json
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,10 +18,13 @@ from wowsbot import paths as _paths                                    # noqa: E
 from wowsbot.i18n import (                                             # noqa: E402
     DEATH_CAUSE_CN, MATCH_GROUP_CN, SPECIES_SHORT, load_translations, t,
 )
+# load_result_indices / load_translations 在本文件里已无直接调用(result_field 与 t
+# 内部自会按需加载),但 render_criminals / render_consumables_chart / 以及
+# render_report_normalized 的 rb.load_translations 仍靠本模块的属性访问它们 ——
+# 等 Task 6/7 把那些脚本改为直接从 wowsbot 取之后,这两个 import 才可以删。
 from wowsbot.results import load_result_indices, result_field          # noqa: E402
 from wowsbot.text import (                                             # noqa: E402
-    clean_ship_name, fmt_time, ID_RE, KNOWN_RE, RELATION_RE,
-    relation_name, strip_id, strip_known,
+    clean_ship_name, fmt_time, relation_name, strip_id, strip_known,
 )
 from wowsbot.theme import (                                            # noqa: E402
     CJK_FONT, GAME_BG, GAME_BORDER, GAME_DIM, GAME_GOLD, GAME_GREEN,
