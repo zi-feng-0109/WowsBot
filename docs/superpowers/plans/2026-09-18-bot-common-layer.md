@@ -37,7 +37,22 @@
 
 必须用 `os.environ.get(name, default)`,**不要**写 `os.environ.get(name) or default` —— 前者在 env 设为空串时返回空串,后者返回默认值。
 
-### 5. 两种 import 形式都要处理
+### 5. footer 里有分钟级时间戳 —— sha256 比对必须跳过 footer
+
+`render_battle_report.py::_draw_footer` 画了 `datetime.now().strftime("%Y-%m-%d %H:%M")`,
+所以**隔一分钟渲染同一份输入,PNG 的 sha256 就不同**。Task 0 执行时实测踩到:两次紧挨着
+渲染哈希相同(同一分钟),隔几分钟再渲就变了。
+
+已严格验证差异只来自 footer:两次相隔数分钟的渲染,各裁掉底部 48px 后**正文逐字节一致**,
+仅 footer 区不同;而 `datetime` 在三个渲染器里**只出现在 footer**
+(`render_battle_report.py` 第 858/869 行),所以关掉 footer 后整图完全确定。
+
+因此**所有 fixture 渲染统一走 `tools/p2_render_fixtures.sh`**,它固定
+`WOWS_SKIP_FOOTER=1` + 字体 + `WOWS_BOT_VERSION`。基线与后续每次检查必须用**完全相同的
+调用**,抄多份命令必然漂移 —— 这是脚本存在的理由,不是风格偏好。
+该脚本是重构期脚手架,Task 11 删除。
+
+### 6. 两种 import 形式都要处理
 
 - 6 个脚本用 `from render_battle_report import (...)` —— 全部改为从 `wowsbot` 取。
 - 2 个脚本用 `import render_battle_report as rb`(`render_report_normalized.py` / `render_review_normalized.py`),它们既取 theme 常量/标签表(要改),又用 `rb.render` `rb.load` `rb.MatchReport` `rb.PlayerStats` `rb.font` `rb.load_achievements` `rb._ACH_ID_TO_INDEX`(**合法保留,不动**)。
@@ -105,30 +120,42 @@ grep -nE 'WOWS_(DATA_DIR|EXTRACTED_ROOT|SPECS_DIR|SPECS_PATCHED_ROOT|REPLAYSHARK
 
 Expected: 列出生产实际设置。**判据:若 `WOWS_DATA_DIR` 与 `WOWS_EXTRACTED_ROOT` 同时出现且值不同,停下来找用户确认**(合并优先级会改变其中一方行为)。只出现一个或都没有 → 安全。把输出贴进执行记录。
 
-- [ ] **Step 3: 跑基线渲染**
+- [ ] **Step 3: 产出 fixture 输入 JSON**
 
 ```bash
 cd /c/Users/29801/Desktop/wows-bot-review
-export WOWS_CJK_FONT=C:/Windows/Fonts/msyh.ttc
-export WOWS_MONO_FONT=C:/Windows/Fonts/consola.ttf
+T="$(python -c 'import tempfile;print(tempfile.gettempdir())')"
+mkdir -p "$T/p2_baseline"
 RS=/c/Users/29801/Desktop/minimap/wows-toolkit/target/release/replayshark.exe
 EX=/c/Users/29801/Desktop/minimap/wows-toolkit/extracted
-REPLAY="$(cat /tmp/p2_baseline/replay.txt)"
-"$RS" -e "$EX" battle-results --format normalized --allow-approximate-constants \
-  --out-file /tmp/p2_baseline/report.json "$REPLAY"
-python report/bin/render_report_normalized.py /tmp/p2_baseline/report.json /tmp/p2_baseline/report.png
-python report/bin/render_review_normalized.py /tmp/p2_baseline/report.json /tmp/p2_baseline/review.png
+"$RS" -e "$EX" battle-results --format normalized --allow-approximate-constants   --out-file "$T/p2_baseline/report.json" "$(cat /tmp/p2_baseline/replay.txt)"
+ls -la "$T/p2_baseline/report.json"
 ```
 
-Expected: 两个 PNG 生成且 > 5KB。某项失败就记为 SKIP 并在执行记录写明原因(不要静默跳过)。
+Expected: JSON 生成(约 260KB)。**注意本机 Python 是 Windows 版,认不了 `/tmp`,所以
+路径用 `tempfile.gettempdir()` 取真实 TEMP;Bash 侧的 `/tmp` 与它指向同一处。**
 
-- [ ] **Step 4: 记录 sha256 基线**
+- [ ] **Step 4: 用统一脚本渲染基线并记录 sha256**
+
+渲染一律走 `tools/p2_render_fixtures.sh`(理由见「关键背景 5」)。
 
 ```bash
-cd /tmp/p2_baseline && sha256sum report.png review.png | tee baseline.sha256
+cd /c/Users/29801/Desktop/wows-bot-review
+T="$(python -c 'import tempfile;print(tempfile.gettempdir())')"
+bash tools/p2_render_fixtures.sh "$T/p2_baseline_fix"
 ```
 
-Expected: 两行 sha256。**这是后续每个改动任务的验收凭据。**
+Expected: 打印两行 sha256,两个 PNG 都 > 5KB。
+
+再验确定性(渲到另一个目录,哈希必须一致):
+
+```bash
+bash tools/p2_render_fixtures.sh "$T/p2_det_check" >/dev/null
+diff "$T/p2_baseline_fix/fixtures.sha256" "$T/p2_det_check/fixtures.sha256" && echo DETERMINISTIC_OK
+```
+
+Expected: `DETERMINISTIC_OK`。**这是后续每个改动任务的验收凭据。**
+
 
 - [ ] **Step 5: 记录改动前的测试状态**
 
@@ -143,9 +170,10 @@ Expected: 三个都打印 `== ALL PASS ==`。本来就红的记录下来,不算�
 
 ```bash
 cd /c/Users/29801/Desktop/wows-bot-review
-cp /tmp/p2_baseline/baseline.sha256 docs/superpowers/plans/2026-09-18-p2-baseline.sha256
-git add docs/superpowers/plans/2026-09-18-p2-baseline.sha256
-git commit -m "test(p2): 记录重构前渲染基线 sha256"
+T="$(python -c 'import tempfile;print(tempfile.gettempdir())')"
+cp "$T/p2_baseline_fix/fixtures.sha256" docs/superpowers/plans/2026-09-18-p2-baseline.sha256
+git add docs/superpowers/plans/2026-09-18-p2-baseline.sha256 tools/p2_render_fixtures.sh
+git commit -m "test(p2): 记录重构前渲染基线 sha256 + 确定性渲染脚本"
 ```
 
 ---
@@ -1151,11 +1179,10 @@ Expected: `OK`
 
 ```bash
 cd /c/Users/29801/Desktop/wows-bot-review
-export WOWS_CJK_FONT=C:/Windows/Fonts/msyh.ttc WOWS_MONO_FONT=C:/Windows/Fonts/consola.ttf
-python report/bin/render_report_normalized.py /tmp/p2_baseline/report.json /tmp/p2_check/report.png
-python report/bin/render_review_normalized.py /tmp/p2_baseline/report.json /tmp/p2_check/review.png
-cd /tmp/p2_check && sha256sum report.png review.png > check.sha256
-diff <(sed 's#.*/##' /tmp/p2_baseline/baseline.sha256) <(sed 's#.*/##' check.sha256) && echo "PIXEL_IDENTICAL"
+T="$(python -c 'import tempfile;print(tempfile.gettempdir())')"
+rm -rf "$T/p2_check"
+bash tools/p2_render_fixtures.sh "$T/p2_check" >/dev/null
+diff docs/superpowers/plans/2026-09-18-p2-baseline.sha256 "$T/p2_check/fixtures.sha256"   && echo PIXEL_IDENTICAL
 ```
 
 （先 `mkdir -p /tmp/p2_check`。)
@@ -1267,13 +1294,10 @@ Expected: `COMPILE_OK`,且 grep 无输出。
 
 ```bash
 cd /c/Users/29801/Desktop/wows-bot-review
-export WOWS_CJK_FONT=C:/Windows/Fonts/msyh.ttc WOWS_MONO_FONT=C:/Windows/Fonts/consola.ttf
-rm -rf /tmp/p2_check && mkdir -p /tmp/p2_check
-python report/bin/render_report_normalized.py /tmp/p2_baseline/report.json /tmp/p2_check/report.png
-python report/bin/render_review_normalized.py /tmp/p2_baseline/report.json /tmp/p2_check/review.png
-cd /tmp/p2_check && sha256sum report.png review.png > check.sha256
-diff <(sed 's#.*/##' /tmp/p2_baseline/baseline.sha256) <(sed 's#.*/##' check.sha256) && echo PIXEL_IDENTICAL
-cd /c/Users/29801/Desktop/wows-bot-review && python tests/test_render_menu.py
+T="$(python -c 'import tempfile;print(tempfile.gettempdir())')"
+rm -rf "$T/p2_check"
+bash tools/p2_render_fixtures.sh "$T/p2_check" >/dev/null
+diff docs/superpowers/plans/2026-09-18-p2-baseline.sha256 "$T/p2_check/fixtures.sha256"   && echo PIXEL_IDENTICAL
 ```
 
 Expected: `PIXEL_IDENTICAL` + 菜单测试 `== ALL PASS ==`
@@ -1377,12 +1401,10 @@ Expected: `COMPILE_OK`;`rb.` 列表**只剩**这些渲染器符号 —— `rende
 
 ```bash
 cd /c/Users/29801/Desktop/wows-bot-review
-export WOWS_CJK_FONT=C:/Windows/Fonts/msyh.ttc WOWS_MONO_FONT=C:/Windows/Fonts/consola.ttf
-rm -rf /tmp/p2_check && mkdir -p /tmp/p2_check
-python report/bin/render_report_normalized.py /tmp/p2_baseline/report.json /tmp/p2_check/report.png
-python report/bin/render_review_normalized.py /tmp/p2_baseline/report.json /tmp/p2_check/review.png
-cd /tmp/p2_check && sha256sum report.png review.png > check.sha256
-diff <(sed 's#.*/##' /tmp/p2_baseline/baseline.sha256) <(sed 's#.*/##' check.sha256) && echo PIXEL_IDENTICAL
+T="$(python -c 'import tempfile;print(tempfile.gettempdir())')"
+rm -rf "$T/p2_check"
+bash tools/p2_render_fixtures.sh "$T/p2_check" >/dev/null
+diff docs/superpowers/plans/2026-09-18-p2-baseline.sha256 "$T/p2_check/fixtures.sha256"   && echo PIXEL_IDENTICAL
 ```
 
 Expected: `PIXEL_IDENTICAL`
@@ -1795,16 +1817,57 @@ Expected: 两条都打印 `*_OK` 且 `REPO_ROOT` = `/opt/wows-bot`。
 
 ```bash
 cd /c/Users/29801/Desktop/wows-bot-review
-export WOWS_CJK_FONT=C:/Windows/Fonts/msyh.ttc WOWS_MONO_FONT=C:/Windows/Fonts/consola.ttf
-rm -rf /tmp/p2_final && mkdir -p /tmp/p2_final
-python report/bin/render_report_normalized.py /tmp/p2_baseline/report.json /tmp/p2_final/report.png
-python report/bin/render_review_normalized.py /tmp/p2_baseline/report.json /tmp/p2_final/review.png
-cd /tmp/p2_final && sha256sum report.png review.png > final.sha256
-diff <(sed 's#.*/##' /tmp/p2_baseline/baseline.sha256) <(sed 's#.*/##' final.sha256) \
-  && echo "FINAL_PIXEL_IDENTICAL"
+T="$(python -c 'import tempfile;print(tempfile.gettempdir())')"
+rm -rf "$T/p2_check"
+bash tools/p2_render_fixtures.sh "$T/p2_check" >/dev/null
+diff docs/superpowers/plans/2026-09-18-p2-baseline.sha256 "$T/p2_check/fixtures.sha256"   && echo PIXEL_IDENTICAL
 ```
 
 Expected: `FINAL_PIXEL_IDENTICAL`
+
+- [ ] **Step 4b: footer 覆盖检查(sha256 门槛跳过了 footer,单独验它没坏)**
+
+主门槛用 `WOWS_SKIP_FOOTER=1`,所以 footer 那段绘图代码没被比对覆盖。footer 用的正是
+搬走的 theme 常量(`GAME_GOLD` 等),所以要单独确认它仍能画出来、几何未变:
+
+```bash
+cd /c/Users/29801/Desktop/wows-bot-review
+T="$(python -c 'import tempfile;print(tempfile.gettempdir())')"
+python - <<'EOF'
+import os, subprocess, sys, tempfile
+from PIL import Image
+T = tempfile.gettempdir()
+json_in = os.path.join(T, "p2_baseline", "report.json")
+env = dict(os.environ, WOWS_CJK_FONT="C:/Windows/Fonts/msyh.ttc",
+           WOWS_MONO_FONT="C:/Windows/Fonts/consola.ttf",
+           WOWS_BOT_VERSION="p2-fixture")
+out = {}
+for tag, skip in (("with", "0"), ("without", "1")):
+    e = dict(env); e["WOWS_SKIP_FOOTER"] = skip
+    png = os.path.join(T, f"p2_footer_{tag}.png")
+    subprocess.run([sys.executable, "report/bin/render_report_normalized.py", json_in, png],
+                   env=e, check=True, stdout=subprocess.DEVNULL)
+    out[tag] = Image.open(png).size
+print("with footer   :", out["with"])
+print("without footer:", out["without"])
+assert out["with"][0] == out["without"][0], "宽度不该变"
+assert out["with"][1] - out["without"][1] == 48, f"footer 高度应为 48,实际 {out['with'][1]-out['without'][1]}"
+print("FOOTER_GEOMETRY_OK")
+EOF
+```
+
+Expected: 打印 `FOOTER_GEOMETRY_OK`(宽度不变、带 footer 高 48px)。
+这证明 footer 绘制路径仍然正常执行、用的 theme 常量没缺失。
+
+- [ ] **Step 4c: 删除重构期脚手架**
+
+```bash
+cd /c/Users/29801/Desktop/wows-bot-review
+git rm tools/p2_render_fixtures.sh
+git commit -m "chore(p2): 移除重构期的 fixture 渲染脚手架"
+```
+
+Expected: 脚本删除并提交。基线 sha256 文件保留在 `docs/superpowers/plans/` 里作为历史记录。
 
 - [ ] **Step 5: 文档 —— 在 `docs/DEPLOY.md` 末尾加一节**
 
