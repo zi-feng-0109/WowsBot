@@ -159,8 +159,9 @@ echo
 # ---------- [1/2] 逐局对比 ----------
 echo "[1/2] 逐局对比(旧读手术数据 / 新读原始数据)"
 printf "%-52s %-10s %-8s %s\n" "回放" "build" "JSON" "PNG"
-total=0; ok=0; bad=0; err=0
+total=0; ok=0; bad=0; err=0; moot=0
 declare -a BAD_LIST=()
+declare -a MOOT_LIST=()
 for r in "$FIXTURES"/*.wowsreplay; do
     [[ -f "$r" ]] || continue
     total=$((total+1))
@@ -205,17 +206,57 @@ for r in "$FIXTURES"/*.wowsreplay; do
         png_v="渲染失败"
     fi
 
+    # PNG 不一致时,先问一句:旧二进制自己跑两次是不是也不一致?
+    # 若是,说明这一局的报告本来就不确定(实测:并列玩家的表格行序由随机的数组顺序决定),
+    # PNG 判据对它没有鉴别力 —— 那就不能算作「重建改变了战报」。
+    png_moot=0; hA=""; hB=""
+    if [[ "$png_v" == "不一致" ]]; then
+        s_o1="$(make_specs "$vdir" "$old_scripts")"
+        s_o2="$(make_specs "$vdir" "$old_scripts")"
+        rc1=0; rc2=0
+        run_report "$OLD_BIN" "$s_o1" "$consts" "$r" "$OUT/$name.oldA.json" >/dev/null 2>&1 || rc1=$?
+        run_report "$OLD_BIN" "$s_o2" "$consts" "$r" "$OUT/$name.oldB.json" >/dev/null 2>&1 || rc2=$?
+        rm -rf "$s_o1" "$s_o2"
+        if [[ $rc1 -eq 0 && $rc2 -eq 0 ]] \
+           && render "$OUT/$name.oldA.json" "$OUT/$name.oldA.png" \
+           && render "$OUT/$name.oldB.json" "$OUT/$name.oldB.png"; then
+            hA="$(png_hash "$OUT/$name.oldA.png")"; hB="$(png_hash "$OUT/$name.oldB.png")"
+            if [[ "$hA" != "$hB" ]]; then
+                png_moot=1
+                png_v="判据失效"
+            else
+                png_v="不一致(旧二进制自身稳定,是真差异)"
+            fi
+        else
+            png_v="不一致(旧二进制复跑失败,无法判断)"
+        fi
+    fi
+
     printf "%-52s %-10s %-8s %s\n" "$short" "$build" "$json_v" "$png_v"
     echo "$jout" | sed 's/^/      /'
+    if [[ $png_moot -eq 1 ]]; then
+        echo "      旧二进制自己跑两次的 PNG 也不同($hA vs $hB)"
+        echo "      → 这一局报告本身不确定,PNG 判据对它无鉴别力;数据等价仍由 JSON 那栏保证"
+    fi
+
     if [[ "$json_v" == "等价" && "$png_v" == "一致" ]]; then
         ok=$((ok+1))
+    elif [[ "$json_v" == "等价" && $png_moot -eq 1 ]]; then
+        moot=$((moot+1)); MOOT_LIST+=("$name")
     else
         bad=$((bad+1)); BAD_LIST+=("$name")
     fi
 done
 
 echo
-echo "[2/2] 汇总:共 $total 局 —— 通过 $ok / 不通过 $bad / 出错 $err"
+echo "[2/2] 汇总:共 $total 局 —— 通过 $ok / 判据失效 $moot / 不通过 $bad / 出错 $err"
+if [[ ${#MOOT_LIST[@]} -gt 0 ]]; then
+    echo
+    echo "PNG 判据失效的局(报告本身就不确定,与重建无关;JSON 仍判等价):"
+    for n in "${MOOT_LIST[@]}"; do echo "  $n"; done
+    echo "  成因实测:玩家表在排序键并列时(例如两人伤害都是 0)行序由随机的数组顺序决定。"
+    echo "  这是渲染器既有的排序不稳定,值得单独修 —— 但修它会改变输出,不属于本次换装。"
+fi
 if [[ ${#BAD_LIST[@]} -gt 0 ]]; then
     echo "不通过的局:"
     for n in "${BAD_LIST[@]}"; do echo "  $n  (产物在 $OUT/$n.*)"; done
