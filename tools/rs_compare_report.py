@@ -29,7 +29,17 @@ _float_cmps = 0
 
 
 def _num_close(a, b, tol):
-    """数值比较,记录最大相对偏差。整数与布尔按原值比。"""
+    """数值比较,记录最大相对偏差。布尔按身份比,整数按原值精确比,只有浮点走容差。
+
+    为什么整数必须精确比
+    --------------------
+    相对容差对大整数等于「差 1 也算等」,而恰好是身份类字段最大:
+      account_id 在 10^9 量级,差 1 的相对偏差 5.0e-10 < 1e-9 → 会被判等价;
+      毫秒时间戳 1.758e12,差 1 的相对偏差 5.7e-13 → 同样被判等价。
+    也就是说最松的判据正好落在最不该松的字段上。容差存在的唯一理由是浮点累加顺序
+    带来的 ULP 级抖动(实测最大 1.665e-16),整数不存在这种抖动,所以不给容差。
+    int/float 混合(如 5 vs 5.0000000001)仍走容差 —— 那一侧是浮点,抖动可能真实存在。
+    """
     global _max_rel, _float_cmps
     if isinstance(a, bool) or isinstance(b, bool):
         return a is b
@@ -37,6 +47,8 @@ def _num_close(a, b, tol):
         return True
     if not (isinstance(a, (int, float)) and isinstance(b, (int, float))):
         return False
+    if isinstance(a, int) and isinstance(b, int):
+        return False   # 上面 a == b 已经放过了相等的情况,到这里就是真的不同
     if math.isnan(a) and math.isnan(b):
         return True
     scale = max(abs(a), abs(b))
