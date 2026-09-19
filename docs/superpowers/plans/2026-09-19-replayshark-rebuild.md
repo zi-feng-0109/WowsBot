@@ -402,123 +402,22 @@ git commit -F /c/Users/29801/AppData/Local/Temp/p41_t2_msg.txt
 **Files:**
 - Create:`C:\Users\29801\Desktop\wows-bot-review\tools\verify_replayshark_equiv.sh`
 
-- [ ] **Step 1:用 Write 工具创建脚本**
+- [x] **Step 1:用 Write 工具创建脚本**
 
-```bash
-#!/usr/bin/env bash
-# verify_replayshark_equiv.sh — 新旧 replayshark 的 battle-report 输出等价性对比
-#
-# 换装闸门:旧二进制读「手术过的 specs」,新二进制读「未手术的原始 scripts」,
-# 同一批回放跑 battle-report,JSON 必须逐字节一致。一致才说明重建没改变战报。
-#
-# 用法:
-#   bash tools/verify_replayshark_equiv.sh <fixture 目录> [输出目录]
-#
-# fixture 目录里放 .wowsreplay;脚本按每局回放自己的 build 号去 extracted/ 找对应版本数据。
+> **原计划在这里内嵌了脚本全文,已删除 —— 它被重写过两次,留着只会误导。**
+> 以仓库里的 `tools/verify_replayshark_equiv.sh` 为准。演进过程:
+>
+> 1. **初版**:`cmp -s` 比 JSON 逐字节。首轮实跑 9 局全 DIFF —— 判据在原理上不可能通过,
+>    因为 `battle-report` 的输出本身不确定(同一二进制同一局跑两次字节就不同)
+> 2. **重做**:改成「深度规范化 + 浮点容差」的 JSON 判据(`tools/rs_compare_report.py`)
+>    加「PNG 正文哈希」判据,并加 `[0/2]` 自证步骤先证明 PNG 判据本身有效
+> 3. **加分类**:PNG 不一致时自动判断旧二进制自己是否也不稳定 → 「判据失效」类
+> 4. **硬化**(最终复审后):堵掉五条假绿灯 —— 整数走相对容差、`png_hash` 失败时空串相等、
+>    SKIP 不计入退出码、「判据失效」不比较差异区域(新增 `tools/rs_png_diff.py`)、
+>    构建脚本自检覆盖不到 float64 patch
+>
+> 完整判据说明见 `docs/REPLAYSHARK_BUILD.md` §6。
 
-set -uo pipefail
-
-FIXTURES="${1:?用法: verify_replayshark_equiv.sh <fixture 目录> [输出目录]}"
-OUT="${2:-/tmp/rs_equiv}"
-OLD_BIN="${OLD_BIN:-/opt/wows-bot/report/replayshark}"
-NEW_BIN="${NEW_BIN:-/opt/wows-replayshark-build/target/release/replayshark}"
-EXTRACTED="${EXTRACTED:-/var/lib/wows-data/extracted}"
-PATCHED="${PATCHED:-/var/lib/wows-data/specs-patched}"
-
-for b in "$OLD_BIN" "$NEW_BIN"; do
-    [[ -x "$b" ]] || { echo "error: 没有可执行的 $b" >&2; exit 1; }
-done
-mkdir -p "$OUT"
-
-# 从回放头部读 build 号:magic(4) blockCount(4) meta_len(4) 然后是 UTF-8 JSON meta,
-# clientVersionFromExe 形如 "15,8,0,13187581",最后一段就是 build
-read_build() {
-    python3 - "$1" <<'PY'
-import json, struct, sys
-with open(sys.argv[1], 'rb') as f:
-    if f.read(4) != b'\x12\x32\x34\x11': sys.exit(1)
-    f.read(4)
-    n = struct.unpack('<I', f.read(4))[0]
-    meta = json.loads(f.read(n).decode('utf-8'))
-print(meta['clientVersionFromExe'].split(',')[-1].strip())
-PY
-}
-
-# 按 build 号定位 extracted 下的 <ver>_<build> 目录
-version_dir() {
-    local build="$1"
-    for d in "$EXTRACTED"/*_"$build"; do
-        [[ -d "$d" ]] && { echo "$d"; return 0; }
-    done
-    return 1
-}
-
-# 组一份 specs:三个软链指向 metadata/content/scripts
-make_specs() {
-    local vdir="$1" scripts="$2" tmp
-    tmp="$(mktemp -d /tmp/rs_specs_XXXXXX)"
-    ln -s "$vdir/metadata.toml" "$tmp/metadata.toml"
-    ln -s "$vdir/vfs/content"   "$tmp/content"
-    ln -s "$scripts"            "$tmp/scripts"
-    echo "$tmp"
-}
-
-total=0; same=0; diff_n=0; err=0
-printf "%-58s %-10s %s\n" "回放" "build" "结果"
-for r in "$FIXTURES"/*.wowsreplay; do
-    [[ -f "$r" ]] || continue
-    total=$((total+1))
-    name="$(basename "$r" .wowsreplay)"
-    build="$(read_build "$r" 2>/dev/null)"
-    if [[ -z "$build" ]]; then
-        printf "%-58s %-10s %s\n" "$name" "-" "ERROR 读不出 build"; err=$((err+1)); continue
-    fi
-    vdir="$(version_dir "$build")" || {
-        printf "%-58s %-10s %s\n" "$name" "$build" "SKIP extracted 里没这个 build"; continue; }
-    vname="$(basename "$vdir")"
-    consts="$vdir/constants.json"
-
-    old_scripts="$PATCHED/$vname/scripts"
-    [[ -d "$old_scripts" ]] || old_scripts="$vdir/vfs/scripts"
-    new_scripts="$vdir/vfs/scripts"
-
-    s_old="$(make_specs "$vdir" "$old_scripts")"
-    s_new="$(make_specs "$vdir" "$new_scripts")"
-    j_old="$OUT/$name.old.json"; j_new="$OUT/$name.new.json"
-
-    rc_old=0; rc_new=0
-    "$OLD_BIN" -e "$s_old" ${consts:+-c "$consts"} battle-report "$r" -o "$j_old" \
-        >"$OUT/$name.old.log" 2>&1 || rc_old=$?
-    "$NEW_BIN" -e "$s_new" ${consts:+-c "$consts"} battle-report "$r" -o "$j_new" \
-        >"$OUT/$name.new.log" 2>&1 || rc_new=$?
-    rm -rf "$s_old" "$s_new"
-
-    if [[ $rc_old -ne 0 || $rc_new -ne 0 ]]; then
-        printf "%-58s %-10s %s\n" "$name" "$build" "ERROR old_rc=$rc_old new_rc=$rc_new(见 $OUT/$name.*.log)"
-        err=$((err+1)); continue
-    fi
-    if cmp -s "$j_old" "$j_new"; then
-        printf "%-58s %-10s %s\n" "$name" "$build" "SAME"; same=$((same+1))
-    else
-        printf "%-58s %-10s %s\n" "$name" "$build" "DIFF(见下方摘要)"; diff_n=$((diff_n+1))
-    fi
-done
-
-echo
-echo "共 $total 局:SAME=$same  DIFF=$diff_n  ERROR=$err"
-if [[ $diff_n -gt 0 ]]; then
-    echo
-    echo "=== DIFF 摘要(每局最多 20 行) ==="
-    for j in "$OUT"/*.old.json; do
-        n="$(basename "$j" .old.json)"
-        cmp -s "$j" "$OUT/$n.new.json" && continue
-        echo "--- $n"
-        diff <(python3 -m json.tool "$j" 2>/dev/null) \
-             <(python3 -m json.tool "$OUT/$n.new.json" 2>/dev/null) | head -20
-    done
-fi
-[[ $diff_n -eq 0 && $err -eq 0 ]]
-```
 
 - [ ] **Step 2:检查脚本语法**
 
@@ -755,52 +654,39 @@ sudo ln -sfn /var/lib/wows-data/extracted/15.8.0_13187581/vfs/scripts scripts
 
 ## Task 7:等价性验证(需要主会话与用户交互)
 
-- [ ] **Step 1:跑验证脚本**
+> **2026-09-19 执行时判据被推翻重做过一次。** 原计划写的是「JSON 逐字节一致」,首轮实跑
+> 9 局全 DIFF;诊断发现 `battle-report` 的输出本身就不确定(同一二进制同一局跑两次,
+> 大小相同字节不同),所以那个判据连旧二进制自己跟自己比都过不了。下面是最终的判据。
+> 完整说明见 `docs/REPLAYSHARK_BUILD.md` §6。
 
-给用户:
+- [x] **Step 1:跑验证脚本**
+
+给用户(**必须 root** —— `specs-patched` 是 `drwx------ root`):
 
 ```
 cd /opt/wows-bot && sudo bash tools/verify_replayshark_equiv.sh /tmp/rs_fixtures /tmp/rs_equiv
 ```
 
-期望:9 行结果全 `SAME`,末尾 `共 9 局:SAME=9  DIFF=0  ERROR=0`。
+脚本先做 `[0/2]` 自证(新二进制同一局跑两遍、渲染两遍、比 PNG 正文哈希),不稳定就退出 ——
+不在一个本身无效的判据上宣布通过。然后逐局打 JSON / PNG 两栏。
 
-- [ ] **Step 2:按结果分三种情况处理**
+期望汇总行:`共 9 局 —— 通过 9 / 判据失效 0 / 不通过 0 / 出错 0 / 跳过 0`。
+**退出码 0 的条件是「不通过 = 出错 = 跳过 = 0」;「跳过」不是通过。**
 
-- **全 SAME** → 通过,进 Task 8
-- **有 ERROR** → 看 `/tmp/rs_equiv/<name>.{old,new}.log`。常见原因:该 build 的
-  `specs-patched` 不存在导致旧二进制读原始 scripts 而 panic(15.7/15.8 都已确认存在,
-  所以不该发生);或 constants.json 缺失
-- **有 DIFF** → **停下,不换装**。把脚本打的 DIFF 摘要完整交给用户,逐处说明差异字段
-  和可能成因,由**用户决定**是否接受。不要自己判断"差不多"
+- [x] **Step 2:按结果分情况处理**
 
-- [ ] **Step 3:PNG 正文哈希对比**
+- **全通过** → 进 Task 8
+- **判据失效** → 该局报告本身不确定(排序键并列 + 输入顺序随机),PNG 判据无鉴别力。
+  不算失败,但要在记录里点明是哪一局、为什么
+- **不通过** → **停下,不换装**。原因会写在那一栏:`不等价` / `哈希失败` / `渲染失败` /
+  `不一致(差异区域超出自身抖动范围)` / `不一致(旧二进制自身稳定,是真差异)`。
+  把差异连同产物目录交给用户,由**用户决定**是否接受。不要自己判断「差不多」
+- **出错 / 跳过** → 跑不起来或缺版本数据,先修环境再说
 
-battle-report JSON 一致的话 PNG 理论上必然一致,但渲染器读 JSON 的路径值得实测一次。
-给用户(挑 fixture 里的 CV 那局,字段最多):
+- [x] **Step 3:PNG 正文哈希对比**
 
-渲染器要 PIL,系统 `python3` 不一定有 —— 生产走 `find_python()`,优先
-`/opt/wows-bot/report/venv/bin/python`。所以先解析解释器再用:
+已并入 Step 1 —— PNG 层就是闸门的第二层判据,脚本每局都做,不再单独跑。
 
-```
-PY=/opt/wows-bot/report/venv/bin/python; [ -x "$PY" ] || PY=python3; echo "用 $PY"
-cd /opt/wows-bot/report/bin
-sudo $PY render_battle_report.py /tmp/rs_equiv/20260918_230201_PBSA108-Implacable_52_Britain.old.json /tmp/rs_equiv/old.png
-sudo $PY render_battle_report.py /tmp/rs_equiv/20260918_230201_PBSA108-Implacable_52_Britain.new.json /tmp/rs_equiv/new.png
-sudo $PY -c "
-from PIL import Image; import hashlib
-def h(p):
-    im = Image.open(p).convert('RGB')
-    im = im.crop((0, 0, im.width, im.height - 48))   # 裁掉含 datetime.now() 的页脚
-    return hashlib.sha256(im.tobytes()).hexdigest()[:16], im.size
-print('old', *h('/tmp/rs_equiv/old.png'))
-print('new', *h('/tmp/rs_equiv/new.png'))
-"
-```
-
-期望:两行哈希与尺寸都相同。
-
----
 
 ## Task 8:换装与收尾(需要主会话与用户交互)
 
@@ -943,3 +829,73 @@ sudo rm -rf /tmp/rs_fixtures /tmp/rs_equiv /tmp/rs_check /tmp/rs_e2e /tmp/rs_src
 - [ ] `wows_full_report` 端到端跑通且 stderr 无 `[spoof]`(Task 8 Step 3)
 - [ ] `docs/REPLAYSHARK_BUILD.md` 的配方完整到照着能从零重建
 - [ ] 记忆里的 FLOAT64 手术步骤已删除
+
+
+---
+
+## 执行记录(2026-09-19)
+
+### 结果
+
+| Task | 结果 |
+|---|---|
+| 1 建分支 + 套 patch | 完成。`c7760c47`(FLOAT64 cherry-pick)+ `86e9d7ba`(patch)。**零 fuzz、零编译错误**;`provider.rs` 那 2 个 hunk 手工放,缩进比 patch 浅 16 空格(上游把该 match 从嵌套闭包里提了出来) |
+| 2 导出构建配方 | 完成。两个 patch + `build_replayshark.sh` + `REPLAYSHARK_BUILD.md`。在干净基线上重建的树与 Task 1 分支 `git diff` **整棵树零字节差异**;正序反序皆可、幂等 |
+| 3 等价性验证脚本 | 完成,后续因判据推翻而重写,并补了 `rs_compare_report.py` / `rs_png_diff.py` |
+| 4 fixture | 9 局上传到服务器 `/tmp/rs_fixtures`(18 MB) |
+| 5 服务器编译 | 完成。方案 A(clone 上游)可行,`cargo 1.92.0`,release 编译 30 秒 |
+| 6 builds-dump 独立检查 | 新二进制在**未手术** 15.8 上 `118 / 2345 / 662 / 82`;旧二进制同一份数据 `panicked: Unrecognized type FLOAT64` —— 对照组成立 |
+| 7 等价性闸门 | 见下 |
+| 8 换装 | 完成。`0c1bf7a`。端到端 `wows_full_report` 四段全过,无 `[spoof]` |
+
+### 闸门结果
+
+- **数据层**:9/9 规范化后等价。浮点容差只在 1 处被用到,最大相对偏差 **1.665e-16**(一个 ULP)
+- **外观层**:8/9 PNG 正文哈希逐像素一致
+- **第 9 局**(`20260824_200315_PZSD910-Black-Lushun_58_RidgeNew`,15.7 驱逐舰)判**判据失效**:
+  差异是玩家表最后两行(两个 0 伤害玩家)互换,区域 `y=935..995 / x=78..1337`、占 0.26% 像素。
+  旧二进制自己跑三次得到三个不同哈希(`1cbb9bae69f0c2de` / `f117dcc14c36d75f` /
+  `dbc4fd06888a0089`)→ 该局报告本身不确定,与重建无关。
+  成因:`render_battle_report.py:369` `sorted(key=lambda p: -p.damage_dealt)` 并列时靠输入顺序,
+  而输入顺序来自随机的 HashMap 迭代。**用户已知情并决定不修这个排序 bug。**
+
+### 二进制
+
+| | 大小 | sha256 |
+|---|---|---|
+| 旧(2026-05-27) | 4806528 | `19764382…`,备份在 `/root/replayshark-prebuilt-20260527.bak` |
+| 新(2026-09-19) | 5919456 | `f6b9af57de554df0471d2411a03cf7acba9c74bef14a45a447b6ef5e1cdbafee` |
+
+### 判据被推翻这件事
+
+首轮闸门 9 局全 DIFF。诊断:`battle-report` 输出本身不确定 —— 同一二进制同一局跑两次,
+大小相同(1021979)字节不同;`damage_events`(1115 条)与 `deaths`(15 条)多重集相同仅排列不同;
+`players[].stats.damage_dealt` 差一个 ULP。所以「逐字节一致」在原理上不可能通过。
+改为「深度规范化 + 浮点容差」+「PNG 正文哈希」两层,并加 `[0/2]` 自证步骤。
+**这是计划的设计错误,不是重建的问题。**
+
+### 未覆盖 / 已知缺口
+
+- **15.3–15.6 无回放可验**。风险已量化为低:回放解码路径 `decode.rs` 相对 patch 基线只漂 2 行,
+  且是 `u32` → `PacketTypeId` newtype 的纯类型改动,零语义
+- **15.8 缺巡洋舰回放**(巡洋只在 15.7 覆盖)
+- **`builds-dump` 只做了计数校验,未逐字段 diff**。`types.rs` 的 11 行漂移是 `CrewPersonality`
+  字段 Option 化,已查实当前消费侧只读 `id`/`name` 所以无影响 —— 是运气不是覆盖
+- **二进制不是比特级可复现**(rustc 默认不保证)。已建立的是「源码状态可复现」
+- 玩家表排序在并列时不稳定(用户决定不修)→ 闸门的「判据失效」这一类将长期存在,
+  而它的包围盒判定对「落在抖动矩形内部的回归」是盲的
+
+### 最终复审后的修正
+
+一次独立整体复审找出 18 条问题,无一条要推翻换装。已处理:
+
+- `docs/UPDATE.md` / `docs/DEPLOY.md` 两处「从源码重编」配方陈旧且危险(叫人在
+  `/opt/wows-toolkit` 里编 —— 那是构建脚本硬性拒绝的路径,它的 `target/` 放着生产用的
+  `minimap_renderer`;且不切基线、漏 float64 patch)
+- 回滚命令此前只在设计文档里,而两篇例行文档有一条会静默撤销回滚的 `cp`
+- 闸门五条假绿灯:整数走相对容差、`png_hash` 失败时空串相等、SKIP 不计入退出码、
+  「判据失效」不比较差异区域、构建脚本自检覆盖不到 float64 patch
+  (顺带:原本建议的 `grep -q 'FLOAT64'` 判据**本身**也是假绿灯 —— 未打 patch 的原文里
+  就有一行注释含这个词,改用 `grep -F 't == "FLOAT64"'`)
+- `REPLAYSHARK_BUILD.md` §6/§10 描述的还是被废弃的逐字节闸门,已重写并补 fixture 组法、
+  环境变量、回滚一节

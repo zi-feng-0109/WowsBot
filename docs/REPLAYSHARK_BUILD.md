@@ -182,11 +182,11 @@ semver 范围 —— 「半年后重编因依赖漂移而失败」这个风险�
 
 ## 6. 换装前必须过等价性闸门
 
-编出来 ≠ 可以换装。重建的源码虽然与旧二进制的源码对得上,但编译器版本、依赖 lockfile 都
-可能有细微差异,而这个二进制的输出直接进战报,任何字段变动都是线上事故。
+编出来 ≠ 可以换装。这个二进制的输出直接进战报,任何字段变动都是线上事故。
 
 ```bash
-bash tools/verify_replayshark_equiv.sh <fixture 目录>
+# 必须 root —— specs-patched 是 drwx------ root,普通用户读不到会 panic PermissionDenied
+sudo bash tools/verify_replayshark_equiv.sh <fixture 目录> [输出目录]
 ```
 
 闸门内容:**同一批真实回放**,
@@ -194,14 +194,141 @@ bash tools/verify_replayshark_equiv.sh <fixture 目录>
 - 旧二进制读**手术过的** specs(`specs-patched/<ver>_<build>/scripts`,FLOAT64 已 sed 成 FLOAT)
 - 新二进制读**未手术的原始** scripts(`extracted/<ver>_<build>/vfs/scripts`)
 
-两边 `battle-report` 输出的 JSON 必须**逐字节一致**。脚本按每局回放头部的
-`clientVersionFromExe` 自己解出 build 号去找对应版本的数据,所以 fixture 里混着多个版本的回放
-也没问题。
+脚本按每局回放头部的 `clientVersionFromExe` 自己解出 build 号去找对应版本的数据,
+所以 fixture 里混着多个版本的回放没问题。
 
-脚本还带一道防假绿灯:如果 `OLD_BIN` 与 `NEW_BIN` 内容相同(比如已经手动换装过了),
-它拒绝运行 —— 「旧 vs 旧」必然全 SAME,这种假绿灯比报错危险得多。
+### 两层判据,以及为什么不是「JSON 逐字节一致」
 
-`SAME=n DIFF=0 ERROR=0` 才算过闸。有 DIFF 就别换,先看脚本打出的 JSON diff 摘要。
+**`battle-report` 的输出本身就不确定。** 2026-09-19 实测:同一个二进制、同一局回放跑两次,
+输出大小相同但字节不同 —— `damage_events`(1115 条)与 `deaths`(15 条)的多重集完全相同、
+只是排列不同(HashMap 迭代顺序随机),并且 `players[].stats.damage_dealt` 会差一个 ULP
+(同一批伤害按不同顺序累加的必然结果,实测最大相对偏差 1.665e-16)。
+
+所以「逐字节一致」这个判据**连旧二进制自己跟自己比都过不了**,拿它当闸门是错的。实际判据:
+
+| 层 | 判据 | 证明什么 | 实现 |
+|---|---|---|---|
+| 数据 | 深度规范化(dict 按键排序、list 按规范化文本排序)+ **浮点**相对容差 1e-9 | 数据内容一致,不受顺序影响 | `tools/rs_compare_report.py` |
+| 外观 | 战报 PNG **正文哈希**(裁掉底部 48px 页脚,页脚含 `datetime.now()`) | 可见结果逐像素一致 | `render_battle_report.py` + PIL |
+
+容差只给浮点,**整数精确比** —— 相对容差对大整数等于「差 1 也算等」,而 account_id 在 10^9
+量级、毫秒时间戳在 10^12,最松的判据会正好落在最不该松的身份字段上。
+
+PNG 之所以能当判据,是因为实测它跨运行稳定(渲染器不依赖 JSON 顺序,那个 ULP 也不影响任何
+像素)。脚本把这一点做成 **`[0/2]` 自证**:先用新二进制把第一局跑两遍、渲染两遍、比正文哈希,
+不稳定就直接退出 —— 免得在一个本身无效的判据上得出「通过」。
+
+### 「判据失效」这一类是什么
+
+有些回放的报告**本身**就不确定:`render_battle_report.py:369` 的
+`sorted(key=lambda p: -p.damage_dealt)` 在排序键并列时靠输入顺序,而输入顺序随机。
+实测有一局 15.7 驱逐舰回放,玩家表最后两行(两个 0 伤害玩家)会互换,差异是
+`y=935..995 / x=78..1337` 一条 60px 窄带、占 0.26% 像素;旧二进制自己跑三次得到三个不同哈希。
+
+对这种局,PNG 判据没有鉴别力。脚本的处理是**两道关**,不是一道:
+
+1. 旧二进制在同一局上自己跑两次,PNG 哈希是否也不同?
+2. `old↔new` 的差异包围盒,是否被 `old↔old` 的抖动包围盒**覆盖**?
+   (`tools/rs_png_diff.py`,三张图两两互比取并集当抖动范围)
+
+两关都过才判 `判据失效`(不计入失败);只过第 1 关但差异区域超出抖动范围,仍判**不通过** ——
+否则「一局同时既有抖动、又有真回归」会被一起扫掉。
+
+残留盲区,如实记着:包围盒是矩形近似,**落在抖动矩形内部**的回归看不见;抖动范围只由有限
+几次运行采样。真正的解法是给渲染器排序加确定性 tiebreaker,但那会改变并列情况下的输出,
+用户已明确决定不修 —— 所以这个盲区是长期存在的。
+
+### 汇总行怎么读
+
+```
+[2/2] 汇总:共 N 局 —— 通过 x / 判据失效 y / 不通过 z / 出错 e / 跳过 s
+```
+
+**退出码 0 的条件是 `不通过 = 出错 = 跳过 = 0`。** 注意:
+
+- **跳过不是通过。** 某局的 build 在 `extracted/` 里找不到就会 SKIP,脚本会列出缺的 build 号。
+  「服务器上某个版本数据被清过」正是会真实发生的事,所以 SKIP 计入退出码
+- `不通过` 里会写明具体原因:`不等价` / `哈希失败` / `渲染失败` /
+  `不一致(差异区域超出自身抖动范围)` / `不一致(旧二进制自身稳定,是真差异)`
+- 有 `不通过` 就**别换装**,把产物目录连同输出交给人判断
+
+另一道防假绿灯:`OLD_BIN` 与 `NEW_BIN` 内容相同时(比如已经手动换装过了)脚本**拒绝运行** ——
+「旧 vs 旧」必然全过,这种假绿灯比报错危险得多。
+
+### 可调环境变量
+
+| 变量 | 默认 |
+|---|---|
+| `OLD_BIN` | `/opt/wows-bot/report/replayshark` |
+| `NEW_BIN` | `/opt/wows-replayshark-build/target/release/replayshark` |
+| `EXTRACTED` | `/var/lib/wows-data/extracted` |
+| `PATCHED` | `/var/lib/wows-data/specs-patched` |
+| `WOWS_PYTHON` | 未设时试 `report/venv/bin/python`,再回落 `python3`(要有 PIL) |
+
+第二个位置参数是输出目录,默认 `/tmp/rs_equiv`。
+
+### fixture 集怎么组(闸门的唯一输入,文档里必须留)
+
+闸门要真实回放,而**服务器上一局都没有**(处理完即删),所以每次都得从开发机传上去:
+
+```bash
+# 开发机(Windows,Steam 的 replays 目录)
+mkdir -p /tmp/rs_fixtures && cp <挑好的>.wowsreplay /tmp/rs_fixtures/
+ssh <user>@<host> 'mkdir -p /tmp/rs_fixtures'
+scp /tmp/rs_fixtures/*.wowsreplay <user>@<host>:/tmp/rs_fixtures/
+```
+
+**挑选原则**:覆盖「多个版本 × 多个舰种」。各舰种在战报里走的字段不同(航母有中队、
+潜艇有下潜、驱逐有鱼雷/烟雾),版本则决定 entity defs。回放文件名里 index 的第 4 个字母
+就是舰种:`A`=航母 `B`=战列 `C`=巡洋 `D`=驱逐 `S`=潜艇(例:`PBSA108-Implacable` → `A` → 航母)。
+
+2026-09-19 实际用的 9 局(**15.7 五舰种齐 + 15.8 四舰种、缺巡洋**):
+
+| build | 航母 | 战列 | 巡洋 | 驱逐 | 潜艇 |
+|---|---|---|---|---|---|
+| `15.8.0_13187581` | Implacable | Conqueror | **缺** | Kagero | Balao |
+| `15.7.0_13015811` | Weser | Conqueror | AZUR-Montpelier | Black-Lushun | Undine |
+
+完整文件名见 `docs/superpowers/plans/2026-09-19-replayshark-rebuild.md` 的 Task 4。
+
+已知覆盖缺口:**15.3–15.6 没有回放可用**。实际风险已量化为低 —— 回放解码路径
+(`decode.rs`)相对 patch 基线只漂了 2 行,且是 `u32` → `PacketTypeId` newtype 的纯类型
+改动,零语义(逐文件漂移表见设计文档)。
+
+另一个缺口:闸门对 `builds-dump` **只做了计数校验**(118 升级品 / 2345 涂装 / 662 舰长 /
+82 技能),**从未逐字段 diff**。而 `types.rs` 相对基线的 11 行漂移正好是 `CrewPersonality`
+的 10 个字段 Option 化(`Option<bool>` 序列化成 `null` 而旧版出 `false`)—— 已查实当前
+消费侧(`tools/build_builds_json.py`)只读 `id` 和 `name`,那些字段名在全仓零命中,
+**所以当前无影响**。这是运气不是覆盖:谁将来开始读那些字段,要先补一次逐字段对比。
+
+---
+
+## 6.5 回滚
+
+```bash
+sudo cp /root/replayshark-prebuilt-20260527.bak /opt/wows-bot/report/replayshark
+```
+
+不需要重启任何服务 —— 渲染器是 subprocess 现拉,换完立即生效。
+
+⚠️ **这只改了部署副本,回滚不持久。** 仓库里 `report/prebuilt/replayshark-linux-x86_64`
+是 git 跟踪的、`report/replayshark` 是 gitignore 的**部署副本**,生产执行的是后者。回滚之后
+仓库里那份 prebuilt 仍是新版,所以下次任何人走 `docs/UPDATE.md` §0.3 或
+`docs/DEPLOY.md` §4.1 的那条 `cp prebuilt → replayshark`,**会静默把新版装回来**,
+而他以为自己在做常规部署。
+
+要让回滚持久,二选一:
+
+```bash
+# a) 让仓库里的 prebuilt 也回到旧版
+git revert 0c1bf7a        # 换装那次提交
+
+# b) 直接覆盖(会让服务器工作区变脏,下次 git pull 要处理冲突)
+sudo cp /root/replayshark-prebuilt-20260527.bak \
+        /opt/wows-bot/report/prebuilt/replayshark-linux-x86_64
+```
+
+辨认在用的是哪一版,看大小:**5919456** = 2026-09-19 重建版,**4806528** = 2026-05-27 旧版。
 
 ---
 
@@ -308,19 +435,33 @@ for comp_key in ["A_TorpedoBomber", "A_DiveBomber", "A_SkipBomber"] {
 ## 10. 速查
 
 ```bash
-# 从零重建(服务器上)
-git clone https://ghfast.top/https://github.com/landaire/wows-toolkit.git /opt/wows-replayshark-build
-git -C /opt/wows-replayshark-build checkout 2effcd31
-bash tools/build_replayshark.sh
-bash tools/verify_replayshark_equiv.sh /path/to/fixtures     # 必须 DIFF=0 ERROR=0
-# 过闸门之后才换装
+# 从零重建(服务器上)。构建目录必须隔离 —— 不能是 /opt/wows-toolkit
+sudo mkdir -p /opt/wows-replayshark-build && sudo chown <构建用户> /opt/wows-replayshark-build
+sudo -u <构建用户> git clone https://ghfast.top/https://github.com/landaire/wows-toolkit.git \
+        /opt/wows-replayshark-build
+sudo -u <构建用户> git -C /opt/wows-replayshark-build checkout 2effcd31
+cd /opt/wows-bot && sudo bash tools/build_replayshark.sh
+
+# 换装前过闸门(必须 root:specs-patched 是 drwx------ root)
+sudo bash tools/verify_replayshark_equiv.sh /tmp/rs_fixtures
+#   退出码 0 的条件:不通过 = 出错 = 跳过 = 0。「跳过」不是通过。
+#   「判据失效」不算失败 —— 那是该局报告本身不确定,见 §6。
+
+# 过闸门之后才换装:先备份,再换部署副本,最后把 prebuilt 提交进仓库
+sudo cp /opt/wows-bot/report/prebuilt/replayshark-linux-x86_64 /root/replayshark-prebuilt-<日期>.bak
+sudo cp /opt/wows-replayshark-build/target/release/replayshark /opt/wows-bot/report/replayshark
 ```
 
 | 东西 | 位置 |
 | --- | --- |
-| 生产在用的二进制 | `report/prebuilt/replayshark-linux-x86_64`(部署后 `/opt/wows-bot/report/replayshark`) |
+| 生产实际执行的二进制 | `/opt/wows-bot/report/replayshark`(gitignore 的部署副本) |
+| 仓库里跟踪的那份 | `report/prebuilt/replayshark-linux-x86_64`(换装时一并提交) |
 | 基线 | 上游 `2effcd31` |
-| patch | `tools/replayshark_float64.patch` → `tools/replayshark_battle_report.patch` |
+| patch(**顺序固定**) | `tools/replayshark_float64.patch` → `tools/replayshark_battle_report.patch` |
 | 构建脚本 | `tools/build_replayshark.sh` |
 | 等价性闸门 | `tools/verify_replayshark_equiv.sh` |
+| 闸门的 JSON 比较器 | `tools/rs_compare_report.py` |
+| 闸门的 PNG 区域比较 | `tools/rs_png_diff.py` |
 | 默认构建目录 | `/opt/wows-replayshark-build`(**不是** `/opt/wows-toolkit`) |
+| 回滚备份 | `/root/replayshark-prebuilt-20260527.bak`,见 §6.5 |
+| 辨认版本 | 5919456 字节 = 2026-09-19 重建版;4806528 = 2026-05-27 旧版 |
