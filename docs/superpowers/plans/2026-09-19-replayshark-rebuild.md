@@ -26,9 +26,9 @@
 3. **不要在 `/opt/wows-toolkit` 里编译。** 它的 `target/release/minimap_renderer` 是**生产在用的**
    小地图二进制(2026-08-14)。构建目录必须隔离到 `/opt/wows-replayshark-build/`。
 4. **两个仓库,别搞混:**
-   - toolkit fork:`C:\Users\29801\Desktop\minimap\wows-toolkit`(有 git 历史,只有 `upstream` remote,
+   - toolkit fork:`%USERPROFILE%\Desktop\minimap\wows-toolkit`(有 git 历史,只有 `upstream` remote,
      本地 commit 没推到任何地方)—— 在这里建分支、解 patch
-   - bot 仓:`C:\Users\29801\Desktop\wows-bot-review`(推 gitee,服务器 `/opt/wows-bot` 就是它)
+   - bot 仓:`%USERPROFILE%\Desktop\wows-bot-review`(推 gitee,服务器 `/opt/wows-bot` 就是它)
      —— 这里放 patch 文件、构建文档、prebuilt 二进制
 5. **写文件用 Write 工具,不要用 bash heredoc。** 本项目文档含中文全角括号与引号,
    heredoc 在这台机器上反复出过字符串截断问题。
@@ -78,7 +78,7 @@
 - [ ] **Step 1:确认工作区干净,记录当前分支**
 
 ```bash
-cd /c/Users/29801/Desktop/minimap/wows-toolkit
+cd <toolkit>
 git status --short | grep -v '^?? extracted/'
 git branch --show-current
 ```
@@ -89,7 +89,7 @@ git branch --show-current
 - [ ] **Step 2:从基线建分支**
 
 ```bash
-cd /c/Users/29801/Desktop/minimap/wows-toolkit
+cd <toolkit>
 git checkout -b replayshark-battle-report 2effcd31
 git log -1 --format='%h %ad %s' --date=short
 ```
@@ -109,7 +109,7 @@ grep -n 'FLOAT64' crates/wowsunpack/src/rpc/typedefs.rs
 - [ ] **Step 4:生成 LF 版 patch 并套上**
 
 ```bash
-tr -d '\r' < /c/Users/29801/Desktop/wows-bot-review/tools/replayshark_battle_report.patch > /tmp/bp_lf.patch
+tr -d '\r' < <repo>/tools/replayshark_battle_report.patch > /tmp/bp_lf.patch
 patch -p1 --forward < /tmp/bp_lf.patch
 ```
 
@@ -191,7 +191,7 @@ find . -name '*.rej' -o -name '*.orig' | grep -v extracted | head
 - [ ] **Step 6:编译检查**
 
 ```bash
-cd /c/Users/29801/Desktop/minimap/wows-toolkit
+cd <toolkit>
 cargo check -p replayshark 2>&1 | tail -30
 ```
 
@@ -224,16 +224,16 @@ git log --oneline 2effcd31..HEAD
 ## Task 2:把构建配方落到 bot 仓
 
 **Files:**
-- Create:`C:\Users\29801\Desktop\wows-bot-review\tools\replayshark_float64.patch`
-- Modify:`C:\Users\29801\Desktop\wows-bot-review\tools\replayshark_battle_report.patch`
-- Create:`C:\Users\29801\Desktop\wows-bot-review\tools\build_replayshark.sh`
-- Create:`C:\Users\29801\Desktop\wows-bot-review\docs\REPLAYSHARK_BUILD.md`
+- Create:`%USERPROFILE%\Desktop\wows-bot-review\tools\replayshark_float64.patch`
+- Modify:`%USERPROFILE%\Desktop\wows-bot-review\tools\replayshark_battle_report.patch`
+- Create:`%USERPROFILE%\Desktop\wows-bot-review\tools\build_replayshark.sh`
+- Create:`%USERPROFILE%\Desktop\wows-bot-review\docs\REPLAYSHARK_BUILD.md`
 
 - [ ] **Step 1:导出两个 patch**
 
 ```bash
-cd /c/Users/29801/Desktop/minimap/wows-toolkit
-BOT=/c/Users/29801/Desktop/wows-bot-review
+cd <toolkit>
+BOT=<repo>
 git diff 2effcd31..HEAD~1 -- crates/wowsunpack/src/rpc/typedefs.rs > "$BOT/tools/replayshark_float64.patch"
 git diff HEAD~1..HEAD > "$BOT/tools/replayshark_battle_report.patch"
 wc -l "$BOT/tools/replayshark_float64.patch" "$BOT/tools/replayshark_battle_report.patch"
@@ -244,10 +244,10 @@ wc -l "$BOT/tools/replayshark_float64.patch" "$BOT/tools/replayshark_battle_repo
 - [ ] **Step 2:在干净基线上验证两个 patch 能按顺序套上**
 
 ```bash
-cd /c/Users/29801/Desktop/minimap/wows-toolkit
+cd <toolkit>
 git stash list | head -1            # 确认没有意外 stash
 git checkout --quiet -b _patchtest 2effcd31
-BOT=/c/Users/29801/Desktop/wows-bot-review
+BOT=<repo>
 git apply --check "$BOT/tools/replayshark_float64.patch" && echo "float64 OK"
 git apply "$BOT/tools/replayshark_float64.patch"
 git apply --check "$BOT/tools/replayshark_battle_report.patch" && echo "battle-report OK"
@@ -262,8 +262,8 @@ git apply --check "$BOT/tools/replayshark_battle_report.patch" && echo "battle-r
 `_patchtest` 分支(= 干净基线 + 两个导出的 patch)上真跑一次编译:
 
 ```bash
-cd /c/Users/29801/Desktop/minimap/wows-toolkit
-git apply /c/Users/29801/Desktop/wows-bot-review/tools/replayshark_battle_report.patch
+cd <toolkit>
+git apply <repo>/tools/replayshark_battle_report.patch
 cargo check -p replayshark 2>&1 | tail -20
 ```
 
@@ -275,7 +275,7 @@ cargo check -p replayshark 2>&1 | tail -20
 - [ ] **Step 3:清理测试分支**
 
 ```bash
-cd /c/Users/29801/Desktop/minimap/wows-toolkit
+cd <toolkit>
 git checkout --quiet -- .
 git checkout --quiet replayshark-battle-report
 git branch -D _patchtest
@@ -312,8 +312,8 @@ set -euo pipefail
 BASELINE=2effcd31
 SRC="${SRC:-/opt/wows-replayshark-build}"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CARGO="${CARGO:-/home/zifeng/.cargo/bin/cargo}"
-BUILD_USER="${BUILD_USER:-zifeng}"
+CARGO="${CARGO:-~<user>/.cargo/bin/cargo}"
+BUILD_USER="${BUILD_USER:-<user>}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -386,9 +386,9 @@ echo "下一步:等价性验证,见 tools/verify_replayshark_equiv.sh"
 - [ ] **Step 6:提交(先不 push,等 Task 3 一起)**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 git add tools/replayshark_float64.patch tools/replayshark_battle_report.patch tools/build_replayshark.sh docs/REPLAYSHARK_BUILD.md
-git commit -F /c/Users/29801/AppData/Local/Temp/p41_t2_msg.txt
+git commit -F %TEMP%/p41_t2_msg.txt
 ```
 
 先用 Write 工具把消息写到那个路径(中文内容不要用 heredoc)。消息要点:基线为什么是
@@ -400,7 +400,7 @@ git commit -F /c/Users/29801/AppData/Local/Temp/p41_t2_msg.txt
 ## Task 3:写等价性验证脚本
 
 **Files:**
-- Create:`C:\Users\29801\Desktop\wows-bot-review\tools\verify_replayshark_equiv.sh`
+- Create:`%USERPROFILE%\Desktop\wows-bot-review\tools\verify_replayshark_equiv.sh`
 
 - [x] **Step 1:用 Write 工具创建脚本**
 
@@ -422,7 +422,7 @@ git commit -F /c/Users/29801/AppData/Local/Temp/p41_t2_msg.txt
 - [ ] **Step 2:检查脚本语法**
 
 ```bash
-bash -n /c/Users/29801/Desktop/wows-bot-review/tools/verify_replayshark_equiv.sh && echo "语法 OK"
+bash -n <repo>/tools/verify_replayshark_equiv.sh && echo "语法 OK"
 ```
 
 期望:`语法 OK`
@@ -430,9 +430,9 @@ bash -n /c/Users/29801/Desktop/wows-bot-review/tools/verify_replayshark_equiv.sh
 - [ ] **Step 3:提交并推到 gitee**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 git add tools/verify_replayshark_equiv.sh
-git commit -F /c/Users/29801/AppData/Local/Temp/p41_t3_msg.txt
+git commit -F %TEMP%/p41_t3_msg.txt
 git log --oneline -5
 git push
 ```
@@ -445,7 +445,7 @@ git push
 ## Task 4:准备 fixture 并上传(需要主会话与用户交互)
 
 **Files:**
-- Create(本机临时):`C:\Users\29801\AppData\Local\Temp\rs_fixtures\`
+- Create(本机临时):`%TEMP%\rs_fixtures\`
 
 - [ ] **Step 1:本机组装 fixture 目录**
 
@@ -453,7 +453,7 @@ git push
 `C:\Program Files (x86)\Steam\steamapps\common\World of Warships\replays\`
 
 ```bash
-mkdir -p /c/Users/29801/AppData/Local/Temp/rs_fixtures
+mkdir -p %TEMP%/rs_fixtures
 cd "/c/Program Files (x86)/Steam/steamapps/common/World of Warships/replays"
 for f in \
  20260918_230201_PBSA108-Implacable_52_Britain \
@@ -465,10 +465,10 @@ for f in \
  20260824_200315_PZSD910-Black-Lushun_58_RidgeNew \
  20260829_173236_PBSB110-Conqueror_52_Britain \
  20260823_112702_PASC718-AZUR-Montpelier_51_Greece ; do
-  cp "$f.wowsreplay" /c/Users/29801/AppData/Local/Temp/rs_fixtures/
+  cp "$f.wowsreplay" %TEMP%/rs_fixtures/
 done
-ls /c/Users/29801/AppData/Local/Temp/rs_fixtures/ | wc -l
-du -sh /c/Users/29801/AppData/Local/Temp/rs_fixtures/
+ls %TEMP%/rs_fixtures/ | wc -l
+du -sh %TEMP%/rs_fixtures/
 ```
 
 期望:`9`,约 18 MB。
@@ -486,11 +486,11 @@ du -sh /c/Users/29801/AppData/Local/Temp/rs_fixtures/
 - [ ] **Step 2:核对每局的 build 号**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review && python -c "
+cd <repo> && python -c "
 import sys, glob, os
 sys.path.insert(0, 'report/lib')
 from wowsbot import replay
-for f in sorted(glob.glob(r'C:/Users/29801/AppData/Local/Temp/rs_fixtures/*.wowsreplay')):
+for f in sorted(glob.glob(r'C:/Users/<you>/AppData/Local/Temp/rs_fixtures/*.wowsreplay')):
     print(replay.version_of(f), replay.build_of(f), os.path.basename(f)[:50])
 "
 ```
@@ -504,8 +504,8 @@ for f in sorted(glob.glob(r'C:/Users/29801/AppData/Local/Temp/rs_fixtures/*.wows
 
 ```
 ssh-keygen -t ed25519 -C "win-dev"
-ssh-copy-id zifeng@192.168.31.252
-ssh zifeng@192.168.31.252 'echo 免密成功'
+ssh-copy-id <user>@<bot-host>
+ssh <user>@<bot-host> 'echo 免密成功'
 ```
 
 已有 `~/.ssh/id_ed25519` 就跳过第一条。等他贴回 `免密成功`。
@@ -515,9 +515,9 @@ ssh zifeng@192.168.31.252 'echo 免密成功'
 - [ ] **Step 4:上传 fixture**
 
 ```bash
-ssh zifeng@192.168.31.252 'mkdir -p /tmp/rs_fixtures'
-scp /c/Users/29801/AppData/Local/Temp/rs_fixtures/*.wowsreplay zifeng@192.168.31.252:/tmp/rs_fixtures/
-ssh zifeng@192.168.31.252 'ls /tmp/rs_fixtures | wc -l'
+ssh <user>@<bot-host> 'mkdir -p /tmp/rs_fixtures'
+scp %TEMP%/rs_fixtures/*.wowsreplay <user>@<bot-host>:/tmp/rs_fixtures/
+ssh <user>@<bot-host> 'ls /tmp/rs_fixtures | wc -l'
 ```
 
 期望:`9`
@@ -546,8 +546,8 @@ ls -la /opt/wows-bot/tools/build_replayshark.sh /opt/wows-bot/tools/verify_repla
 
 ```
 sudo mkdir -p /opt/wows-replayshark-build
-sudo chown zifeng:zifeng /opt/wows-replayshark-build
-sudo -u zifeng git clone https://ghfast.top/https://github.com/landaire/wows-toolkit.git /opt/wows-replayshark-build 2>&1 | tail -5
+sudo chown <user>:<user> /opt/wows-replayshark-build
+sudo -u <user> git clone https://ghfast.top/https://github.com/landaire/wows-toolkit.git /opt/wows-replayshark-build 2>&1 | tail -5
 ```
 
 成功则继续 Step 3;失败(网络不通)则跳到 Step 2b。
@@ -557,18 +557,18 @@ sudo -u zifeng git clone https://ghfast.top/https://github.com/landaire/wows-too
 本机把基线分支导成干净树再传(排除 `.git` / `target` / 本地数据):
 
 ```bash
-cd /c/Users/29801/Desktop/minimap/wows-toolkit
-git archive --format=tar replayshark-battle-report | gzip > /c/Users/29801/AppData/Local/Temp/rs_src.tar.gz
-ls -la /c/Users/29801/AppData/Local/Temp/rs_src.tar.gz
-scp /c/Users/29801/AppData/Local/Temp/rs_src.tar.gz zifeng@192.168.31.252:/tmp/
+cd <toolkit>
+git archive --format=tar replayshark-battle-report | gzip > %TEMP%/rs_src.tar.gz
+ls -la %TEMP%/rs_src.tar.gz
+scp %TEMP%/rs_src.tar.gz <user>@<bot-host>:/tmp/
 ```
 
 然后给用户:
 
 ```
 sudo mkdir -p /opt/wows-replayshark-build
-sudo chown zifeng:zifeng /opt/wows-replayshark-build
-sudo -u zifeng tar xzf /tmp/rs_src.tar.gz -C /opt/wows-replayshark-build
+sudo chown <user>:<user> /opt/wows-replayshark-build
+sudo -u <user> tar xzf /tmp/rs_src.tar.gz -C /opt/wows-replayshark-build
 ls /opt/wows-replayshark-build/crates/
 ```
 
@@ -580,8 +580,8 @@ ls /opt/wows-replayshark-build/crates/
 给用户:
 
 ```
-cd /opt/wows-replayshark-build && sudo -u zifeng git checkout 2effcd31 2>&1 | tail -3
-sudo -u zifeng git log -1 --format='%h %ad %s' --date=short
+cd /opt/wows-replayshark-build && sudo -u <user> git checkout 2effcd31 2>&1 | tail -3
+sudo -u <user> git log -1 --format='%h %ad %s' --date=short
 ```
 
 期望:`2effcd31 2026-05-21 feat: add support for WASM compilation`
@@ -691,9 +691,9 @@ cd /opt/wows-bot && sudo bash tools/verify_replayshark_equiv.sh /tmp/rs_fixtures
 ## Task 8:换装与收尾(需要主会话与用户交互)
 
 **Files:**
-- Modify:`C:\Users\29801\Desktop\wows-bot-review\report\prebuilt\replayshark-linux-x86_64`
-- Modify:`C:\Users\29801\Desktop\wows-bot-review\docs\UPDATE.md`
-- Modify:`C:\Users\29801\Desktop\wows-bot-review\report\bin\wows_report`(仅注释)
+- Modify:`%USERPROFILE%\Desktop\wows-bot-review\report\prebuilt\replayshark-linux-x86_64`
+- Modify:`%USERPROFILE%\Desktop\wows-bot-review\docs\UPDATE.md`
+- Modify:`%USERPROFILE%\Desktop\wows-bot-review\report\bin\wows_report`(仅注释)
 
 - [ ] **Step 1:备份旧二进制到仓库外**
 
@@ -735,8 +735,8 @@ ls -la /tmp/rs_e2e/
 - [ ] **Step 4:把新二进制提交进仓库**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
-scp zifeng@192.168.31.252:/opt/wows-replayshark-build/target/release/replayshark report/prebuilt/replayshark-linux-x86_64
+cd <repo>
+scp <user>@<bot-host>:/opt/wows-replayshark-build/target/release/replayshark report/prebuilt/replayshark-linux-x86_64
 git status --short report/prebuilt/
 ls -la report/prebuilt/
 ```
@@ -770,7 +770,7 @@ specs-patched 不再必需;这段保留是为了兼容老数据目录里已经�
 - [ ] **Step 7:跑现有测试套件**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 for t in tests/test_*.py; do echo "--- $t"; python "$t" 2>&1 | tail -3; done
 ```
 
@@ -779,9 +779,9 @@ for t in tests/test_*.py; do echo "--- $t"; python "$t" 2>&1 | tail -3; done
 - [ ] **Step 8:提交并推送**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 git add report/prebuilt/replayshark-linux-x86_64 docs/UPDATE.md report/bin/wows_report
-git commit -F /c/Users/29801/AppData/Local/Temp/p41_t8_msg.txt
+git commit -F %TEMP%/p41_t8_msg.txt
 git log --oneline -3
 git push
 ```
@@ -792,7 +792,7 @@ git push
 
 - [ ] **Step 9:更新记忆**
 
-改 `C:\Users\29801\.claude\projects\C--Users-29801-Desktop-minimap-wows-toolkit\memory\wg_1570_update_notes.md`:
+改 `<claude 配置目录>\projects\C--Users-<you>-Desktop-minimap-wows-toolkit\memory\wg_1570_update_notes.md`:
 
 - 「坑 2」整段改写:FLOAT64 手术**已消灭**,指向 `docs/REPLAYSHARK_BUILD.md`
 - 「标准更新流程」里删掉第 3 步(手术)与第 4 步的第二条(`ln -sfn specs-patched`)

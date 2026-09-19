@@ -30,18 +30,20 @@ TYPEDEFS_RS="crates/wowsunpack/src/rpc/typedefs.rs"
 
 die() { echo "error: $*" >&2; exit 1; }
 
-# cargo:先试本机的老位置,不在就回落到 PATH 里的 cargo。
-# 一个标榜「任何人都能照着重建」的脚本,默认值不该只在一台机器上成立。
+# 构建用户:rustup 装在普通用户的家目录里,而本脚本通常用 sudo 跑 ——
+# 所以默认取 $SUDO_USER(sudo 会把调用者放这里),没有再退到当前用户。
+# 为什么不直接用 root 构建:源码树归普通用户,root 跑 cargo 会把 target/ 弄成 root 所有,
+# 下次那个用户再构建就写不进去了。要指定就 BUILD_USER=<用户名>。
+BUILD_USER="${BUILD_USER:-${SUDO_USER:-$(id -un)}}"
+
+# cargo:先试构建用户家目录里的 rustup 安装位置,不在就回落到 PATH 里的 cargo。
 CARGO="${CARGO:-}"
 if [[ -z "$CARGO" ]]; then
-    CARGO=/home/zifeng/.cargo/bin/cargo
-    [[ -x "$CARGO" ]] || CARGO="$(command -v cargo 2>/dev/null || true)"
+    _bu_home="$(getent passwd "$BUILD_USER" 2>/dev/null | cut -d: -f6)"
+    [[ -n "$_bu_home" ]] && CARGO="$_bu_home/.cargo/bin/cargo"
+    [[ -n "$CARGO" && -x "$CARGO" ]] || CARGO="$(command -v cargo 2>/dev/null || true)"
 fi
-[[ -n "$CARGO" && -x "$CARGO" ]] || die "找不到 cargo(试过 /home/zifeng/.cargo/bin/cargo 和 PATH);用 CARGO=/path/to/cargo 指定"
-
-# 构建用户:没有这个用户就别 sudo -u,直接以当前用户构建。
-# (这台机器上源码树归 zifeng,root 直接 cargo build 会把 target/ 弄成 root 所有。)
-BUILD_USER="${BUILD_USER:-zifeng}"
+[[ -n "$CARGO" && -x "$CARGO" ]] || die "找不到 cargo(试过 ~$BUILD_USER/.cargo/bin/cargo 和 PATH);用 CARGO=/path/to/cargo 指定"
 USE_SUDO=1
 if [[ "$BUILD_USER" == "$(id -un)" ]]; then
     USE_SUDO=0
@@ -66,7 +68,7 @@ case "$(readlink -f "$SRC")" in
 esac
 
 echo "[1/4] 检查源码基线"
-# 纯信息性的一步,失败绝不能弄死构建(曾经就是:root 读 zifeng 拥有的仓触发 git 的
+# 纯信息性的一步,失败绝不能弄死构建(曾经就是:root 读普通用户拥有的仓触发 git 的
 # dubious-ownership 保护,set -e 让整个脚本死在这儿)。用构建用户去读,并且兜住失败。
 if [[ -d "$SRC/.git" ]]; then
     head="$(as_builder git -C "$SRC" rev-parse --short HEAD 2>/dev/null || echo '读不到')"

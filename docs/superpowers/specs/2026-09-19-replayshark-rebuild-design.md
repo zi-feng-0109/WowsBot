@@ -130,7 +130,7 @@ commit 都只在本地。所以**可复现性不依赖本机仓库** —— 它�
 两条路都要接着确认工作区状态与两个 patch 已应用,然后:
 
 ```
-sudo -u zifeng /home/zifeng/.cargo/bin/cargo build --release \
+sudo -u <user> ~<user>/.cargo/bin/cargo build --release \
     --manifest-path /opt/wows-replayshark-build/Cargo.toml -p replayshark
 ```
 

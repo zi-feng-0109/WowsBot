@@ -33,3 +33,7 @@ docs/superpowers/specs/2026-06-11-armor-3d-model-design.md
 docs/superpowers/specs/2026-06-11-win-followups.md
 docs/superpowers/specs/2026-06-12-bili-subscription-design.md
 wows-toolkit/target/
+
+# PC 侧更新脚本的机器相关配置(本机路径 + 服务器地址),照 .example 复制一份自己改。
+# 绝不入库 —— 它包含本机绝对路径与内网主机地址。
+tools/update_wg.local.ps1

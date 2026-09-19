@@ -60,12 +60,25 @@ function EnvOr([string]$name, [string]$fallback) {
 
 # ---------------------------------------------------------------- 配置
 
+# 机器相关的三项(toolkit 二进制位置、提取输出目录、服务器地址)不写死在仓库里 ——
+# 那既是把本机路径和内网地址公开出去,也让别人拿到这个脚本没法用。
+# 放同目录的 update_wg.local.ps1(已 gitignore),存在就先加载;
+# 照 update_wg.local.ps1.example 复制一份改掉即可,一次配好之后双击照样能跑。
+$LocalCfg = Join-Path $PSScriptRoot 'update_wg.local.ps1'
+if (Test-Path -LiteralPath $LocalCfg -PathType Leaf) {
+    . $LocalCfg
+    Write-Host "已加载本地配置:$LocalCfg"
+}
+
+# 这两个是通用默认值,不含任何本机信息,一般不用改
 $GameDir      = EnvOr 'WOWS_GAME_DIR'      'C:\Program Files (x86)\Steam\steamapps\common\World of Warships'
-$DataMgr      = EnvOr 'WOWS_DATA_MGR'      'C:\Users\29801\Desktop\minimap\wows-toolkit\target\release\wows-data-mgr.exe'
-$ExtractedOut = EnvOr 'WOWS_EXTRACTED_OUT' 'C:\Users\29801\Desktop\minimap\wows-toolkit\extracted'
-$SshTarget    = EnvOr 'WOWS_SSH_TARGET'    'zifeng@192.168.31.252'
 $IncomingRoot = (EnvOr 'WOWS_INCOMING'     '/var/lib/wows-data/incoming').TrimEnd('/')
 $PythonExe    = EnvOr 'WOWS_PYTHON'        'python'
+
+# 这三项必须由本地配置或环境变量给出,没有通用默认值
+$DataMgr      = EnvOr 'WOWS_DATA_MGR'      ''
+$ExtractedOut = EnvOr 'WOWS_EXTRACTED_OUT' ''
+$SshTarget    = EnvOr 'WOWS_SSH_TARGET'    ''
 
 # 区服要求**不给环境变量覆盖**:这道闸的全部意义就是「手滑用测试服客户端提数据」时拦住,
 # 留个后门等于没有这道闸。真要从别的服提数据,那是另一条流程,不走这个脚本。
@@ -102,8 +115,22 @@ if (-not (Test-Path -LiteralPath $DumpCheck -PathType Leaf)) {
 if (-not (Get-Command $PythonExe -ErrorAction SilentlyContinue)) {
     Die "找不到 python($PythonExe)。校验这一步离不开它,拒绝继续(用 WOWS_PYTHON 指定)"
 }
+$missing = @()
+if ([string]::IsNullOrWhiteSpace($DataMgr))      { $missing += 'WOWS_DATA_MGR(wows-data-mgr.exe 的完整路径)' }
+if ([string]::IsNullOrWhiteSpace($ExtractedOut)) { $missing += 'WOWS_EXTRACTED_OUT(提数据的输出目录)' }
+if ([string]::IsNullOrWhiteSpace($SshTarget))    { $missing += 'WOWS_SSH_TARGET(形如 user@host)' }
+if ($missing.Count -gt 0) {
+    Write-Host ''
+    Write-Host '[停止] 下面这几项没配(它们是机器相关的,仓库里不放默认值):' -ForegroundColor Red
+    foreach ($m in $missing) { Write-Host "    - $m" }
+    Write-Host ''
+    Write-Host '配法:把 update_wg.local.ps1.example 复制成 update_wg.local.ps1 再改掉里面的值。'
+    Write-Host "     完整路径:$LocalCfg"
+    Write-Host '     那个文件已被 gitignore,不会进版本库。'
+    exit 1
+}
 if (-not (Test-Path -LiteralPath $DataMgr -PathType Leaf)) {
-    Die "找不到提数据的二进制:$DataMgr(先在 wows-toolkit 里 cargo build --release,或用 WOWS_DATA_MGR 指定)"
+    Die "找不到提数据的二进制:$DataMgr(先在 wows-toolkit 里 cargo build --release,或改 update_wg.local.ps1)"
 }
 Good '游戏目录、dumpcheck.py、python、wows-data-mgr 都在'
 

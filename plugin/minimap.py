@@ -292,10 +292,14 @@ async def _at_only(bot: Bot, event: MessageEvent):
     await _reply_menu(bot, event)
 
 
-# 猜船开关状态由 EssexBot 维护(独立进程),菜单只读它的状态文件做显示。
+# 猜船开关状态由 NoneBot 宿主项目维护(独立进程),菜单只读它的状态文件做显示。
+# 默认值从本文件位置推导而不是写死:plugin/*.py 是 cp 到宿主的 src/plugins/ 里跑的
+# (DEPLOY.md §5.2),所以往上三级就是宿主根目录,data/ 在它下面。
+# announcement.py 用的同一个技巧。想放别处就设 ESSEXBOT_GUESS_TOGGLE。
+_HOST_ROOT = Path(__file__).resolve().parent.parent.parent
 GUESS_TOGGLE_FILE = os.environ.get(
     "ESSEXBOT_GUESS_TOGGLE",
-    "/home/zifeng/桌面/bot/EssexBot/data/guess_toggle.json",
+    str(_HOST_ROOT / "data" / "guess_toggle.json"),
 )
 
 

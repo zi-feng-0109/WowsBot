@@ -72,9 +72,9 @@ update_wg.bat                      /更新wg版本 (QQ 超管指令)
 | 变量 | 默认 |
 |---|---|
 | `WOWS_GAME_DIR` | `C:\Program Files (x86)\Steam\steamapps\common\World of Warships` |
-| `WOWS_DATA_MGR` | `C:\Users\29801\Desktop\minimap\wows-toolkit\target\release\wows-data-mgr.exe` |
-| `WOWS_EXTRACTED_OUT` | `C:\Users\29801\Desktop\minimap\wows-toolkit\extracted` |
-| `WOWS_SSH_TARGET` | `zifeng@192.168.31.252` |
+| `WOWS_DATA_MGR` | `%USERPROFILE%\Desktop\minimap\wows-toolkit\target\release\wows-data-mgr.exe` |
+| `WOWS_EXTRACTED_OUT` | `%USERPROFILE%\Desktop\minimap\wows-toolkit\extracted` |
+| `WOWS_SSH_TARGET` | `<user>@<bot-host>` |
 | `WOWS_INCOMING` | `/var/lib/wows-data/incoming` |
 
 流程,任何一步失败就停:

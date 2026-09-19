@@ -53,8 +53,8 @@
 ## Task 1:`wowsbot/dumpcheck.py` —— 共用的校验逻辑
 
 **Files:**
-- Create: `C:\Users\29801\Desktop\wows-bot-review\report\lib\wowsbot\dumpcheck.py`
-- Test: `C:\Users\29801\Desktop\wows-bot-review\tests\test_wowsbot_dumpcheck.py`
+- Create: `%USERPROFILE%\Desktop\wows-bot-review\report\lib\wowsbot\dumpcheck.py`
+- Test: `%USERPROFILE%\Desktop\wows-bot-review\tests\test_wowsbot_dumpcheck.py`
 
 - [ ] **Step 1:先写测试**
 
@@ -199,7 +199,7 @@ if __name__ == "__main__":
 - [ ] **Step 2:跑测试确认它失败**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review && python tests/test_wowsbot_dumpcheck.py
+cd <repo> && python tests/test_wowsbot_dumpcheck.py
 ```
 
 期望:`ModuleNotFoundError: No module named 'wowsbot.dumpcheck'`
@@ -366,7 +366,7 @@ if __name__ == "__main__":
 - [ ] **Step 4:跑测试确认全过**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review && python tests/test_wowsbot_dumpcheck.py
+cd <repo> && python tests/test_wowsbot_dumpcheck.py
 ```
 
 期望:10 行 `ok ...` 然后 `== ALL PASS ==`,退出码 0。
@@ -374,7 +374,7 @@ cd /c/Users/29801/Desktop/wows-bot-review && python tests/test_wowsbot_dumpcheck
 - [ ] **Step 5:纯净性守卫必须仍然通过**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review && python tests/test_wowsbot_purity.py
+cd <repo> && python tests/test_wowsbot_purity.py
 ```
 
 期望:`== ALL PASS ==`。`dumpcheck.py` 不读 `os.environ`,所以该过。若失败,说明实现里
@@ -383,7 +383,7 @@ cd /c/Users/29801/Desktop/wows-bot-review && python tests/test_wowsbot_purity.py
 - [ ] **Step 6:用真实数据验一次(本机有 15.8)**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review/report/lib && python wowsbot/dumpcheck.py /c/Users/29801/Desktop/minimap/wows-toolkit/extracted/15.8.0_13187581
+cd <repo>/report/lib && python wowsbot/dumpcheck.py <toolkit>/extracted/15.8.0_13187581
 ```
 
 期望:`校验通过: 15.8.0_13187581 (build 13187581)`,退出码 0。
@@ -392,12 +392,12 @@ cd /c/Users/29801/Desktop/wows-bot-review/report/lib && python wowsbot/dumpcheck
 - [ ] **Step 7:提交**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 git add report/lib/wowsbot/dumpcheck.py tests/test_wowsbot_dumpcheck.py
 git commit -F <消息文件>
 ```
 
-消息先用 Write 写到 `C:\Users\29801\AppData\Local\Temp\p42_t1_msg.txt`,要点:为什么需要这道
+消息先用 Write 写到 `%TEMP%\p42_t1_msg.txt`,要点:为什么需要这道
 校验(dump 静默降级只打 WARN 仍 exit 0,15.7 那次的实际后果)、为什么 PC 与服务器共用一份、
 `allow_warn` 为什么只放过 WARN、真实 15.8 数据验证通过。末尾加
 `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`。
@@ -407,8 +407,8 @@ git commit -F <消息文件>
 ## Task 2:`paths.py` 加 `INCOMING_ROOT`
 
 **Files:**
-- Modify: `C:\Users\29801\Desktop\wows-bot-review\report\lib\wowsbot\paths.py`
-- Modify: `C:\Users\29801\Desktop\wows-bot-review\tests\test_wowsbot_paths.py`
+- Modify: `%USERPROFILE%\Desktop\wows-bot-review\report\lib\wowsbot\paths.py`
+- Modify: `%USERPROFILE%\Desktop\wows-bot-review\tests\test_wowsbot_paths.py`
 
 - [ ] **Step 1:在 `paths.py` 里 `SPECS_PATCHED_ROOT` 那一组旁边加**
 
@@ -435,7 +435,7 @@ INCOMING_ROOT = os.environ.get("WOWS_INCOMING_ROOT", "/var/lib/wows-data/incomin
 - [ ] **Step 3:跑测试**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review && python tests/test_wowsbot_paths.py && python tests/test_wowsbot_purity.py
+cd <repo> && python tests/test_wowsbot_paths.py && python tests/test_wowsbot_purity.py
 ```
 
 期望:两个都 `== ALL PASS ==`。
@@ -443,7 +443,7 @@ cd /c/Users/29801/Desktop/wows-bot-review && python tests/test_wowsbot_paths.py 
 - [ ] **Step 4:提交**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 git add report/lib/wowsbot/paths.py tests/test_wowsbot_paths.py
 git commit -m "feat(paths): 声明 INCOMING_ROOT 上传暂存区
 
@@ -458,8 +458,8 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ## Task 3:服务器侧逻辑 `plugin/wg_update.py`
 
 **Files:**
-- Create: `C:\Users\29801\Desktop\wows-bot-review\plugin\wg_update.py`
-- Test: `C:\Users\29801\Desktop\wows-bot-review\tests\test_wg_update.py`
+- Create: `%USERPROFILE%\Desktop\wows-bot-review\plugin\wg_update.py`
+- Test: `%USERPROFILE%\Desktop\wows-bot-review\tests\test_wg_update.py`
 
 **设计要点**:本模块**不 import nonebot**,所有外部动作(跑命令、移动目录)经一个注入的
 `runner` 对象。这样测试用假 runner 就能覆盖全部分支,不需要真的服务器、真的 294MB 数据。
@@ -777,7 +777,7 @@ if __name__ == "__main__":
 - [ ] **Step 2:跑测试确认失败**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review && python tests/test_wg_update.py
+cd <repo> && python tests/test_wg_update.py
 ```
 
 期望:`ModuleNotFoundError: No module named 'plugin.wg_update'`
@@ -830,7 +830,7 @@ def run_update(*, incoming_root, extracted_root, repo_dir, plugins_dir,
 - [ ] **Step 4:跑测试确认全过**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review && python tests/test_wg_update.py
+cd <repo> && python tests/test_wg_update.py
 ```
 
 期望:16 行 `ok ...` + `== ALL PASS ==`。
@@ -838,7 +838,7 @@ cd /c/Users/29801/Desktop/wows-bot-review && python tests/test_wg_update.py
 - [ ] **Step 5:确认没碰 minimap.py、也没引入 nonebot 依赖**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 git status --short plugin/
 grep -n "nonebot" plugin/wg_update.py || echo "  ok 没有 nonebot 依赖"
 ```
@@ -847,7 +847,7 @@ grep -n "nonebot" plugin/wg_update.py || echo "  ok 没有 nonebot 依赖"
 
 - [ ] **Step 6:提交**
 
-消息写到 `C:\Users\29801\AppData\Local\Temp\p42_t3_msg.txt`,要点:为什么逻辑与 matcher 分开
+消息写到 `%TEMP%\p42_t3_msg.txt`,要点:为什么逻辑与 matcher 分开
 (顶层 `on_command` 让文件无法被测试 import)、runner 注入让 12 个分支全可测、
 搬运后失败为什么不回滚。
 
@@ -856,7 +856,7 @@ grep -n "nonebot" plugin/wg_update.py || echo "  ok 没有 nonebot 依赖"
 ## Task 4:NoneBot matcher `plugin/wg_update_cmd.py`
 
 **Files:**
-- Create: `C:\Users\29801\Desktop\wows-bot-review\plugin\wg_update_cmd.py`
+- Create: `%USERPROFILE%\Desktop\wows-bot-review\plugin\wg_update_cmd.py`
 
 - [ ] **Step 1:实现**
 
@@ -919,7 +919,7 @@ async def _handle(event: Event, args: Message = CommandArg()):
 - [ ] **Step 2:语法与导入形状检查**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review && python -c "import ast; ast.parse(open('plugin/wg_update_cmd.py',encoding='utf-8').read()); print('语法 OK')"
+cd <repo> && python -c "import ast; ast.parse(open('plugin/wg_update_cmd.py',encoding='utf-8').read()); print('语法 OK')"
 grep -c "await asyncio.to_thread\|is_super_admin" plugin/wg_update_cmd.py
 ```
 
@@ -928,7 +928,7 @@ grep -c "await asyncio.to_thread\|is_super_admin" plugin/wg_update_cmd.py
 - [ ] **Step 3:确认没有自动重启的痕迹**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review && grep -n "systemctl\|restart\|kill" plugin/wg_update_cmd.py plugin/wg_update.py || echo "  ok 没有任何重启服务的代码"
+cd <repo> && grep -n "systemctl\|restart\|kill" plugin/wg_update_cmd.py plugin/wg_update.py || echo "  ok 没有任何重启服务的代码"
 ```
 
 期望:只可能命中「需重启」这类**提示文本**,不能有执行重启的代码。
@@ -936,7 +936,7 @@ cd /c/Users/29801/Desktop/wows-bot-review && grep -n "systemctl\|restart\|kill" 
 - [ ] **Step 4:跑全部测试**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review && for t in tests/test_*.py; do printf "%-34s " "$(basename $t)"; python "$t" >/dev/null 2>&1 && echo PASS || echo FAIL; done
+cd <repo> && for t in tests/test_*.py; do printf "%-34s " "$(basename $t)"; python "$t" >/dev/null 2>&1 && echo PASS || echo FAIL; done
 ```
 
 期望:9 个套件(原 7 + 新 2)全 PASS。
@@ -944,7 +944,7 @@ cd /c/Users/29801/Desktop/wows-bot-review && for t in tests/test_*.py; do printf
 - [ ] **Step 5:提交**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 git add plugin/wg_update_cmd.py
 git commit -m "feat(bot): /更新wg版本 超管指令(薄壳)
 
@@ -960,8 +960,8 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ## Task 5:PC 侧 `tools/update_wg.ps1` + `tools/update_wg.bat`
 
 **Files:**
-- Create: `C:\Users\29801\Desktop\wows-bot-review\tools\update_wg.ps1`
-- Create: `C:\Users\29801\Desktop\wows-bot-review\tools\update_wg.bat`
+- Create: `%USERPROFILE%\Desktop\wows-bot-review\tools\update_wg.ps1`
+- Create: `%USERPROFILE%\Desktop\wows-bot-review\tools\update_wg.bat`
 
 - [ ] **Step 1:写 `update_wg.bat`(三行启动器)**
 
@@ -1013,7 +1013,7 @@ pause
 - [ ] **Step 3:语法检查(不执行)**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review && powershell -NoProfile -Command "\$null = [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw tools/update_wg.ps1), [ref]\$null); Write-Host 'ps1 语法 OK'"
+cd <repo> && powershell -NoProfile -Command "\$null = [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw tools/update_wg.ps1), [ref]\$null); Write-Host 'ps1 语法 OK'"
 ```
 
 期望:`ps1 语法 OK`
@@ -1021,7 +1021,7 @@ cd /c/Users/29801/Desktop/wows-bot-review && powershell -NoProfile -Command "\$n
 - [ ] **Step 4:`-DryRun` 实跑(本机游戏是 15.8,已提取过)**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review && powershell -NoProfile -ExecutionPolicy Bypass -File tools/update_wg.ps1 -DryRun
+cd <repo> && powershell -NoProfile -ExecutionPolicy Bypass -File tools/update_wg.ps1 -DryRun
 ```
 
 期望:识别出 build `13187581`、区服 `asia` 通过、然后因为「本机已提取且服务器已有」在第 3 步
@@ -1033,8 +1033,8 @@ cd /c/Users/29801/Desktop/wows-bot-review && powershell -NoProfile -ExecutionPol
 
 ```bash
 # 准备假游戏目录
-mkdir -p /c/Users/29801/AppData/Local/Temp/fakegame/bin/13999999
-echo "eu" > /c/Users/29801/AppData/Local/Temp/fakegame/currentrealm.txt
+mkdir -p %TEMP%/fakegame/bin/13999999
+echo "eu" > %TEMP%/fakegame/currentrealm.txt
 ```
 
 - **区服不对**:`WOWS_GAME_DIR=<假目录>` 跑,期望停在第 2 步、提示当前是 `eu` 服
@@ -1047,7 +1047,7 @@ echo "eu" > /c/Users/29801/AppData/Local/Temp/fakegame/currentrealm.txt
 
 - [ ] **Step 6:提交**
 
-消息写到 `C:\Users\29801\AppData\Local\Temp\p42_t5_msg.txt`,要点:为什么 `.bat` 只是启动器、
+消息写到 `%TEMP%\p42_t5_msg.txt`,要点:为什么 `.bat` 只是启动器、
 区服校验为什么是硬拒绝(build 体系独立,污染数据集)、三条失败路径的实测结果。
 
 ---
@@ -1055,7 +1055,7 @@ echo "eu" > /c/Users/29801/AppData/Local/Temp/fakegame/currentrealm.txt
 ## Task 6:`docs/UPDATE.md` 增「自动化流程」一节
 
 **Files:**
-- Modify: `C:\Users\29801\Desktop\wows-bot-review\docs\UPDATE.md`
+- Modify: `%USERPROFILE%\Desktop\wows-bot-review\docs\UPDATE.md`
 
 - [ ] **Step 1:在「## 完整流程」之前插入新一节**
 
@@ -1075,7 +1075,7 @@ echo "eu" > /c/Users/29801/AppData/Local/Temp/fakegame/currentrealm.txt
 - [ ] **Step 2:校验文档里的链接与路径都存在**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 for f in tools/update_wg.bat tools/update_wg.ps1 plugin/wg_update.py plugin/wg_update_cmd.py report/lib/wowsbot/dumpcheck.py; do
   [ -f "$f" ] && echo "  ok $f" || echo "  缺! $f"
 done
@@ -1087,7 +1087,7 @@ grep -c "update_wg" docs/UPDATE.md
 - [ ] **Step 3:提交**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 git add docs/UPDATE.md
 git commit -m "docs(update): 增自动化流程一节,手工流程保留作为退路
 
@@ -1110,14 +1110,14 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - [ ] **Step 1:推代码,服务器拉取**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review && git log --oneline origin/main..HEAD && git push
+cd <repo> && git log --oneline origin/main..HEAD && git push
 ```
 
 推之前把 `git log` 给用户看。然后给用户:
 
 ```
 cd /opt/wows-bot && sudo git pull
-sudo cp /opt/wows-bot/plugin/*.py ~zifeng/桌面/bot/EssexBot/src/plugins/
+sudo cp /opt/wows-bot/plugin/*.py ~/my-bot/src/plugins/
 ```
 
 第二条是必须的 —— 新增了两个插件文件,不 cp 过去 NoneBot 看不到 `/更新wg版本`。
@@ -1227,7 +1227,7 @@ cd /opt/wows-bot && sudo python3 tools/build_builds_json.py
 
 - [ ] **Step 11:更新记忆**
 
-改 `C:\Users\29801\.claude\projects\C--Users-29801-Desktop-minimap-wows-toolkit\memory\wg_1570_update_notes.md`
+改 `<claude 配置目录>\projects\C--Users-<you>-Desktop-minimap-wows-toolkit\memory\wg_1570_update_notes.md`
 的「标准更新流程」一节:开头加一句「**日常走自动化**:更新游戏 → 双击 `tools\\update_wg.bat`
 → QQ 发 `/更新wg版本`;下面的手工流程是退路」,并指向 `docs/UPDATE.md` 的自动化一节。
 `MEMORY.md` 的那条指针描述同步更新。

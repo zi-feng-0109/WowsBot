@@ -10,7 +10,7 @@ bot 实际跑哪个版本由 NoneBot `.env` 里的 `WOWS_BOT_VERSION=...` 决定
 发版流程:
 1. 改一下 `plugin/version.py` 里的 `_DEFAULT_VERSION`,跟最新一行 CHANGELOG 一致。
 2. 服务器 `EssexBot/.env` 里改 `WOWS_BOT_VERSION=<新版>`。
-3. `git pull` → `cp /opt/wows-bot/plugin/*.py ~zifeng/桌面/bot/EssexBot/src/plugins/` → `systemctl restart wows-bot`。
+3. `git pull` → `cp /opt/wows-bot/plugin/*.py ~/my-bot/src/plugins/` → `systemctl restart wows-bot`。
    (只动 `report/bin/*` 的话不用 cp、不用重启,subprocess 现拉。详见 `docs/UPDATE.md` §0.4)
 
 ---
@@ -54,9 +54,9 @@ bot 实际跑哪个版本由 NoneBot `.env` 里的 `WOWS_BOT_VERSION=...` 决定
 
 ### 部署
 
-- 服务器侧:`cd /opt/wows-bot && sudo git pull` + `sudo cp plugin/*.py ~zifeng/桌面/bot/EssexBot/src/plugins/` +
+- 服务器侧:`cd /opt/wows-bot && sudo git pull` + `sudo cp plugin/*.py ~/my-bot/src/plugins/` +
   在 `EssexBot/.env` 改 `WOWS_BOT_VERSION=1.1.0` + `systemctl restart wows-bot`。
-- 首次启用公告功能要建 `~zifeng/桌面/bot/EssexBot/data/admins.json` 并填超管 QQ 号(见 DEPLOY.md §5.2.1)。
+- 首次启用公告功能要建 `~/my-bot/data/admins.json` 并填超管 QQ 号(见 DEPLOY.md §5.2.1)。
   之前已经在用本地 `announcement.py` 的话,`admins.json` 已经存在,直接 `cp` 覆盖插件即可。
 
 ---

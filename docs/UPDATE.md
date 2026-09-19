@@ -99,8 +99,8 @@ cd /opt/wows-bot
 sudo git pull
 
 # 0.2 同步 plugin/*.py 到 NoneBot 项目 (DEPLOY.md §5.2 强调不能用软链)
-# 把下面路径改成你的 NoneBot 项目实际位置, e.g. ~zifeng/桌面/bot/EssexBot/src/plugin
-NB_PLUGIN_DIR=~zifeng/桌面/bot/EssexBot/src/plugin
+# 把下面路径改成你的 NoneBot 项目实际位置, e.g. ~/my-bot/src/plugin
+NB_PLUGIN_DIR=~/my-bot/src/plugin
 sudo cp /opt/wows-bot/plugin/*.py "$NB_PLUGIN_DIR/"
 # (现在有 minimap.py / permissions.py / version.py 三个文件,*.py 一把全 cp)
 

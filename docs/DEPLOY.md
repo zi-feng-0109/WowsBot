@@ -9,6 +9,25 @@
 
 每台 bot 主机部署一次。Ubuntu/Debian 写法,其他发行版改包名。
 
+### 文档里的占位符
+
+本仓库所有文档里出现的下面这些都是**占位符,要换成你自己的值**,不是能直接复制粘贴的字面量:
+
+| 占位符 | 含义 |
+|---|---|
+| `<user>` | 服务器上跑 bot / 编译用的普通用户名 |
+| `<bot-host>` | 机器人服务器的地址(IP 或域名) |
+| `<user>@<bot-host>` | scp / ssh 的目标 |
+| `~/my-bot` | 你自己的 NoneBot 2 项目根目录 |
+| `~/my-bot/src/plugins/` | 那个项目的插件目录 —— 本仓库 `plugin/*.py` 要 cp 进去 |
+| `<ver>_<build>` | 一个游戏版本目录名,例如 `15.8.0_13187581` |
+| `<你的 application_id>` | WG 开发者 application_id,仅构建 `ships.json` 时用 |
+| `sk-xxxxxxxx` | DeepSeek API key |
+
+仓库里**不含任何真实凭据**,也不含作者的服务器地址与本机路径 —— 机器相关的配置一律走
+环境变量或本地配置文件(见 §5.4 与 `tools/update_wg.local.ps1.example`)。
+你自己填过的那些值也不要提交:`tools/update_wg.local.ps1` 已被 `.gitignore`。
+
 > ⚠️ napcat (或别的 OneBot v11 客户端) 安装/登录不在本文档范围,自行准备。
 >
 > 💡 第 2 节 Linux 编译 (`setup.sh` 跑 cargo build) 和第 1 节 Windows 提取数据

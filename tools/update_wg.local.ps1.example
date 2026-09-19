@@ -1,0 +1,31 @@
+﻿# update_wg.local.ps1.example —— 机器相关配置的模板
+#
+# 用法:把本文件复制成同目录的 update_wg.local.ps1,改掉下面的值。
+#       那个文件已被 .gitignore,不会进版本库 —— 所以本机路径和服务器地址不会被公开。
+#
+# 为什么要这么绕:这三项是机器相关的。写死在仓库里,既是把本机路径和内网地址公开出去,
+# 也让别人拿到这个脚本没法用。放本地文件则是「一次配好,之后双击照样跑」。
+#
+# 本文件由 update_wg.ps1 用点号加载(dot-source),所以这里设的 $env:* 会被它看到。
+# 注意:保存成 **UTF-8 with BOM**,否则 Windows PowerShell 5.1 会把中文注释读成乱码。
+
+# wows-data-mgr.exe 的完整路径(在 wows-toolkit 里 cargo build --release -p wows-data-mgr 产出)
+$env:WOWS_DATA_MGR = 'D:\path\to\wows-toolkit\target\release\wows-data-mgr.exe'
+
+# 提数据的输出目录。wows-data-mgr 会在它下面建 <version>_<build>\ 子目录
+$env:WOWS_EXTRACTED_OUT = 'D:\path\to\wows-toolkit\extracted'
+
+# 机器人服务器,形如 user@host。需要 SSH 免密(ssh-copy-id 一次即可),否则 scp 会卡在密码提示
+$env:WOWS_SSH_TARGET = 'user@your-bot-host'
+
+# ---------------------------------------------------------------------------
+# 下面这些有通用默认值,一般不用设。要覆盖就取消注释。
+
+# 游戏安装目录(默认是 Steam 的标准位置)
+# $env:WOWS_GAME_DIR = 'C:\Program Files (x86)\Steam\steamapps\common\World of Warships'
+
+# 服务器上的上传暂存区(默认 /var/lib/wows-data/incoming)
+# $env:WOWS_INCOMING = '/var/lib/wows-data/incoming'
+
+# python 解释器(默认 python)。校验那一步要用它跑 report/lib/wowsbot/dumpcheck.py
+# $env:WOWS_PYTHON = 'python'

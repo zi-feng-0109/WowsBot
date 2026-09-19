@@ -158,8 +158,14 @@ bash tools/build_replayshark.sh
    replayshark」的兜底。基线不对时第 2 步会跳过 battle-report patch,编译仍然会成功,
    只有这个自检能抓到。缺子命令就直接 `die`,不给你拿它去换装的机会。
 
-可调环境变量:`SRC`、`CARGO`(默认 `/home/zifeng/.cargo/bin/cargo`)、`BUILD_USER`(默认
-`zifeng`,编译用 `sudo -u` 降权跑,免得 root 在 `~/.cargo` 里留下 root 拥有的缓存)。
+可调环境变量:
+
+- `SRC` —— 源码目录,默认 `/opt/wows-replayshark-build`
+- `BUILD_USER` —— 用哪个用户编译。默认取 `$SUDO_USER`(本脚本通常 `sudo bash` 跑,
+  sudo 会把调用者放在那里),没有再退到当前用户。**为什么不用 root 编**:源码树归普通用户,
+  root 跑 cargo 会把 `target/` 弄成 root 所有,下次那个用户再构建就写不进去了
+- `CARGO` —— cargo 路径。默认找 `~<BUILD_USER>/.cargo/bin/cargo`(rustup 装在用户家目录里),
+  找不到再回落 PATH 里的 `cargo`
 
 ### 依赖锁定:基线自带 `Cargo.lock`
 

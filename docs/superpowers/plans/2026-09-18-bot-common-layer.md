@@ -97,7 +97,7 @@
 ### 9. 有意不收进 paths 的东西
 
 - **`plugin/minimap.py` 的 `GUESS_TOGGLE_FILE`**(env `ESSEXBOT_GUESS_TOGGLE`,默认
-  `/home/zifeng/桌面/bot/EssexBot/data/guess_toggle.json`)—— 它指向 **EssexBot 项目自己的
+  `~/my-bot/data/guess_toggle.json`)—— 它指向 **EssexBot 项目自己的
   数据文件**,在 `/opt/wows-bot` 之外。`wowsbot.paths` 是以 wows-bot 仓为根的表,收它进去
   等于把两个部署单元的路径混在一起,所以**故意留在原处**。
 - **`WOWS_PYTHON`**(minimap.py 两处 + `wows_report::find_python`)—— 那是"用哪个解释器
@@ -149,7 +149,7 @@
 - [ ] **Step 1: 固定测试输入**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 mkdir -p /tmp/p2_baseline
 ls -la "/c/Program Files (x86)/Steam/steamapps/common/World of Warships/replays/"*.wowsreplay | tail -3
 ```
@@ -166,7 +166,7 @@ Expected: 打印 `REPLAY_OK`。若该回放已不存在,换任意一场 15.8 回
 - [ ] **Step 2: 核对生产 .env(风险 2 的验证,在 bot 服务器上跑)**
 
 ```bash
-grep -nE 'WOWS_(DATA_DIR|EXTRACTED_ROOT|SPECS_DIR|SPECS_PATCHED_ROOT|REPLAYSHARK|REPLAYSHARK_LESTA|REPORT_CMD|REPORT_FULL_CMD|REPORT_BATTLE_CMD|REPORT_DAMAGE_CMD|REPORT_FULL_LESTA_CMD|ANALYZE_CMD|RENDER_SH|RENDER_PY|RENDER_CHAT|RENDER_CRIMINALS|SHIPS_JSON|ARMOR_JSON|BUILDS_JSON|CONSTANTS_JSON|ACHIEVEMENTS_JSON|ACHIEVEMENT_ICONS|TRANSLATIONS_MO|CJK_FONT|MONO_FONT|OUT_DIR|REPLAY_BASEDIR|BOT_HOME|PYTHON|PY_VENV|TOOLKIT_BIN|MP4_TIMEOUT|PNG_TIMEOUT|ANALYZE_TIMEOUT)' ~zifeng/桌面/bot/EssexBot/.env
+grep -nE 'WOWS_(DATA_DIR|EXTRACTED_ROOT|SPECS_DIR|SPECS_PATCHED_ROOT|REPLAYSHARK|REPLAYSHARK_LESTA|REPORT_CMD|REPORT_FULL_CMD|REPORT_BATTLE_CMD|REPORT_DAMAGE_CMD|REPORT_FULL_LESTA_CMD|ANALYZE_CMD|RENDER_SH|RENDER_PY|RENDER_CHAT|RENDER_CRIMINALS|SHIPS_JSON|ARMOR_JSON|BUILDS_JSON|CONSTANTS_JSON|ACHIEVEMENTS_JSON|ACHIEVEMENT_ICONS|TRANSLATIONS_MO|CJK_FONT|MONO_FONT|OUT_DIR|REPLAY_BASEDIR|BOT_HOME|PYTHON|PY_VENV|TOOLKIT_BIN|MP4_TIMEOUT|PNG_TIMEOUT|ANALYZE_TIMEOUT)' ~/my-bot/.env
 ```
 
 Expected: 列出生产实际设置。**判据:若 `WOWS_DATA_DIR` 与 `WOWS_EXTRACTED_ROOT` 同时出现且值不同,停下来找用户确认**(合并优先级会改变其中一方行为)。只出现一个或都没有 → 安全。把输出贴进执行记录。
@@ -174,11 +174,11 @@ Expected: 列出生产实际设置。**判据:若 `WOWS_DATA_DIR` 与 `WOWS_EXTR
 - [ ] **Step 3: 产出 fixture 输入 JSON**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 T="$(python -c 'import tempfile;print(tempfile.gettempdir())')"
 mkdir -p "$T/p2_baseline"
-RS=/c/Users/29801/Desktop/minimap/wows-toolkit/target/release/replayshark.exe
-EX=/c/Users/29801/Desktop/minimap/wows-toolkit/extracted
+RS=<toolkit>/target/release/replayshark.exe
+EX=<toolkit>/extracted
 "$RS" -e "$EX" battle-results --format normalized --allow-approximate-constants   --out-file "$T/p2_baseline/report.json" "$(cat /tmp/p2_baseline/replay.txt)"
 ls -la "$T/p2_baseline/report.json"
 ```
@@ -192,7 +192,7 @@ Expected: JSON 生成(约 260KB)。**注意本机 Python 是 Windows 版,认不�
 **裁掉底部 48px 后的正文哈希**,不是文件哈希 —— footer 里的分钟时间戳因此不影响比对。
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 T="$(python -c 'import tempfile;print(tempfile.gettempdir())')"
 bash tools/p2_render_fixtures.sh "$T/p2_baseline_fix"
 ```
@@ -212,7 +212,7 @@ Expected: `DETERMINISTIC_OK`。**这是后续每个改动任务的验收凭据�
 - [ ] **Step 5: 记录改动前的测试状态**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 python tests/test_permissions.py && python tests/test_render_menu.py && python tests/test_render_armor.py
 ```
 
@@ -221,7 +221,7 @@ Expected: 三个都打印 `== ALL PASS ==`。本来就红的记录下来,不算�
 - [ ] **Step 6: 提交基线清单**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 T="$(python -c 'import tempfile;print(tempfile.gettempdir())')"
 cp "$T/p2_baseline_fix/fixtures.sha256" docs/superpowers/plans/2026-09-18-p2-baseline.sha256
 git add docs/superpowers/plans/2026-09-18-p2-baseline.sha256 tools/p2_render_fixtures.sh
@@ -353,7 +353,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `cd /c/Users/29801/Desktop/wows-bot-review && python tests/test_wowsbot_paths.py`
+Run: `cd <repo> && python tests/test_wowsbot_paths.py`
 Expected: `ModuleNotFoundError: No module named 'wowsbot'`
 
 - [ ] **Step 3: 建包 + 写 paths.py**
@@ -1284,13 +1284,13 @@ ACHIEVEMENT_ICON_DIR = _paths.ACHIEVEMENT_ICON_DIR   # achievement_icon() 用
 
 - [ ] **Step 2: 语法检查**
 
-Run: `cd /c/Users/29801/Desktop/wows-bot-review && python -m py_compile report/bin/render_battle_report.py && echo OK`
+Run: `cd <repo> && python -m py_compile report/bin/render_battle_report.py && echo OK`
 Expected: `OK`
 
 - [ ] **Step 3: 重跑渲染并比对基线 sha256(硬门槛)**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 T="$(python -c 'import tempfile;print(tempfile.gettempdir())')"
 rm -rf "$T/p2_check"
 bash tools/p2_render_fixtures.sh "$T/p2_check" >/dev/null
@@ -1393,7 +1393,7 @@ from wowsbot.theme import (                                            # noqa: E
 - [ ] **Step 3: 语法检查 + 零残留断言**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 python -m py_compile report/bin/render_chat.py report/bin/render_criminals.py \
   report/bin/render_damage_chart.py report/bin/render_menu.py \
   report/bin/render_query.py report/bin/render_consumables_chart.py && echo COMPILE_OK
@@ -1407,7 +1407,7 @@ Expected: `COMPILE_OK`。grep **此时还会剩两处** —— `report/bin/wows_
 - [ ] **Step 4: 基线比对 + 现有测试**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 T="$(python -c 'import tempfile;print(tempfile.gettempdir())')"
 rm -rf "$T/p2_check"
 bash tools/p2_render_fixtures.sh "$T/p2_check" >/dev/null
@@ -1458,7 +1458,7 @@ git commit -m "refactor(report): 6 个渲染脚本改从 wowsbot 取 theme/text/
 - [ ] **Step 1: 复核引用全集与上表一致(防止期间有人改过文件)**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 for f in render_report_normalized render_review_normalized; do
   echo "--- $f"; grep -oE 'rb\.[A-Za-z_]+' report/bin/$f.py | sort -u | tr '
 ' ' '; echo
@@ -1501,7 +1501,7 @@ from wowsbot.theme import (                                                 # no
 - [ ] **Step 3: 语法检查 + 断言只剩合法的 `rb.` 引用**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 python -m py_compile report/bin/render_report_normalized.py report/bin/render_review_normalized.py && echo COMPILE_OK
 grep -oE 'rb\.[A-Za-z_]+' report/bin/render_report_normalized.py report/bin/render_review_normalized.py | sort -u
 ```
@@ -1514,7 +1514,7 @@ Expected: `COMPILE_OK`;`rb.` 列表**只剩**这些渲染器符号 —— `rende
 - [ ] **Step 4: 基线比对(这两个脚本正是基线的产出者,最关键的一次)**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 T="$(python -c 'import tempfile;print(tempfile.gettempdir())')"
 rm -rf "$T/p2_check"
 bash tools/p2_render_fixtures.sh "$T/p2_check" >/dev/null
@@ -1662,7 +1662,7 @@ aggregate, extract_ribbons)` 保持不动** —— 那是对渲染器的合理�
 - [ ] **Step 3: 语法检查**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 python -m py_compile report/bin/wows_report report/bin/wows_full_report \
   report/bin/wows_full_report_normalized report/bin/wows_damage_report \
   report/bin/wows_menu report/bin/wows_analyze \
@@ -1674,10 +1674,10 @@ Expected: `COMPILE_OK`
 - [ ] **Step 4: 端到端跑一次全报告(证明入口脚本没被改坏)**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 export WOWS_CJK_FONT=C:/Windows/Fonts/msyh.ttc WOWS_MONO_FONT=C:/Windows/Fonts/consola.ttf
-export WOWS_REPLAYSHARK=/c/Users/29801/Desktop/minimap/wows-toolkit/target/release/replayshark.exe
-export WOWS_EXTRACTED_ROOT=/c/Users/29801/Desktop/minimap/wows-toolkit/extracted
+export WOWS_REPLAYSHARK=<toolkit>/target/release/replayshark.exe
+export WOWS_EXTRACTED_ROOT=<toolkit>/extracted
 python report/bin/wows_full_report_normalized "$(cat /tmp/p2_baseline/replay.txt)" /tmp/p2_e2e
 ls -la /tmp/p2_e2e/*.png
 ```
@@ -1808,7 +1808,7 @@ render_query_png = _import_report_bin("render_query").render_query_png
 - [ ] **Step 5: 语法检查 + 断言**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 python -m py_compile plugin/minimap.py && echo COMPILE_OK
 grep -c 'sys.path.insert' plugin/minimap.py     # 期望 1(只剩 bootstrap)
 grep -n 'os.environ.get' plugin/minimap.py      # 期望只剩 WOWS_BOT_HOME 那一处
@@ -1823,7 +1823,7 @@ Expected: `COMPILE_OK`;`sys.path.insert` 计数为 1;`os.environ.get` 只剩 boo
 改动前的快照逐项比对**。快照已由协调者在改动前采集到 `<TEMP>/minimap_consts_before.json`。
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 python - <<'EOF'
 import importlib, json, os, sys, tempfile
 os.environ.setdefault("WOWS_CJK_FONT", "C:/Windows/Fonts/msyh.ttc")
@@ -1860,7 +1860,7 @@ Expected: `ALL_CONSTANTS_UNCHANGED` + `== ALL PASS ==`。
 `os.path.expanduser(os.environ.get("WOWS_REPLAY_BASEDIR", "~/wows-bot-replay"))` ——
 迁移时若丢掉 `expanduser`,值会变成字面量 `~/wows-bot-replay`,bot 就会在工作目录下建一个
 名叫 `~` 的目录。`paths.REPLAY_BASEDIR` 已经做过 expanduser,直接用即可;快照里它是展开后的
-绝对路径(本机 `C:/Users/29801/wows-bot-replay`),比对会抓住这个错误。
+绝对路径(本机 `C:/Users/<you>/wows-bot-replay`),比对会抓住这个错误。
 
 
 - [ ] **Step 7: 提交**
@@ -1883,7 +1883,7 @@ _import_report_bin helper。SHIPS_JSON / ARMOR_JSON 不再从命令路径反推�
 - [ ] **Step 1: 先记录修复前的错误默认值(证据)**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 python tools/build_builds_json.py --help | grep -E 'default:'
 ```
 
@@ -1938,7 +1938,7 @@ DEFAULT_ICON_DIR = Path(paths.SHIP_ICON_DIR)
 - [ ] **Step 3: 验证默认值已修正**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 python -m py_compile tools/build_builds_json.py tools/fetch_build_icons.py \
   tools/build_ships_json.py tools/fetch_ship_icons.py && echo COMPILE_OK
 python tools/build_builds_json.py --help | grep -E 'default:'
@@ -1974,7 +1974,7 @@ git commit -m "fix(tools): 默认路径少一层 report/ 的老坑,常量收进 
 - [ ] **Step 1: 依赖纯净性(硬约束)**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 python tests/test_wowsbot_purity.py
 ```
 
@@ -1994,7 +1994,7 @@ Expected: 第一条无输出;第二条只剩渲染器符号(`rb.render` `rb.load
 - [ ] **Step 3: 全部测试**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 for t in tests/test_permissions.py tests/test_render_menu.py tests/test_render_armor.py \
          tests/test_wowsbot_paths.py tests/test_wowsbot_replay.py tests/test_wowsbot_lib.py; do
   echo "--- $t"; python "$t" || echo "FAILED: $t"
@@ -2022,7 +2022,7 @@ echo "report python = $PY_REPORT"
 
 ```bash
 # nonebot 侧解释器(改成实际的 EssexBot venv 路径)
-NB_PY=~zifeng/桌面/bot/EssexBot/.venv/bin/python
+NB_PY=~/my-bot/.venv/bin/python
 test -x "$NB_PY" || NB_PY=python3
 "$NB_PY" -c "import sys; sys.path.insert(0,'/opt/wows-bot/report/lib'); from wowsbot import paths, replay, theme, text, i18n, results; print('NONEBOT_ENV_OK', paths.REPO_ROOT)"
 ```
@@ -2035,7 +2035,7 @@ Expected: 两条都打印 `*_OK` 且 `REPO_ROOT` = `/opt/wows-bot`。
 - [ ] **Step 4: 最终基线比对**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 T="$(python -c 'import tempfile;print(tempfile.gettempdir())')"
 rm -rf "$T/p2_check"
 bash tools/p2_render_fixtures.sh "$T/p2_check" >/dev/null
@@ -2051,7 +2051,7 @@ Expected: `FINAL_PIXEL_IDENTICAL`
 —— 若 theme 搬迁把常量搞丢或搞错,这里会失败。
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 T="$(python -c 'import tempfile;print(tempfile.gettempdir())')"
 python - <<'EOF'
 import os, tempfile
@@ -2079,7 +2079,7 @@ Expected: 打印 `FOOTER_THEME_OK`(两图 footer 带里 `GAME_GOLD` 与 `GAME_PA
 - [ ] **Step 4c: 删除重构期脚手架**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 git rm tools/p2_render_fixtures.sh
 git commit -m "chore(p2): 移除重构期的 fixture 渲染脚手架"
 ```
@@ -2108,7 +2108,7 @@ bot 的 Python 公共层。路径/配置、回放元数据、主题、文本、�
 - [ ] **Step 6: 提交**
 
 ```bash
-cd /c/Users/29801/Desktop/wows-bot-review
+cd <repo>
 git add docs/DEPLOY.md
 git commit -m "docs(deploy): 记录 report/lib/wowsbot 公共层的用法与硬约束"
 ```
@@ -2121,7 +2121,7 @@ git commit -m "docs(deploy): 记录 report/lib/wowsbot 公共层的用法与硬�
 cd /opt/wows-bot && sudo git pull
 ```
 ```bash
-sudo cp /opt/wows-bot/plugin/*.py ~zifeng/桌面/bot/EssexBot/src/plugins/
+sudo cp /opt/wows-bot/plugin/*.py ~/my-bot/src/plugins/
 ```
 部署后由用户重启 nonebot,然后发一份回放做端到端验收(MP4 / 战报 / 复盘 / 聊天)。
 若 `plugin/minimap.py` 报 `ModuleNotFoundError: wowsbot`,说明 `WOWS_BOT_HOME` 与
