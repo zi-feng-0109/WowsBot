@@ -77,5 +77,7 @@ done
 
 echo
 echo "done: $BIN"
-"$BIN" --version 2>&1 | head -1
+ls -la "$BIN" | awk '{print "  " $5 " 字节  " $6 " " $7 " " $8}'
+# 不要问它 --version:这个基线的 replayshark 没有这个参数,问了会以非零码退出,
+# 让调用方误判构建失败(2026-09-19 实跑踩到)。真正的自检是上面那三个子命令。
 echo "下一步:等价性验证,见 tools/verify_replayshark_equiv.sh"
