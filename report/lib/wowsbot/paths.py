@@ -47,6 +47,10 @@ EXTRACTED_ROOT = os.environ.get(
 SPECS_DIR = os.environ.get("WOWS_SPECS_DIR", str(REPORT_ROOT / "specs"))
 SPECS_PATCHED_ROOT = os.environ.get("WOWS_SPECS_PATCHED_ROOT",
                                     "/var/lib/wows-data/specs-patched")
+# 上传暂存区:PC 侧脚本把新版本数据 scp 到这里,超管指令 /更新wg版本 校验后再搬进
+# EXTRACTED_ROOT。之所以不直接传进 extracted:渲染器按 build 号扫 extracted/,
+# 294MB 的 scp 传一半断了、而此时正好有玩家发新版本回放,就会挑中那个半截目录。
+INCOMING_ROOT = os.environ.get("WOWS_INCOMING_ROOT", "/var/lib/wows-data/incoming")
 OUT_DIR = os.environ.get("WOWS_OUT_DIR", "/tmp/wows_report")
 REPLAY_BASEDIR = os.path.expanduser(
     os.environ.get("WOWS_REPLAY_BASEDIR", "~/wows-bot-replay"))

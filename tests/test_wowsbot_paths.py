@@ -34,7 +34,8 @@ def _fresh(**env):
 
 _ALL = dict(WOWS_BOT_HOME=None, WOWS_DATA_DIR=None, WOWS_EXTRACTED_ROOT=None,
             WOWS_REPLAYSHARK=None, WOWS_SPECS_DIR=None, WOWS_SHIPS_JSON=None,
-            WOWS_MP4_TIMEOUT=None, WOWS_PNG_TIMEOUT=None)
+            WOWS_MP4_TIMEOUT=None, WOWS_PNG_TIMEOUT=None,
+            WOWS_INCOMING_ROOT=None)
 
 
 def test_defaults_derive_from_repo_root():
@@ -54,6 +55,7 @@ def test_defaults_derive_from_repo_root():
     assert p.REPORT_FULL_CMD == str(root / "report" / "bin" / "wows_full_report"), p.REPORT_FULL_CMD
     # extracted 是绝对路径常量,与仓库位置无关
     assert p.EXTRACTED_ROOT == "/var/lib/wows-data/extracted", p.EXTRACTED_ROOT
+    assert p.INCOMING_ROOT == "/var/lib/wows-data/incoming", p.INCOMING_ROOT
     print("  test_defaults_derive_from_repo_root PASS")
 
 
