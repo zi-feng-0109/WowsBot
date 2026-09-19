@@ -36,17 +36,21 @@ case "$(readlink -f "$SRC")" in
 esac
 
 echo "[1/4] 检查源码基线"
+# 纯信息性的一步,失败绝不能弄死构建(曾经就是:root 读 zifeng 拥有的仓触发 git 的
+# dubious-ownership 保护,set -e 让整个脚本死在这儿)。用构建用户去读,并且兜住失败。
 if [[ -d "$SRC/.git" ]]; then
-    head="$(git -C "$SRC" rev-parse --short HEAD)"
+    head="$(sudo -u "$BUILD_USER" git -C "$SRC" rev-parse --short HEAD 2>/dev/null || echo '读不到')"
     echo "  HEAD = $head (期望基线 $BASELINE 或其上已套 patch 的提交)"
+else
+    echo "  (非 git 仓,跳过)"
 fi
 
 echo "[2/4] 应用 patch(已套上的会被跳过)"
 for p in replayshark_float64 replayshark_battle_report; do
     f="$REPO_DIR/tools/$p.patch"
     [[ -f "$f" ]] || die "缺 patch 文件:$f"
-    if patch -p1 -d "$SRC" --dry-run --forward --silent < "$f" >/dev/null 2>&1; then
-        patch -p1 -d "$SRC" --forward --silent < "$f"
+    if sudo -u "$BUILD_USER" patch -p1 -d "$SRC" --dry-run --forward --silent < "$f" >/dev/null 2>&1; then
+        sudo -u "$BUILD_USER" patch -p1 -d "$SRC" --forward --silent < "$f"
         echo "  applied  $p"
     else
         echo "  skipped  $p(已套上,或套不上 —— 下一步编译会暴露)"
