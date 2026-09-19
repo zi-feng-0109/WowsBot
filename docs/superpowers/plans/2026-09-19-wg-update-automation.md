@@ -988,8 +988,16 @@ pause
    否则打印「当前客户端是 <realm> 服,不是 asia。从公开测试服/国服提数据会污染数据集」并退出 1
 3. 判断要不要干活:本机 `$ExtractedOut\*_<build>` 已存在 **且**
    `ssh $SshTarget "ls -d $IncomingRoot/../extracted/*_<build>"` 成功 → 打印「游戏还没更新」退出 0
-4. 提数据:`& $DataMgr dump-renderer-data --game-dir $GameDir --build $build -o $ExtractedOut
-   *>&1 | Tee-Object -FilePath $LogPath`
+4. 提数据:`& $DataMgr dump-renderer-data --game-dir $GameDir --build $build -o $ExtractedOut`,
+   输出自己收行后用 `[IO.File]::WriteAllLines($LogPath, $lines, (New-Object System.Text.UTF8Encoding($false)))`
+   落盘。
+
+   > ⚠️ **不要用 `Tee-Object -FilePath`(本计划初稿就是这么写的,那是个陷阱)。**
+   > Windows PowerShell 5.1 的 `Tee-Object` 写出来是 **UTF-16**,而 `dumpcheck.py` 按 UTF-8
+   > 读日志 —— 于是 `WARN` / `panic` / `Unrecognized type` **一条都匹配不上,校验会假过**,
+   > 正好把这个项目最核心的那层保护静默抹掉,而表面上一切正常。
+   > 2026-09-19 实测发现。另外 `.ps1` 本身**必须带 UTF-8 BOM**,否则 WinPS 5.1 按 ANSI
+   > 解码,所有中文提示变乱码。
 5. 校验:`& python "<repo>\report\lib\wowsbot\dumpcheck.py" $verDir --log $LogPath`
    (`$AllowWarn` 时追加 `--allow-warn`)。退出码非 0 → **停,不上传**,把 dumpcheck 打的问题
    原样显示

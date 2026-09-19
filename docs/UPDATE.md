@@ -6,6 +6,89 @@
 > 同一大版本里小 build 号变动 (Asia ↔ CN 服) 战报渲染器自带 auto-spoof
 > 通常能处理,不一定要重刷;但更新一下最稳。
 
+## 自动化流程(日常走这条)
+
+三步:
+
+1. **更新游戏**(WGC 里更新完,确认客户端还是**亚服**)
+2. **双击 `tools\update_wg.bat`**(建议右键「以管理员身份运行」)—— 它提数据、校验、
+   把数据传到服务器暂存区
+3. **在 QQ 里发 `/更新wg版本`**(超管)—— 它搬数据进生产、改 specs 软链、刷 builds.json 与图标
+
+跑完不用重启 bot(渲染器是 subprocess 现拉)。**唯一需要重启的情况**是这次 `git pull`
+带来了 `plugin/*.py` 变动 —— 那时指令会在汇报里写明,由你决定什么时候重启。
+
+### PC 侧脚本会拦住什么
+
+这个脚本的价值不在少敲几条命令,而在把几个只有踩过才知道的坑变成硬性检查。任何一条
+不满足就**停下、不上传**,并打印触发的原文:
+
+| 检查 | 为什么 |
+|---|---|
+| 客户端区服必须是 `asia` | 公开测试服 / 国服的 build 体系独立。从它们提数据传上去,渲染器会按 build 号挑错版本。**这条不给环境变量覆盖** —— 闸门留后门等于没有 |
+| dump 日志里不许有 `panic` / `Unrecognized type` / `GameParams re-derivation` / `VFS is empty` / idx 解析失败 | `dump-renderer-data` 遇到未知实体类型时**不会失败**:静默跳过 GameParams 重新派生、只打一行 WARN、仍然 exit 0。15.7 那次就是这么中招的 |
+| `game_params.rkyv` 存在且 ≥ 30 MB | 它就是 GameParams 的派生产物。缺了或只有个残片,船名与船只数据全无 |
+| 五个关键路径存在**且目录非空** | `metadata.toml` / `constants.json` / `vfs/content/GameParams.data` / `vfs/scripts` / `vfs/spaces`。只查存在不够 —— dump 报 `VFS is empty` 时目录会在、内容是空的 |
+
+两个开关:
+
+```powershell
+# 跑到校验为止,不上传。想确认脚本本身或看看会认出哪个 build 时用
+powershell -ExecutionPolicy Bypass -File tools\update_wg.ps1 -DryRun
+
+# 只跳过「WARN」这一档。panic / Unrecognized type / 缺文件 一概跳不过去
+powershell -ExecutionPolicy Bypass -File tools\update_wg.ps1 -AllowWarn
+```
+
+`-AllowWarn` 存在的理由:`WARN` 是宽口径判据,将来某个版本冒出一条无害告警就会把整条
+自动化卡死。所以校验失败时先打出原文让你判断,确认无害后再用它。**用过这个开关时,
+完成标记里会记一笔,服务器侧汇报也会把它带出来** —— 免得悄悄放过一个真问题。
+
+默认路径都能用环境变量覆盖(区服除外):`WOWS_GAME_DIR` / `WOWS_DATA_MGR` /
+`WOWS_EXTRACTED_OUT` / `WOWS_SSH_TARGET` / `WOWS_INCOMING` / `WOWS_PYTHON`。
+脚本开头会把解析出来的配置全部打印一遍,默认值不对时一眼能看出来。
+
+### 为什么要走暂存区而不是直接传进生产目录
+
+渲染器是**按 build 号扫 `extracted/` 目录**的。294MB 的 scp 传到一半断了、而此时正好有玩家
+发新版本回放,就会挑中那个半截目录然后诡异报错。所以数据先落
+`/var/lib/wows-data/incoming/<ver>_<build>/`,传完再写一个同级的 `<ver>_<build>.done` 标记;
+**没有这个标记,`/更新wg版本` 不会碰那个目录。**
+
+### `/更新wg版本` 做什么
+
+1. 扫暂存区找带标记的版本(0 个会提示「PC 脚本跑了吗」;多个要求显式指定
+   `/更新wg版本 15.9.0_13xxxxxx`)
+2. `git pull`;若 `plugin/*.py` 有变动,同步副本到 NoneBot 的 plugins 目录并提示需重启
+3. **复校验**一遍数据结构 —— 标记只能证明「传完了」,不能证明「传对了」
+4. `mv` 进 `extracted/`(同文件系统,是 rename,瞬间)
+5. `link_specs.sh` **显式指向新版本目录**
+6. `builds-dump` 验证新数据能读 → 刷 `builds.json` → 拉升级/技能图标
+7. 汇报:版本、每步结果、四类条目数、`extracted/` 现有版本数与占用、剩余磁盘、是否需重启
+
+### 失败了怎么办
+
+- **搬运之前失败**(选版本 / 复校验 / `git pull`):什么都没动,数据还在暂存区,
+  修掉原因后**重发指令**即可
+- **搬运之后失败**(`link_specs` / builds.json / 图标):**不回滚**。数据已通过复校验并就位,
+  所以**回放渲染立刻就能用**;没成功的是派生数据(builds.json 没刷新时 `/查询` 的配装面板
+  走灰色兜底,功能不挂)。修掉原因后重跑指令
+- **`extracted/` 里已有这个版本**:指令会拒绝搬运,不覆盖 —— 覆盖等于在渲染器正在读的目录上
+  动手。要覆盖就先手工 `rm -rf /var/lib/wows-data/extracted/<ver>_<build>` 再重发
+- **日志里出现 `Unrecognized type <X>`**:WG 加了新实体类型。**不要动数据** ——
+  按 [REPLAYSHARK_BUILD.md](REPLAYSHARK_BUILD.md) §8 给 `parse_type` 加一个分支、重编、
+  过等价性闸门,然后再走这条自动化流程
+
+### 什么时候还需要下面的手工流程
+
+保留它作为退路,两种情况会用到:
+
+- 自动化本身出了问题(脚本报的原因看不懂、或者环境变了)
+- WG 加了新实体类型,得先重编 replayshark 再提数据 —— 那一步不在自动化里
+- 要刷 `ships.json` / 战舰预览图 / `armor.json`(§2.6、§2.7),这几样不在自动化范围内
+
+---
+
 ## 完整流程
 
 ### 0. Linux: 拉最新 bot 代码 (顺手做,新版本期间 bot 仓库经常也有适配 commit)

@@ -179,7 +179,9 @@ if ($localVerDir -and -not $serverHas) {
 # ---------------------------------------------------------------- 4 提数据
 
 Step "4/7 提数据(dump-renderer-data,约 294MB,要几分钟)"
-$LogPath = Join-Path (Split-Path -Parent $ExtractedOut) "dump-$build.log"
+# 日志写进 $ExtractedOut 里面,不要写到它的上一级 —— 上一级是 wows-toolkit 仓库根,
+# 而 extracted/ 本身是被 git 忽略的,所以放里面不会每次更新都多一个 untracked 文件。
+$LogPath = Join-Path $ExtractedOut "dump-$build.log"
 Note "日志:$LogPath"
 if (-not (Test-Path -LiteralPath $ExtractedOut -PathType Container)) {
     New-Item -ItemType Directory -Path $ExtractedOut -Force | Out-Null
