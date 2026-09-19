@@ -161,9 +161,11 @@ bash tools/build_replayshark.sh
 可调环境变量:
 
 - `SRC` —— 源码目录,默认 `/opt/wows-replayshark-build`
-- `BUILD_USER` —— 用哪个用户编译。默认取 `$SUDO_USER`(本脚本通常 `sudo bash` 跑,
-  sudo 会把调用者放在那里),没有再退到当前用户。**为什么不用 root 编**:源码树归普通用户,
-  root 跑 cargo 会把 `target/` 弄成 root 所有,下次那个用户再构建就写不进去了
+- `BUILD_USER` —— 用哪个用户编译。默认**按源码目录的属主推导**:谁拥有源码树,谁就该拥有
+  `target/`。**为什么不用 root 编**:root 跑 cargo 会把 `target/` 弄成 root 所有,那个普通
+  用户下次再构建就写不进去了;而 rustup 也装在普通用户家目录里。
+  **为什么不取 `$SUDO_USER`**:如果操作者本来就以 root 登录(这套部署就是这样),
+  root 再 sudo 时 `SUDO_USER` 仍是 root,又绕回以 root 构建 —— 源码目录属主没有这个歧义
 - `CARGO` —— cargo 路径。默认找 `~<BUILD_USER>/.cargo/bin/cargo`(rustup 装在用户家目录里),
   找不到再回落 PATH 里的 `cargo`
 

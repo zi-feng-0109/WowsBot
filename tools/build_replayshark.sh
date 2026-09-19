@@ -30,11 +30,30 @@ TYPEDEFS_RS="crates/wowsunpack/src/rpc/typedefs.rs"
 
 die() { echo "error: $*" >&2; exit 1; }
 
-# 构建用户:rustup 装在普通用户的家目录里,而本脚本通常用 sudo 跑 ——
-# 所以默认取 $SUDO_USER(sudo 会把调用者放这里),没有再退到当前用户。
-# 为什么不直接用 root 构建:源码树归普通用户,root 跑 cargo 会把 target/ 弄成 root 所有,
-# 下次那个用户再构建就写不进去了。要指定就 BUILD_USER=<用户名>。
-BUILD_USER="${BUILD_USER:-${SUDO_USER:-$(id -un)}}"
+# 构建用户:**按源码目录的属主推导** —— 谁拥有源码树,谁就该拥有 target/。
+#
+# 为什么不用 root 构建:root 跑 cargo 会把 target/ 弄成 root 所有,那个普通用户下次
+# 再构建就写不进去了。而 rustup 也是装在普通用户家目录里的。
+#
+# 为什么不取 $SUDO_USER:如果操作者本来就以 root 登录(这套部署就是这样),
+# root 再 sudo 时 SUDO_USER 仍是 root,于是又绕回以 root 构建 —— 正是要避免的那件事。
+# 源码目录属主没有这个歧义。
+#
+# 顺序:显式的 BUILD_USER → 源码目录属主(非 root)→ $SUDO_USER(非 root)→ 当前用户。
+if [[ -z "${BUILD_USER:-}" ]]; then
+    _src_owner="$(stat -c '%U' "$SRC" 2>/dev/null || true)"
+    if [[ -n "$_src_owner" && "$_src_owner" != "root" ]]; then
+        BUILD_USER="$_src_owner"
+    elif [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
+        BUILD_USER="$SUDO_USER"
+    else
+        BUILD_USER="$(id -un)"
+    fi
+fi
+if [[ "$BUILD_USER" == "root" ]]; then
+    echo "note: 以 root 构建 —— $SRC/target 会变成 root 所有,普通用户之后再构建会失败。" >&2
+    echo "      要避免就 chown 源码目录给普通用户,或显式 BUILD_USER=<用户名>。" >&2
+fi
 
 # cargo:先试构建用户家目录里的 rustup 安装位置,不在就回落到 PATH 里的 cargo。
 CARGO="${CARGO:-}"
