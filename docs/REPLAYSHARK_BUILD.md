@@ -329,7 +329,7 @@ sudo cp /root/replayshark-prebuilt-20260527.bak /opt/wows-bot/report/replayshark
 
 ```bash
 # a) 让仓库里的 prebuilt 也回到旧版
-git revert 0c1bf7a        # 换装那次提交
+git revert 11f2c54        # 换装那次提交
 
 # b) 直接覆盖(会让服务器工作区变脏,下次 git pull 要处理冲突)
 sudo cp /root/replayshark-prebuilt-20260527.bak \

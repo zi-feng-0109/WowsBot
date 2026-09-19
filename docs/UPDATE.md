@@ -132,7 +132,7 @@ sudo chmod +x /opt/wows-bot/report/replayshark
 # 不需要重启任何服务 (渲染器是 subprocess 现拉)。
 # ⚠️ 这只改了**部署副本**。仓库里 report/prebuilt/ 那份仍是新版,所以下次任何人走上面
 #    那条 cp、或 DEPLOY.md §4.1,都会把新版装回来。要让回滚持久,还得二选一:
-#      a) git revert 换装那次提交 (0c1bf7a),让仓库里的 prebuilt 也回到旧版;或
+#      a) git revert 换装那次提交 (11f2c54),让仓库里的 prebuilt 也回到旧版;或
 #      b) sudo cp /root/replayshark-prebuilt-20260527.bak \
 #             /opt/wows-bot/report/prebuilt/replayshark-linux-x86_64   (会让工作区变脏)
 

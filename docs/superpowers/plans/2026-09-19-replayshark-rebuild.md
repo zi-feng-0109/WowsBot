@@ -846,7 +846,7 @@ sudo rm -rf /tmp/rs_fixtures /tmp/rs_equiv /tmp/rs_check /tmp/rs_e2e /tmp/rs_src
 | 5 服务器编译 | 完成。方案 A(clone 上游)可行,`cargo 1.92.0`,release 编译 30 秒 |
 | 6 builds-dump 独立检查 | 新二进制在**未手术** 15.8 上 `118 / 2345 / 662 / 82`;旧二进制同一份数据 `panicked: Unrecognized type FLOAT64` —— 对照组成立 |
 | 7 等价性闸门 | 见下 |
-| 8 换装 | 完成。`0c1bf7a`。端到端 `wows_full_report` 四段全过,无 `[spoof]` |
+| 8 换装 | 完成。`11f2c54`。端到端 `wows_full_report` 四段全过,无 `[spoof]` |
 
 ### 闸门结果
 
