@@ -113,6 +113,11 @@ def resolve_specs_for_build(replay_build: int):
 
     meta_file = match / "metadata.toml"
     content = match / "vfs" / "content"
+    # specs-patched 优先:2026-09-19 重建 replayshark 之后这一步已**不再必需**
+    # (新二进制原生支持 FLOAT64)。保留是为了兼容老数据目录里已经做过手术的版本,
+    # 而且优先用它是无害的 —— 手术只把 FLOAT64 换成 FLOAT,那两处(排队系统的
+    # originalEnqueueTime / BattleStarterClient 的 returnToMatchmaker)在回放数据流里
+    # 根本不出现。详见 docs/REPLAYSHARK_BUILD.md。
     scripts = Path(SPECS_PATCHED_ROOT) / match.name / "scripts"
     if not scripts.is_dir():
         scripts = match / "vfs" / "scripts"

@@ -55,11 +55,27 @@ scp -r .\extracted\<新 version>_<新 build> <user>@<bot-host>:/var/lib/wows-dat
 ### 2. Linux: 改 specs 软链指向新版本
 
 ```bash
-sudo bash /opt/wows-bot/tools/link_specs.sh
-# 默认重新挑 /var/lib/wows-data/extracted/ 下版本号最大的子目录,改三条软链
+# 必须显式指定版本目录! 见下面的警告
+sudo bash /opt/wows-bot/tools/link_specs.sh /var/lib/wows-data/extracted/<新 version>_<新 build>
 ```
 
+> ⚠️ **不要裸跑 `link_specs.sh`。** 它挑的是 `sort -V | tail -1`,也就是版本号最大的子目录 ——
+> 而 Lesta(俄服)的版本号是 `26.x`,比 WG 的 `15.x` 大。裸跑会把 WG 战报的 specs
+> 错指到 Lesta 数据上。**始终带上 WG 的版本目录参数。**
+>
+> 影响面其实很小:`report/specs` 现在只有「回放 build 号恰好等于软链指向的 build」这一条
+> 快路径在用;对不上时 `wows_report` 的 `resolve_specs_for_build()` 会按 build 号自己去
+> `extracted/` 里找对应版本。MP4 / Lesta / 聊天从来不看 `report/specs`。
+> 但 §2.5 的 `build_builds_json.py` / `fetch_build_icons.py` 默认读的就是它,所以还是要指对。
+
 bot 不用重启 (renderer 是 subprocess,每次新拉)。
+
+> **关于 FLOAT64 手术:已经不需要了。** 15.7~15.8 期间,每个大版本都要给旧 replayshark
+> 单独做一份 scripts 副本、把 `FLOAT64` sed 成 `FLOAT`,否则它会 panic
+> `Unrecognized type FLOAT64`。2026-09-19 重建了 replayshark(原生支持 FLOAT64),
+> 这一步从此取消。`/var/lib/wows-data/specs-patched/` 下已有的手术产物留着不碰即可
+> (`resolve_specs_for_build()` 仍会优先用它们,无害)。
+> 重建配方与「下次 WG 又加新实体类型怎么办」见 [REPLAYSHARK_BUILD.md](REPLAYSHARK_BUILD.md)。
 
 ### 2.5 刷新 builds.json + 升级/技能图标 (/查询 PNG 本局配装面板用)
 
