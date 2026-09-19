@@ -1260,3 +1260,89 @@ cd /opt/wows-bot && sudo python3 tools/build_builds_json.py
 - [ ] 删掉标记后指令忽略该目录
 - [ ] 非超管被拒(验不了就如实记为未验证)
 - [ ] 演练痕迹清理干净,`specs` 软链指回真 15.8,`extracted/` 回到 8 个版本
+
+---
+
+## 执行记录(2026-09-19)
+
+### 各任务结果
+
+| Task | 结果 |
+|---|---|
+| 1 `wowsbot/dumpcheck.py` | 13 个用例 + **真实 15.8 数据校验通过**(`校验通过: 15.8.0_13187581`)。纯净性守卫仍绿 |
+| 2 `paths.INCOMING_ROOT` | 完成 |
+| 3 服务器侧逻辑 | 21 个用例全过。不 import nonebot,外部动作全经注入的 runner |
+| 4 NoneBot matcher | 完成,`minimap.py` 未被修改 |
+| 5 PC 侧 `.ps1` + `.bat` | `-DryRun` 实跑正确识别「游戏还没更新」并退出;三条失败路径逐条验过 |
+| 6 `docs/UPDATE.md` | 自动化一节已加,手工流程保留作退路 |
+| 7 假版本演练 | 见下 |
+
+### 演练(15.8.0_99999999,294MB 真实数据副本)
+
+指令实际汇报:
+
+```
+✅ 更新完成
+待处理版本:15.8.0_99999999
+⚠️ 标记里 allow_warn=true:PC 侧提取时用过 --AllowWarn,那一次跳过了 WARN 检查
+   (panic 与未知类型没跳)。若渲染出怪结果先查这个。
+✓ 复校验通过(build 99999999,game_params.rkyv 48.4 MiB)
+✓ git pull:已经是最新的。
+✓ plugin/*.py 无变动,bot 不用重启
+✓ 已搬进生产目录:/var/lib/wows-data/extracted/15.8.0_99999999
+✓ link_specs 已指向 15.8.0_99999999
+✓ builds-dump:升级品 118 / 涂装 2345 / 舰长 662 / 技能 82
+✓ builds.json 已刷新
+✓ 升级/技能图标已刷新
+extracted 现有 9 个版本:…
+extracted 占用:2.2G    磁盘:已用 38.1 GiB / 共 456.3 GiB,剩余 395.0 GiB
+✓ 15.8.0_99999999 更新完成
+```
+
+三条保护逐条验过:
+
+| 场景 | 实际 |
+|---|---|
+| 暂存区不存在 | `✗ 暂存区不存在…PC 侧脚本会把数据 scp 到这里,先确认目录已建好、权限对。` |
+| `extracted/` 已有同版本 | `✗ …已有这个版本…没有覆盖动作 —— 覆盖等于在渲染器正在读的目录上动手。确认要重来:先 rm -rf …` |
+| 目录在但没 `.done` 标记(= scp 中断) | `✗ 暂存区里没有待处理版本…只认同级带 <版本>.done 完成标记的目录…这种半截目录会被忽略。` |
+
+「目标已存在」确实排在复校验**之前** —— 演练时那个重造的暂存目录是空的,若顺序反了会先报数据不完整。
+
+副作用核对:处理后 `specs` 三条软链指向新版本、暂存区**完全空**(目录搬走 + 标记已删)。
+清理后 `specs` 指回真 15.8、`extracted/` 回到 8 个版本 + `vfs_common`、暂存区空、
+builds.json 从真 15.8 重新生成(`118 / 2345 / 662 / 82`,137.0 KB)。
+
+**未验证**:非超管调用被拒(手头没有第二个账号,只有单测覆盖)。如实记着。
+
+### 顺带独立复验了 P4-1
+
+演练时 `specs/scripts` 指向的是 `extracted/<ver>/vfs/scripts` —— **未做 FLOAT64 手术的原始
+scripts**,而 `builds-dump` 走这条路产出了正确的 118/2345/662/82。这是在生产环境里又一次
+证明新 replayshark 原生认 FLOAT64,手术真的不需要了。
+
+### 执行中改掉的三个问题
+
+1. **计划里 `Tee-Object -FilePath` 那条指令会让整层校验静默失效。** Windows PowerShell 5.1 的
+   `Tee-Object` 写出来是 UTF-16,而 `dumpcheck.py` 按 UTF-8 读日志 —— `WARN` / `panic` /
+   `Unrecognized type` 一条都匹配不上,校验会假过,表面上一切正常。改成
+   `[IO.File]::WriteAllLines` + 无 BOM UTF-8,并把陷阱写进计划。
+   同类的一条:`.ps1` 本身**必须带 UTF-8 BOM**,否则 WinPS 5.1 按 ANSI 解码,中文提示全乱。
+2. **`dumpcheck` 的判据有两个洞**(我查 `wows-data-mgr` 二进制里的真实告警文本发现的):
+   `GameParams re-derivation failed` / `VFS is empty` / idx 解析失败 原本只被宽口径的 `WARN`
+   命中,**可以被 `--allow-warn` 跳过**,而它们和 panic 一样致命 —— 已单列为不可跳过;
+   目录原本只查 `is_dir()`,而 dump 报 `VFS is empty` 时目录会在、内容是空的 —— 已改为查非空。
+3. **计划里的测试有两处形同虚设**:没有任何用例断言 `build_builds_json` / `fetch_build_icons`
+   被调用过(`FakeRunner` 对未列出的 key 默认返回成功,所以一个压根不刷 builds.json 的实现
+   照样全绿),以及 `test_report_includes_disk_info` 只断言 `"版本" in joined` 而第一行
+   「待处理版本:」天然含这两个字。都已补实,并顺带补了四条未覆盖分支。
+   其中新增的 plugin 同步用例抓到实现里一个真问题:同步是通过 runner 跑 `cp` 做的,
+   假 runner 下压根不复制 —— 改成直接 `shutil.copy2`。
+
+### 未做 / 已知限制
+
+- 真正的 294MB `dump-renderer-data` 与 `scp` 上传**没有实跑过**(本机游戏就是 15.8,
+  没有新版本可提)。第一次真更新时会走到,那时要盯一下第 4/6/7 步
+- 「本机已提取但服务器没有」的恢复场景仍会重提一遍 294MB。用户已知情,暂不加开关 ——
+  复用旧产物时旧日志可能已经没了,那就只能做结构校验、少一层保护
+- `ships.json` / 战舰预览图 / `armor.json` 不在自动化范围内
