@@ -234,10 +234,14 @@ def run_update(*, incoming_root, extracted_root, repo_dir, plugins_dir,
         if not srcs:
             lines.append(f"⚠️ 没找到 {repo_dir / 'plugin'}/*.py,同步这步跳过了,请人工确认")
         else:
-            rc2, _o2, e2 = runner.run(["cp_plugins", "cp",
-                                       *[str(p) for p in srcs], str(plugins_dir)])
-            if rc2 != 0:
-                lines.append(f"✗ plugin/*.py 同步到 {plugins_dir} 失败(rc={rc2}):{_tail(e2)}")
+            # 直接用 shutil.copy2,不经 runner 跑 `cp`:复制文件是本模块自己的文件系统操作,
+            # 不是「外部命令」(删标记那步同理)。好处有二 —— 不依赖系统里有 cp 这个二进制,
+            # 以及测试能真的断言「副本确实同步过去了」而不只是「请求过一次 cp」。
+            try:
+                for p in srcs:
+                    shutil.copy2(p, plugins_dir / p.name)
+            except OSError as e2:
+                lines.append(f"✗ plugin/*.py 同步到 {plugins_dir} 失败:{e2}")
                 failures.append("plugin 同步")
             else:
                 lines.append(f"✓ plugin/*.py 已同步到 {plugins_dir}({len(srcs)} 个)")

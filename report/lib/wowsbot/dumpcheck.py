@@ -29,8 +29,20 @@ REQUIRED_PATHS = [
 
 # 日志里出现这些就说明这次 dump 不可信。allow_warn 只放过 WARN 这一档 ——
 # panic 与未知类型意味着数据真的不完整,放过它们等于把 15.7 那个坑重新挖开。
+# 前几条是从 wows-data-mgr 二进制里 grep 出来的真实告警文本(2026-09-19 实测)。
+# 它们都以 WARN 打头,但**语义是致命的** —— 所以必须单列在 WARN 之前且不可跳过,
+# 否则 --allow-warn 就会把「数据其实是坏的」一起放过,而那正是加逃生口时最怕的事。
+#   WARN: GameParams re-derivation failed for …      ← 没有 rkyv,船只数据全无
+#   WARN: GameParams re-derivation panicked for …    ← 15.7 那次踩的就是这个
+#   WARN: VFS is empty despite … idx files parsing successfully
+#   WARN: … idx files failed to parse for build …
+#   WARN: Failed to parse idx file … (header: …)
 _FATAL_PATTERNS = [
     (re.compile(r"Unrecognized type\s+(\S+)"), "Unrecognized type", False),
+    (re.compile(r"GameParams re-derivation"), "GameParams 派生失败", False),
+    (re.compile(r"VFS is empty"), "VFS 为空", False),
+    (re.compile(r"idx file.*(failed to parse|parse)|failed to parse idx", re.I),
+     "idx 解析失败", False),
     (re.compile(r"panic(ked)?", re.I), "panic", False),
     (re.compile(r"\bWARN\b"), "WARN", True),
 ]
@@ -50,6 +62,10 @@ def check_version_dir(version_dir) -> list:
         ok = p.is_dir() if kind == "dir" else p.is_file()
         if not ok:
             problems.append(f"缺 {rel}({'目录' if kind == 'dir' else '文件'})")
+        elif kind == "dir" and not any(p.iterdir()):
+            # 只查 is_dir() 不够:dump 报 "VFS is empty" 时目录会在、内容是空的,
+            # 那种产出装进生产会让回放解析在运行时才炸。
+            problems.append(f"{rel} 是空目录 —— dump 可能中途失败(VFS 未解出)")
 
     rkyv = v / "game_params.rkyv"
     if not rkyv.is_file():

@@ -34,6 +34,9 @@ def _make_incoming(root: Path, name="15.9.0_13999999", marked=True):
     (v / "vfs" / "content").mkdir(parents=True)
     (v / "vfs" / "scripts").mkdir(parents=True)
     (v / "vfs" / "spaces").mkdir(parents=True)
+    # 目录要非空 —— dumpcheck 会查这个(dump 报 "VFS is empty" 时目录在、内容空)
+    (v / "vfs" / "scripts" / "entity_defs").mkdir()
+    (v / "vfs" / "spaces" / "01_solomon_islands").mkdir()
     (v / "metadata.toml").write_text("x", encoding="utf-8")
     (v / "constants.json").write_text("{}", encoding="utf-8")
     (v / "vfs" / "content" / "GameParams.data").write_bytes(b"x" * 16)
@@ -150,6 +153,95 @@ def test_happy_path_order():
     print("  ok 顺利路径:顺序正确、标记已删、汇报含四类条目数")
 
 
+def test_refresh_steps_are_actually_invoked():
+    """FakeRunner 对未列出的 key 默认返回成功,所以一个压根不刷 builds.json 与图标的
+    实现也能让其他用例全绿。必须显式钉住这两步被调用过。"""
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        inc = _make_incoming(root)
+        ext = root / "extracted"
+        ext.mkdir()
+        r = FakeRunner(results={"builds-dump": (0, "found 1 modernizations / 2 exteriors / "
+                                                  "3 crews / 4 skills", "")})
+        wg_update.run_update(incoming_root=inc, extracted_root=ext,
+                             repo_dir=root, plugins_dir=root, runner=r)
+        order = [c[0] for c in r.calls]
+        for key in ("builds-dump", "build_builds_json", "fetch_build_icons"):
+            assert key in order, f"{key} 没被调用: {order}"
+        # 顺序:三步都要在搬运之后
+        assert order.index("build_builds_json") > order.index("builds-dump"), order
+    print("  ok builds-dump / builds.json / 图标 三步都真的被调用")
+
+
+def test_git_pull_failure_stops_before_move():
+    """代码拉不下来就别动生产数据 —— 停在搬运之前。"""
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        inc = _make_incoming(root)
+        ext = root / "extracted"
+        ext.mkdir()
+        r = FakeRunner(results={"git": (1, "", "fatal: 无法连接远端")})
+        lines, ok = wg_update.run_update(
+            incoming_root=inc, extracted_root=ext, repo_dir=root, plugins_dir=root, runner=r)
+        assert ok is False
+        assert r.moved == [], "git pull 失败了却还是搬了"
+        assert (inc / "15.9.0_13999999.done").exists(), "标记被误删"
+    print("  ok git pull 失败时停在搬运之前,标记保留")
+
+
+def test_unknown_explicit_version_is_refused():
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        inc = _make_incoming(root)
+        r = FakeRunner()
+        lines, ok = wg_update.run_update(
+            incoming_root=inc, extracted_root=root / "extracted", repo_dir=root,
+            plugins_dir=root, runner=r, version="16.6.6_12345678")
+        assert ok is False
+        assert r.moved == []
+        assert any("16.6.6_12345678" in l for l in lines), lines
+    print("  ok 指定了一个不在待处理列表里的版本时被拒")
+
+
+def test_empty_incoming_at_run_level():
+    """find_pending 返回空时,run_update 要给可操作提示而不是抛异常。"""
+    with tempfile.TemporaryDirectory() as d:
+        inc = Path(d) / "incoming"
+        inc.mkdir()
+        lines, ok = wg_update.run_update(
+            incoming_root=inc, extracted_root=Path(d), repo_dir=Path(d),
+            plugins_dir=Path(d), runner=FakeRunner())
+        assert ok is False
+        assert any("update_wg" in l or "没有待处理" in l for l in lines), lines
+    print("  ok 暂存区空时给出可操作提示")
+
+
+def test_plugin_files_are_actually_copied():
+    """plugin/*.py 有变动时,副本要真的同步过去 —— 只提示不同步等于没做。"""
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        inc = _make_incoming(root)
+        ext = root / "extracted"
+        ext.mkdir()
+        # 造一个有 plugin/*.py 的仓库目录,和一个空的 plugins 目标目录
+        (root / "plugin").mkdir()
+        (root / "plugin" / "minimap.py").write_text("# fake\n", encoding="utf-8")
+        (root / "plugin" / "permissions.py").write_text("# fake\n", encoding="utf-8")
+        plugins = root / "nb_plugins"
+        plugins.mkdir()
+        r = FakeRunner(results={
+            "git": (0, "Fast-forward\n plugin/minimap.py | 3 +-\n", ""),
+            "builds-dump": (0, "found 1 modernizations / 2 exteriors / 3 crews / 4 skills", ""),
+        })
+        lines, _ = wg_update.run_update(
+            incoming_root=inc, extracted_root=ext,
+            repo_dir=root, plugins_dir=plugins, runner=r)
+        assert (plugins / "minimap.py").is_file(), f"没同步过去: {list(plugins.iterdir())}"
+        assert (plugins / "permissions.py").is_file(), list(plugins.iterdir())
+        assert "需重启" in "\n".join(lines)
+    print("  ok plugin/*.py 真的被同步到 plugins 目录")
+
+
 def test_link_specs_gets_explicit_version_dir():
     """裸跑 link_specs 会挑到 Lesta 26.x —— 必须显式传版本目录。"""
     with tempfile.TemporaryDirectory() as d:
@@ -252,7 +344,10 @@ def test_report_includes_disk_info():
         lines, _ = wg_update.run_update(
             incoming_root=inc, extracted_root=ext, repo_dir=root, plugins_dir=root, runner=r)
         joined = "\n".join(lines)
-        assert "版本" in joined and ("磁盘" in joined or "占用" in joined), joined
+        # 不能只断言 "版本" —— 第一行「待处理版本:…」天然含这两个字,那样断言是空的。
+        # 要断言的是「extracted 现有 N 个版本」这条统计。
+        assert "现有" in joined, joined
+        assert "磁盘" in joined or "占用" in joined, joined
     print("  ok 汇报里包含版本数与磁盘信息")
 
 
