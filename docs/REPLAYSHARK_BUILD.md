@@ -38,7 +38,7 @@ fbc415d5  refactor: remove old BattleController;
 
 | patch 版本 | 总 hunk | 失败 | 其中 `controller.rs` |
 | --- | --- | --- | --- |
-| 旧的 2026-05 版(CRLF) | 22 | **15** | 9/9 全失败 |
+| 旧的 2026-05 版 | 22 | **15** | 9/9 全失败 |
 | 本次重新导出的版本 | 22 | **13** | 9/9 全失败 |
 
 `controller.rs` 的 9 个 hunk 是战报逻辑的全部,它们全失败就意味着**在重构后的源码上没有
@@ -92,8 +92,14 @@ patch 里加东西就可能重叠了。)
 实体类型,不认它的话 GameParams 的 rkyv 派生直接失败。**这一条是我们摆脱「FLOAT64 手术」
 的关键** —— 详见第 8 节。
 
-两个 patch 文件都是 **LF 换行**。以后重新导出时务必保持,CRLF 的 patch 在 Linux 上会出诡异
-的上下文不匹配。
+两个 patch 文件**在 git 库里是 LF**(`git cat-file blob` 验证 CR 数为 0)。但 `.gitattributes`
+原先只给 `*.sh` 指定了 `eol=lf`,`*.patch` 走 `* text=auto` —— 于是 Windows 上 clone 出来的工作
+副本是 CRLF,`git apply` 判不匹配,而错误输出里 CR 显示成 `?` 极难看懂。2026-09-19 为此白查过
+一轮,已给 `.gitattributes` 补上 `*.patch text eol=lf` 根治。Linux 上 checkout 直接就是 LF。
+以后重新导出时务必保持 LF,CRLF 的 patch 在 Linux 上会出诡异的上下文不匹配。
+
+> 查库内真实换行符要用 `git cat-file blob <sha>`,**不能**用 `git show <rev>:<path>` ——
+> 后者在 Windows 上会套用 smudge filter 做 CRLF 转换,看到的是转换后的结果。
 
 ### 验证结论(2026-09-19)
 
@@ -154,6 +160,16 @@ bash tools/build_replayshark.sh
 
 可调环境变量:`SRC`、`CARGO`(默认 `/home/zifeng/.cargo/bin/cargo`)、`BUILD_USER`(默认
 `zifeng`,编译用 `sudo -u` 降权跑,免得 root 在 `~/.cargo` 里留下 root 拥有的缓存)。
+
+### 依赖锁定:基线自带 `Cargo.lock`
+
+基线 commit `2effcd31` **已跟踪 `Cargo.lock`**(271903 字节,`git ls-tree 2effcd31` 可确认),
+所以按本文档 clone + checkout 出来的树带着当时锁定的依赖版本,`cargo build` 不会重新解析
+semver 范围 —— 「半年后重编因依赖漂移而失败」这个风险因此小得多。
+
+残余风险只有两种:某个传递依赖被 yank(yank 过的版本仍可下载,只是不能新增引用,
+所以通常不影响),或 crates.io 不可达。**不要 `cargo update`** —— 那会丢掉锁定,
+是唯一能自己把这个风险引进来的操作。
 
 ### 绝对不要在 `/opt/wows-toolkit` 里编
 

@@ -1,5 +1,8 @@
 * text=auto
 *.sh text eol=lf
+# patch 必须 LF:Windows 工作副本被 text=auto 转成 CRLF 后 git apply 会判不匹配,
+# 而错误输出里 CR 显示成 ? 极难看懂 —— 2026-09-19 为此白查过一轮
+*.patch text eol=lf
 bin/wows_report text eol=lf
 bin/wows_damage_report text eol=lf
 bin/wows_full_report text eol=lf

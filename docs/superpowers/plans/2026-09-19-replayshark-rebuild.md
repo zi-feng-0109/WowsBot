@@ -32,8 +32,12 @@
      —— 这里放 patch 文件、构建文档、prebuilt 二进制
 5. **写文件用 Write 工具,不要用 bash heredoc。** 本项目文档含中文全角括号与引号,
    heredoc 在这台机器上反复出过字符串截断问题。
-6. Windows 上 `patch` / `git` 在 Git Bash 里跑;注意 CRLF —— 现成的 patch 文件是 CRLF 的,
-   必须先 `tr -d '\r'`,否则 `git apply` 直接判不匹配(这正是当初"patch 套不上了"的一半原因)。
+6. Windows 上 `patch` / `git` 在 Git Bash 里跑。**patch 文件在 git 库里是 LF**
+   (`git cat-file blob` 验证 CR 数为 0),但 `.gitattributes` 的 `* text=auto` 会把 Windows
+   工作副本转成 CRLF,`git apply` 于是判不匹配 —— 本机操作前先 `tr -d` 去掉 CR。
+   **更正**:这只影响错误输出可读性,**不是**「patch 套不上」的原因 —— 去掉 CR 后对当前源码
+   仍然 15/22 失败,真正原因从头到尾只有一个:上游删了 `BattleController`。
+   (`git show <rev>:<path>` 在 Windows 上会做 CRLF 转换,查库内真实换行必须用 `git cat-file blob`。)
 
 ---
 
