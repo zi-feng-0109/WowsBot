@@ -47,7 +47,8 @@ sed -i 's|FLOAT64|FLOAT|g' .../entity_defs/alias.xml .../entity_defs/interfaces/
 
 初版方案想把 patch 套到当前源码。实测否掉了:
 
-- patch 共 **21 个 hunk / 860 行新增**。对**当前源码**干跑:**15 个失败**,
+- patch 共 **22 个 hunk / 860 行新增**(main 3 / controller 9 / decode 2 / provider 4 / types 4)。
+  对**当前源码**干跑:**15 个失败**,
   其中 `controller.rs` 的 9 个 hunk **全部失败**
 - 原因不是行偏移,是上游 `2026-06-05` 的一次大重构:
   `fbc415d5 refactor: remove old BattleController; replace differential tests with BattleWorld golden snapshots`。
@@ -65,7 +66,7 @@ sed -i 's|FLOAT64|FLOAT|g' .../entity_defs/alias.xml .../entity_defs/interfaces/
 
 - patch 记录的 `controller.rs` 基线 blob(`98a527d`)**正是 `2effcd31` 的那一份** ——
   战报逻辑的核心文件完全对得上
-- 实测在 `2effcd31` 上套 patch:**21 个 hunk 只差 2 个**,都在 `provider.rs` 的
+- 实测在 `2effcd31` 上套 patch:**22 个 hunk 只差 2 个**,都在 `provider.rs` 的
   `PlaneAbilities` 提取块(CV 飞机消耗品),自成一块、好手工放
 - 实测 cherry-pick FLOAT64 修复(toolkit `8d2a8205`)到 `2effcd31`:**干净自动合并**
 - `rust-toolchain.toml` 在 `2effcd31` pin 的是 `1.92.0`,本机与服务器的 cargo

@@ -700,11 +700,16 @@ cd /opt/wows-bot && sudo bash tools/build_replayshark.sh
 
 给用户:
 
+**必须用 `-R` 不是 `-r`** —— extracted 里的 `.def` 是指向 `common/` 内容寻址目录的符号链接,
+`grep -r` 不跟软链,会查不到 FLOAT64 从而得出完全相反的结论。
+
 ```
-grep -rl 'FLOAT64' /var/lib/wows-data/extracted/15.8.0_13187581/vfs/scripts/ | head -5
+grep -Roh 'FLOAT[0-9]*' /var/lib/wows-data/extracted/15.8.0_13187581/vfs/scripts/ | sort | uniq -c
 ```
 
-期望:能列出文件(至少 `entity_defs/alias.xml` 与 `entity_defs/interfaces/BattleStarterClient.def`)。
+期望:`FLOAT64` 计数为 **2**(另有约 211 个 `FLOAT`、39 个 `FLOAT32`)。那 2 处是
+`entity_defs/alias.xml` 的 `originalEnqueueTime` 与
+`entity_defs/interfaces/BattleStarterClient.def` 的同名参数。
 **这一步是为了证明后面的成功不是因为数据被动过手术。** 如果输出为空,停下来 —— 说明
 原始数据已被污染,验证无意义。
 
