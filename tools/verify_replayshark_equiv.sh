@@ -21,6 +21,22 @@ PATCHED="${PATCHED:-/var/lib/wows-data/specs-patched}"
 for b in "$OLD_BIN" "$NEW_BIN"; do
     [[ -x "$b" ]] || { echo "error: 没有可执行的 $b" >&2; exit 1; }
 done
+
+# 防假绿灯:如果两个路径指向同一个二进制(比如已经手动换装过),对比就变成「旧 vs 旧」,
+# 必然全 SAME —— 而这个脚本的全部意义就是当闸门,假绿灯比报错危险得多。
+if cmp -s "$OLD_BIN" "$NEW_BIN"; then
+    echo "error: OLD_BIN 与 NEW_BIN 内容完全相同 —— 是不是已经换装过了?" >&2
+    echo "  OLD_BIN = $OLD_BIN" >&2
+    echo "  NEW_BIN = $NEW_BIN" >&2
+    echo "这样比出来的 SAME 没有意义,拒绝运行。" >&2
+    exit 1
+fi
+
+# 把参与对比的两个二进制记下来,免得事后说不清当时比的到底是哪两个构建
+echo "OLD_BIN: $(ls -la "$OLD_BIN" | awk '{print $5, $6, $7, $8}')  $OLD_BIN"
+echo "NEW_BIN: $(ls -la "$NEW_BIN" | awk '{print $5, $6, $7, $8}')  $NEW_BIN"
+echo
+
 mkdir -p "$OUT"
 
 # 从回放头部读 build 号:magic(4) blockCount(4) meta_len(4) 然后是 UTF-8 JSON meta,
