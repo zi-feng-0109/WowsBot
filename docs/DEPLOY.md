@@ -163,11 +163,23 @@ export WOWS_DATA_DIR=/your/path/to/extracted
 cd /opt/wows-bot
 cp report/prebuilt/replayshark-linux-x86_64 report/replayshark
 chmod +x report/replayshark
-./report/replayshark --help | head -3   # 验证
+./report/replayshark --help | head -3   # 验证:battle-report 等子命令应当在
 ```
 
-aarch64 / 其他架构自己 build (在第 3 节装好 Rust + clone wows-toolkit 后):
-`git apply /opt/wows-bot/tools/replayshark_battle_report.patch && cargo build --release -p replayshark`,然后 cp 到 `report/replayshark`。
+`report/prebuilt/replayshark-linux-x86_64` 是 git 跟踪的;`report/replayshark` 是
+gitignore 的**部署副本**,生产实际执行的是后者。上面这条 cp 就是「把仓库里那版装上去」。
+
+> ⚠️ **若当前处于 replayshark 回滚状态,这条 cp 会静默撤销回滚** —— 仓库里的 prebuilt
+> 是新版,回滚只改了部署副本。先确认 prebuilt 是你要的那一版
+> (5919456 字节 = 2026-09-19 重建版,4806528 = 2026-05-27 旧版)。
+> 回滚与持久化回滚的办法见 `docs/REPLAYSHARK_BUILD.md`。
+
+aarch64 / 其他架构要自己 build:**见 `docs/REPLAYSHARK_BUILD.md`**,用
+`bash tools/build_replayshark.sh`。不要照老办法直接对当前上游源码套
+`replayshark_battle_report.patch` —— 上游 2026-06-05 的重构删掉了这个 patch 挂靠的
+`BattleController`,必须切到基线 `2effcd31` 并且**套两个 patch**(float64 + battle_report)。
+另外**禁止在 `/opt/wows-toolkit` 里编译**:那里的 `target/release/minimap_renderer` 是
+生产在用的小地图二进制,构建脚本对该路径有硬性拒绝。
 
 ### 4.2 Python 依赖
 

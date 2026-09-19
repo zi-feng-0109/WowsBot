@@ -49,6 +49,7 @@ wows-bot/
 ├── docs/
 │   ├── DEPLOY.md                   Linux 一站式部署
 │   ├── UPDATE.md                   WoWs 大版本更新后刷新数据 / 生成 ships.json + armor.json
+│   ├── REPLAYSHARK_BUILD.md        战报二进制的构建配方(基线 commit + 两个 patch)与换装闸门
 │   └── images/                     示例样图
 ├── plugin/                         NoneBot 插件 (整个目录 cp 到你 bot 的 plugins/)
 │   ├── minimap.py                  主入口 (replay → 渲染 + 命令 handler)
@@ -76,7 +77,11 @@ wows-bot/
     ├── fetch_build_icons.py        下升级/技能图标
     ├── render_armor_3d.py          GLB → 装甲 3D 多视角 PNG + 转圈 GIF (软件光栅)
     ├── enrich_ships_next.py        增量补 next_ships 到 ships.json
-    ├── link_specs.sh               软链 report/specs → extracted/<ver>
+    ├── link_specs.sh               软链 report/specs → extracted/<ver>(必须传版本目录参数)
+    ├── build_replayshark.sh        重建战报二进制(套两个 patch + cargo build + 自检)
+    ├── verify_replayshark_equiv.sh 换装闸门:新旧二进制逐局比 JSON 与战报 PNG
+    ├── rs_compare_report.py        闸门用的 JSON 比较器(规范化 + 浮点容差)
+    ├── replayshark_float64.patch   给基线补 FLOAT64 实体类型支持
     └── replayshark_battle_report.patch
 ```
 
@@ -115,7 +120,10 @@ QQ 用户发 .wowsreplay
   - `battle-report` 子命令:replay → 结构化 JSON(玩家清单 / 伤害 / 击杀 / 消耗品 / 成就 / 结算)
   - `builds-dump` 子命令:导 GameParams 的舰长/技能/升级(给 `build_builds_json.py` 消费)
   - `Avatar.squadronConsumableUsed` 事件解析(战犯识别航母飞机消耗品)
-  - 预编译在 `report/prebuilt/`,Linux x86_64 直接用;其它架构按 [DEPLOY.md §4.1](docs/DEPLOY.md) 自建
+  - 预编译在 `report/prebuilt/`,Linux x86_64 直接用;要自己编见 [REPLAYSHARK_BUILD.md](docs/REPLAYSHARK_BUILD.md)
+  - ⚠️ **这个 patch 不能套在当前上游源码上**:上游 2026-06-05 的重构删掉了它挂靠的
+    `BattleController`。必须切到基线 commit `2effcd31` 并且套**两个** patch
+    (`replayshark_float64.patch` 在前)。一条命令:`bash tools/build_replayshark.sh`
 - **`ships.json` / `armor.json`** — 打版本时预构建,运行时零外部 API。`ships.json` 每船带 数值 / 消耗品 / 科技树链 / AP 弹道参数,`armor.json` 每船带分面厚度。生成流程见 [UPDATE.md §2.6](docs/UPDATE.md)
 - **Lesta 服 (.korablireplay)** — 上游 wows-toolkit 不支持,本项目也不打算适配(协议分叉)
 

@@ -40,9 +40,11 @@ DEFAULT_OUT_DIR = paths.OUT_DIR
 
 # 按回放 build 自动挑版本目录用的两个根:
 #   EXTRACTED_ROOT   放 <ver>_<build>/{metadata.toml,vfs/{scripts,content}} 的根
-#   SPECS_PATCHED_ROOT  放 <ver>_<build>/scripts 的根 —— FLOAT64 手术产物
-#     (15.7 起 WG 的 entity defs 用了 FLOAT64,这个预编译 replayshark 不认,
-#      所以那些版本必须用手术过的 scripts 副本;<=15.6 没这问题,用原始的)
+#   SPECS_PATCHED_ROOT  放 <ver>_<build>/scripts 的根 —— FLOAT64 手术产物(历史遗留)
+#     15.7~15.8 期间旧的预编译 replayshark 不认 entity defs 里的 FLOAT64,那两版必须
+#     用手术过的 scripts 副本。2026-09-19 重建 replayshark 之后**已不再需要手术**;
+#     这两个根保留是为了兼容老数据目录里已有的产物。详见 resolve_specs_for_build()
+#     里的说明与 docs/REPLAYSHARK_BUILD.md。
 EXTRACTED_ROOT = paths.EXTRACTED_ROOT
 SPECS_PATCHED_ROOT = paths.SPECS_PATCHED_ROOT
 
@@ -117,7 +119,8 @@ def resolve_specs_for_build(replay_build: int):
     # (新二进制原生支持 FLOAT64)。保留是为了兼容老数据目录里已经做过手术的版本,
     # 而且优先用它是无害的 —— 手术只把 FLOAT64 换成 FLOAT,那两处(排队系统的
     # originalEnqueueTime / BattleStarterClient 的 returnToMatchmaker)在回放数据流里
-    # 根本不出现。详见 docs/REPLAYSHARK_BUILD.md。
+    # 根本不出现(BaseMethods 是服务端方法、ENQUEUE_REQUEST 是匹配排队用的 FIXED_DICT)。
+    # 重建与构建配方见 docs/REPLAYSHARK_BUILD.md。
     scripts = Path(SPECS_PATCHED_ROOT) / match.name / "scripts"
     if not scripts.is_dir():
         scripts = match / "vfs" / "scripts"

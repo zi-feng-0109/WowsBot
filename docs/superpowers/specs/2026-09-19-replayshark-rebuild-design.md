@@ -72,10 +72,29 @@ sed -i 's|FLOAT64|FLOAT|g' .../entity_defs/alias.xml .../entity_defs/interfaces/
 - `rust-toolchain.toml` 在 `2effcd31` pin 的是 `1.92.0`,本机与服务器的 cargo
   **正好都是 1.92.0** → 工具链零风险
 
-已知残余漂移(如实记录):patch 的 `main.rs` / `decode.rs` / `types.rs` 基线 blob 来自
-更早的 `4b0ea0fd`(2026-03-15),所以在 `2effcd31` 上这三个文件带着约两个月的上游改动。
-它们与 patch 区域不重叠(所以套得干净),但上游在那两个月里的逻辑改动仍可能影响输出 ——
-这正是阶段 3 等价性验证要守的闸门。
+已知残余漂移(2026-09-19 复审实测,比初稿的描述精确):旧 patch 的 5 个目标文件里
+**4 个**的基线 blob 与 `2effcd31` 不同,只有 `controller.rs`(战报逻辑的核心)精确吻合。
+初稿只提了 main / decode / types,**漏了 provider.rs** —— 而它恰好是那 2 个 hunk 手工放的地方。
+逐文件量出来的漂移如下:
+
+| 文件 | 漂移 | 性质 |
+|---|---|---|
+| `controller.rs` | 0 | 基线 blob `98a527d` 精确吻合 |
+| `decode.rs` | 2 行 | 纯类型:`packet_type: u32` → `PacketTypeId` newtype。**零语义改动** |
+| `main.rs` | 2 行 | `.raw()` 类型适配 + `Commands::Spec` 的 `load_game_data` 签名(battle-report 不走这条) |
+| `types.rs` | 11 行 | `CrewPersonality` 的 10 个字段 `bool`/`String`/`u32` → `Option<>`(容错增强) |
+| `provider.rs` | 319+/328− | 来自 `da9fb551 wowsunpack: support older WoWs game versions` 与 WASM commit |
+
+结论:**回放解码路径(`decode.rs`)只漂了 2 行且零语义**,所以旧版本回放的解析风险接近于零;
+`provider.rs` 的 churn 是 GameParams 提取,与回放版本无关,已被 15.7/15.8 两版充分走过。
+这让「15.3–15.6 未验证」这个缺口的实际风险比初稿措辞小得多。
+
+⚠️ 但 `types.rs` 那 11 行是个初稿没提到的缺口:`CrewPersonality` 正是 `builds-dump`
+输出的「662 舰长」,`Option<bool>` 序列化成 `null` 而旧版出 `false`,**builds.json 的字段形状
+可能变**。而闸门对 `builds-dump` 只做了计数校验(118/2345/662/82),**从未逐字段 diff**。
+已查实消费侧:`tools/build_builds_json.py` 从 `raw["crews"]` 只读 `id` 和 `name`,那 10 个
+Option 化字段名在 `tools/*.py` 与 `report/bin/*.py` 里零命中 —— 所以**当前无影响**。
+但这是运气不是覆盖:谁将来开始读那些字段,要先补一次逐字段对比。
 
 ### 阶段 1:本机准备源码与构建配方
 
@@ -167,7 +186,10 @@ SS 有下潜、DD 有鱼雷/烟雾)。两个版本的手术产物在服务器上
 - [ ] fixture 集每一局的战报 PNG 正文哈希(裁掉底部 48 px)新旧一致
 - [ ] 确认参与验证的那批 scripts 里 `FLOAT64` 仍然存在(证明真的没做手术)
 - [ ] `report/bin/wows_full_report` 端到端跑通一局 15.8 回放
-- [ ] `docs/REPLAYSHARK_BUILD.md` 里的配方,照着能从零造出同一个二进制
+- [x] `docs/REPLAYSHARK_BUILD.md` 里的配方,照着能从零重建出**同一个源码状态**
+      (2026-09-19 复审实测:在干净 `2effcd31` 上按序套两个 patch,与已验证分支整棵树
+      零字节差异;正序反序皆可、幂等。注意**不是**二进制比特级可复现 —— rustc 默认
+      不保证那个,本项目也从未建立过这条)
 
 ## 风险与回滚
 
@@ -185,5 +207,6 @@ SS 有下潜、DD 有鱼雷/烟雾)。两个版本的手术产物在服务器上
 2. bot 仓:`tools/replayshark_float64.patch`、重新生成的 `tools/replayshark_battle_report.patch`、
    `tools/build_replayshark.sh`(可复现构建)、`tools/verify_replayshark_equiv.sh`(等价性验证,
    下次重建还要用)、`docs/REPLAYSHARK_BUILD.md`、`report/prebuilt/replayshark-linux-x86_64` 换新、
-   `docs/UPDATE.md` 删手术步骤
+   `docs/UPDATE.md` 补上「手术已取消」与「不要裸跑 link_specs」的说明
+   (更正:UPDATE.md 里**从来没有过**手术步骤 —— 手术只记在记忆文件里,所以这里是「加说明」而非「删步骤」)
 3. 验证记录:fixture 清单 + 新旧 JSON/PNG 哈希对比结果,写进 plan 的执行记录

@@ -27,14 +27,31 @@ sudo cp /opt/wows-bot/plugin/*.py "$NB_PLUGIN_DIR/"
 # 注意路径! wows_report 里 BOT_HOME = parent.parent = /opt/wows-bot/report
 # (脚本本身在 /opt/wows-bot/report/bin/ 下),所以默认 REPLAYSHARK 路径是
 # /opt/wows-bot/report/replayshark 而不是 /opt/wows-bot/replayshark。
+# ⚠️ 这条 cp 会把仓库里的 prebuilt 装成正在用的二进制。若当前处于回滚状态
+#    (见下面「回滚」),它会静默把被回滚掉的那一版装回去 —— 先确认 prebuilt 是你要的那版。
 sudo cp /opt/wows-bot/report/prebuilt/replayshark-linux-x86_64 /opt/wows-bot/report/replayshark
 sudo chmod +x /opt/wows-bot/report/replayshark
-# 验证现在在用哪个: ls -la /opt/wows-bot/report/replayshark — 时间戳应该是刚 cp 的
-# 或者从源码重编 (架构非 x86_64 / 想自己验证):
-#   cd /opt/wows-toolkit && sudo git checkout . && sudo git pull
-#   sudo git apply /opt/wows-bot/tools/replayshark_battle_report.patch
-#   sudo cargo build --release -p replayshark
-#   sudo cp target/release/replayshark /opt/wows-bot/report/replayshark
+# 验证: ls -la /opt/wows-bot/report/replayshark
+#   时间戳应该是刚 cp 的;大小 5919456 = 2026-09-19 重建版,4806528 = 2026-05-27 旧版
+#
+# 从源码重编 (架构非 x86_64 / 想自己验证): **见 docs/REPLAYSHARK_BUILD.md**,
+# 不要照老办法 `cd /opt/wows-toolkit && git pull && git apply` —— 那条路现在三点全错:
+#   1. /opt/wows-toolkit 是禁止的构建位置,它的 target/release/minimap_renderer 是
+#      生产在用的小地图二进制;tools/build_replayshark.sh 对这个路径有硬性拒绝
+#   2. 必须先 `git checkout 2effcd31`(上游 2026-06-05 的 fbc415d5 删掉了 patch 挂靠的
+#      BattleController,对当前上游套 patch 必然 22 个 hunk 挂 13 个)
+#   3. 要套**两个** patch:先 replayshark_float64.patch 再 replayshark_battle_report.patch。
+#      少了前者,编出来的二进制不认 FLOAT64,等于退回「每版手工改数据」的时代
+# 正确做法就一条:  sudo bash /opt/wows-bot/tools/build_replayshark.sh
+
+# 回滚到 2026-05-27 旧版 (仅在新版出问题时):
+#   sudo cp /root/replayshark-prebuilt-20260527.bak /opt/wows-bot/report/replayshark
+# 不需要重启任何服务 (渲染器是 subprocess 现拉)。
+# ⚠️ 这只改了**部署副本**。仓库里 report/prebuilt/ 那份仍是新版,所以下次任何人走上面
+#    那条 cp、或 DEPLOY.md §4.1,都会把新版装回来。要让回滚持久,还得二选一:
+#      a) git revert 换装那次提交 (0c1bf7a),让仓库里的 prebuilt 也回到旧版;或
+#      b) sudo cp /root/replayshark-prebuilt-20260527.bak \
+#             /opt/wows-bot/report/prebuilt/replayshark-linux-x86_64   (会让工作区变脏)
 
 # 0.4 plugin/* 改了要重启 bot;只改了 report/bin/* 或 specs 软链不用重启 (subprocess 现拉)。
 sudo systemctl restart wows-bot   # 改成你的 service 名,或者 kill+nb run
