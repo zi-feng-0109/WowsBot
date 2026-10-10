@@ -97,7 +97,7 @@ else
 fi
 
 echo "[2/4] 应用 patch(已套上的会被跳过)"
-for p in replayshark_float64 replayshark_battle_report; do
+for p in replayshark_float64 replayshark_battle_report replayshark_roster_15_9; do
     f="$REPO_DIR/tools/$p.patch"
     [[ -f "$f" ]] || die "缺 patch 文件:$f"
     if as_builder patch -p1 -d "$SRC" --dry-run --forward --silent < "$f" >/dev/null 2>&1; then
@@ -122,6 +122,13 @@ float64_applied \
   这个 patch 不产生子命令,编译和子命令自检都拦不住它 —— 拿这个二进制跑 15.7+ 的
   数据会 panic \"Unrecognized type FLOAT64\"。先弄清 patch 为什么套不上。"
 echo "  ok       float64 patch 已在源码里生效($TYPEDEFS_RS)"
+
+# roster patch 同样不产生子命令:被静默跳过时编译和自检都照过,但 15.9+ 回放的名单字段
+# 全部错位一格(teamId 读成 shipParamsId),battle-report 在 decode.rs 里 unwrap panic。
+DECODE_RS="crates/wows-replays/src/analyzer/decoder/decode.rs"
+grep -Fq 'from_client_exe("15,9,0,0")' "$SRC/$DECODE_RS"     || die "roster 15.9 patch 没生效($DECODE_RS 里没有 15,9,0,0 分支)。
+  拿这个二进制跑 15.9+ 回放会 panic。先弄清 patch 为什么套不上。"
+echo "  ok       roster 15.9 patch 已在源码里生效($DECODE_RS)"
 
 echo "[3/4] 编译(release,首次约 5-15 分钟)"
 as_builder "$CARGO" build --release \

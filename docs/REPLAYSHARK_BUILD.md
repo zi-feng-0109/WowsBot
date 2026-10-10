@@ -9,7 +9,7 @@
 | --- | --- |
 | **上游** | `https://github.com/landaire/wows-toolkit`,Rust workspace,不是我们的仓库 |
 | **基线** | 上游 commit `2effcd31`,patch 唯一能套上的那个点 |
-| **patch** | 本仓库 `tools/replayshark_float64.patch` + `tools/replayshark_battle_report.patch` |
+| **patch** | 本仓库 `tools/replayshark_float64.patch` + `tools/replayshark_battle_report.patch` + `tools/replayshark_roster_15_9.patch` |
 
 ---
 
@@ -82,6 +82,7 @@ index 98a527d..12c9f68 100644
 ```
 tools/replayshark_float64.patch          ~20 行,只改 crates/wowsunpack/src/rpc/typedefs.rs
 tools/replayshark_battle_report.patch    ~1030 行,改 5 个文件
+tools/replayshark_roster_15_9.patch      ~30 行,只改 decode.rs 的 player/bot_key_map(15.9 新增 shipFrags,后续字段索引 +1)
 ```
 
 `replayshark_battle_report.patch` 是在「基线 + float64」之上生成的,按这个顺序套才与导出时的
@@ -465,7 +466,7 @@ sudo cp /opt/wows-replayshark-build/target/release/replayshark /opt/wows-bot/rep
 | 生产实际执行的二进制 | `/opt/wows-bot/report/replayshark`(gitignore 的部署副本) |
 | 仓库里跟踪的那份 | `report/prebuilt/replayshark-linux-x86_64`(换装时一并提交) |
 | 基线 | 上游 `2effcd31` |
-| patch(**顺序固定**) | `tools/replayshark_float64.patch` → `tools/replayshark_battle_report.patch` |
+| patch(**顺序固定**) | `tools/replayshark_float64.patch` → `tools/replayshark_battle_report.patch` → `tools/replayshark_roster_15_9.patch` |
 | 构建脚本 | `tools/build_replayshark.sh` |
 | 等价性闸门 | `tools/verify_replayshark_equiv.sh` |
 | 闸门的 JSON 比较器 | `tools/rs_compare_report.py` |

@@ -1,0 +1,29 @@
+--- a/crates/wows-replays/src/analyzer/decoder/decode.rs
++++ b/crates/wows-replays/src/analyzer/decoder/decode.rs
+@@ -200,6 +200,13 @@
+     }
+ 
+     fn player_key_map(version: &Version) -> HashMap<&'static str, i64> {
++        // 15.9 added shipFrags at 33 (sorted after shipConfigDump), shifting every
++        // later field by one.
++        if version.is_at_least(&Version::from_client_exe("15,9,0,0")) {
++            let mut h = Self::player_key_map(&Version::from_client_exe("15,8,0,0"));
++            h.values_mut().filter(|idx| **idx >= 33).for_each(|idx| *idx += 1);
++            return h;
++        }
+         if version.is_at_least(&Version::from_client_exe("0,12,8,0")) {
+             let mut h = HashMap::new();
+             h.insert(Self::KEY_ACCOUNT_DBID, 0);
+@@ -279,6 +286,12 @@
+ 
+     /// Bot key mapping — bots have a different (smaller) set of fields with different indices.
+     fn bot_key_map(version: &Version) -> HashMap<&'static str, i64> {
++        // 15.9 added shipFrags at 23 for bots too, shifting every later field by one.
++        if version.is_at_least(&Version::from_client_exe("15,9,0,0")) {
++            let mut h = Self::bot_key_map(&Version::from_client_exe("15,8,0,0"));
++            h.values_mut().filter(|idx| **idx >= 23).for_each(|idx| *idx += 1);
++            return h;
++        }
+         if version.is_at_least(&Version::from_client_exe("0,12,8,0")) {
+             let mut h = HashMap::new();
+             h.insert(Self::KEY_ACCOUNT_DBID, 0);
